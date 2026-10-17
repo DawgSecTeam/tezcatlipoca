@@ -216,9 +216,16 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
             sock.bind(("127.0.0.1", 0))
             svc_port = sock.getsockname()[1]
         (svc_cfg / "service.json").write_text(json.dumps({"port": svc_port}))
-        env = {**os.environ,
-               "HOME": str(home), "XDG_DATA_HOME": str(home / "data"),
-               "XDG_CONFIG_HOME": str(home / "config"), "XDG_CACHE_HOME": str(home / "cache")}
+        # The child is an unattended model with an auto-approved shell. Handing it
+        # the driver's environment hands it the Proxmox token and the dashboard
+        # bearer; only the OS/terminal variables and the one provider key it needs
+        # cross the boundary.
+        _KEEP = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "SHELL",
+                 "TMPDIR", "USER", "LOGNAME")
+        env = {name: os.environ[name] for name in _KEEP if name in os.environ}
+        env.update({"HOME": str(home), "XDG_DATA_HOME": str(home / "data"),
+                    "XDG_CONFIG_HOME": str(home / "config"),
+                    "XDG_CACHE_HOME": str(home / "cache")})
         try:
             # the same key the workdir's config asks opencode for, exported where opencode
             # reads env ({env:...} in opencode.jsonc resolves against this process)

@@ -68,7 +68,7 @@ def stage_verify(args, comp, creds, label="interim (pre-staging)"):
     # password on stdin, not an `echo` into the remote shell string: the old form put the
     # password in the local process argv (readable from ps) and a single quote in a
     # generated password would have been a shell syntax error aborting the fire test;
-    # same house pattern as beacon_ops._ssh_box
+    # same house pattern as the shared SSH helpers
     def sudo_web01(script, timeout=120):
         argv, stdin_text = procs.box_sudo_stdin(base, f"{creds['BOX_USER']}@{web_ip}",
                                                 creds["BOX_PW"], script)

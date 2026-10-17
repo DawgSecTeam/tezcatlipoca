@@ -30,7 +30,7 @@ def _ssh_options(ssh):
 
 def _scp_files(ssh, remote, dest_dir, timeout=120):
 # scp `remote` into dest_dir. Globs are expanded by the remote shell, so a
-#     `/var/lib/bad-auto/report-*.md` pattern needs no directory listing round-trip.
+#     `/var/lib/tlaloc/report*.md` pattern needs no directory listing round-trip.
 #
 #     Direct first, then through the engine jump: the control host reaches red01 either way
 #     depending on the estate, and the harness has used this two-attempt shape since the first

@@ -80,8 +80,8 @@ def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None):
 
 def configure_engine_network(ctx, team_identifiers, transit_identifiers=(), satellite_routes=(),
                              red_segment=None):
-    """Address the engine's team bridges and enable forwarding over SSH; the netplan block is omitted when there are no local teams (an empty ethernets map is a netplan error)."""
-    if team_identifiers:
+    """Address the engine's team bridges and enable forwarding over SSH; with neither teams nor a red segment there is no interface to write (an empty ethernets map is a netplan error)."""
+    if team_identifiers or red_segment:
         _run(ctx, "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'\n"
                   + netplan_yaml(team_identifiers, transit_identifiers, red_segment) + "\nEOF")
         # netplan refuses a world-readable file.

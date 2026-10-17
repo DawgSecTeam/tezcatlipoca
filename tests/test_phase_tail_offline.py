@@ -51,7 +51,7 @@ class Tail(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.comp = Path(self._tmp.name) / "tailcomp"
         self.comp.mkdir()
-        (self.comp / "Compfile").write_text("name tailcomp\nteam_beacons 1\n")
+        (self.comp / "Compfile").write_text("name tailcomp\n")
         out = contextlib.redirect_stdout(io.StringIO())
         out.__enter__()
         self.addCleanup(out.__exit__, None, None, None)
@@ -67,7 +67,7 @@ class Tail(unittest.TestCase):
                              return_value=SimpleNamespace(failed=["x: boom"], machines=machines)) \
                 as mocks["nakon"], \
                 patch.object(final, "reensure_mysql_credlist_users") as mocks["mysql"], \
-                patch.object(final, "plant_team_beacons") as mocks["beacons"], \
+                patch.object(final.tlaloc_ops, "plant_assume_breach") as mocks["red"], \
                 patch.object(final, "run_concurrent") as mocks["snap"], \
                 patch.object(final, "record_stage_coverage") as mocks["cov"]:
             final.phase7_domains_and_final(ctx)
@@ -78,7 +78,7 @@ class Tail(unittest.TestCase):
         m["domains"].assert_called_once()
         m["nakon"].assert_called_once()
         m["cov"].assert_called_once()
-        m["beacons"].assert_called_once()
+        m["red"].assert_called_once()
         m["snap"].assert_called_once()
         self.assertEqual(ctx.state["nakon_failed_steps"], ["final: x: boom"])
 
@@ -90,7 +90,7 @@ class Tail(unittest.TestCase):
                 patch.object(final, "build_nakon_bundle"), \
                 patch.object(final, "run_nakon", return_value=SimpleNamespace(failed=["x: boom"])), \
                 patch.object(final, "reensure_mysql_credlist_users"), \
-                patch.object(final, "plant_team_beacons"), patch.object(final, "run_concurrent"), \
+                patch.object(final.tlaloc_ops, "plant_assume_breach"), patch.object(final, "run_concurrent"), \
                 patch.object(final, "record_stage_coverage"):
             final.phase7_domains_and_final(ctx)
         self.assertEqual(ctx.state["nakon_failed_steps"], ["predomain: a", "final: x: boom"])
@@ -120,7 +120,7 @@ class Tail(unittest.TestCase):
             self._p7([])
         self.assertIn("[7/8] Configuring Windows AD domains", buf.getvalue())
 
-    def test_phase7_publishes_bad_autos_intel_state(self):
+    def test_phase7_publishes_the_red_intel_state(self):
         # bad-auto's nakon intel reads the box account from <comp>/.deploy_state.json; the
         # modern pipeline never wrote it, so every seed sprayed (user, None) and paramiko's
         # "no authentication methods" was reported as "unreachable over SSH" on every box
@@ -130,7 +130,21 @@ class Tail(unittest.TestCase):
         data = json.loads(path.read_text())
         self.assertEqual(data["box_password"], "bp")
         self.assertEqual(data["box_creds"], {"a": "b"})
+        self.assertEqual(data["admin_password"], "ap")
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_a_red_failure_aborts_the_deploy(self):
+        (self.comp / "final.json").write_text('{"machines": []}')
+        (self.comp / "late.json").write_text('{"machines": []}')
+        ctx = _ctx(self.comp)
+        with patch.object(final, "deploy_domain_configs"), \
+                patch.object(final, "reensure_mysql_credlist_users"), \
+                patch.object(final, "run_concurrent"), \
+                patch.object(final.tlaloc_ops, "plant_assume_breach",
+                             side_effect=RuntimeError("no red01")):
+            with self.assertRaises(RuntimeError) as cm:
+                final.phase7_domains_and_final(ctx)
+        self.assertIn("no red01", str(cm.exception))
 
     def test_phase7_skipped_on_resume(self):
         (self.comp / "final.json").write_text('{"machines": []}')

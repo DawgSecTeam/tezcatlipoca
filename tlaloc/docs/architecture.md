@@ -2,14 +2,14 @@
 
 ```
 tezcatlipoca (engine + dashboard + competitions repo)
-│  plan ── deploy ── red-up ── run ── red-verdict ── destroy
-│   │        │        │        │         │             │
-│   │        │        │        │         │             └─ restore table + evidence
-│   │        │        │        │         └─ coverage pass, scoreboard proof
-│   │        │        │        └─ tlaloc loop (red01)
-│   │        │        └─ red_ops: clone red01, red segment, engine DNAT (30s re-assert)
-│   │        └─ clone_ops/terraform + nakon_ops (existing)
-│   └─ Compfile: red.{assume_breach, ladder, caps, windows, budget, engine}
+│  plan ── deploy ── run ── verdict ── destroy
+│  │       │         │      │          │
+│  │       │         │      │          └─ restore table + evidence
+│  │       │         │      └─ tlaloc report/verdict on red01
+│  │       │         └─ tlaloc loop (red01)
+│  │       └─ red01_ops: clone red01, red segment, engine rules + C2 DNAT (30s re-assert)
+│  │       └─ clone_ops/terraform + nakon_ops (existing)
+│  └─ Compfile: red.{assume_breach, depth, duration_min, ladder, caps, windows, budget, clef_url, c2_*}
 │
 ├── nakon (facts + mechanisms + catalog CI gate)
 ├── Mythic C2 (installed/configured by Gaia) — callbacks DNAT'd by the engine
@@ -17,6 +17,9 @@ tezcatlipoca (engine + dashboard + competitions repo)
 │     payloads: built at comp-prep, frozen into competitions/<id>/red/payloads/
 └── clef-flash (shared club infra, POST /v1/systemone) — choice/score/noul
 ```
+
+Red is planted during deploy (phase 7): every competition stages tlaloc, with no
+engine selector and no fallback.
 
 ## Runtime on red01
 
@@ -69,8 +72,8 @@ consume it).
 
 ## Deleted from v1 (and why nothing replaces it)
 
-- the realm/rawsock beacon stacks and their vendored C toolkits → Mythic
-  (archived, not deleted, for one season as a dry-run-only fallback);
+- the C2 beacon stacks and their vendored C toolkits → Mythic (the only C2; the
+  beacon trees are gone);
 - `pivot_exec` → `task_channel` (the C2 mesh covers the pivot cases it existed
   for; re-add only if a scrim proves otherwise);
 - the coverage/endgame/burndown sweepers → one "final window" policy block plus

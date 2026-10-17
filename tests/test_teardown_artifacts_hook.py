@@ -28,7 +28,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 from artifacts_lib import artifacts_ops as ao  # noqa: E402
-from red import red_plant_ops  # noqa: E402
+from red import red01_ops, tlaloc_ops  # noqa: E402
 import infra.client  # noqa: E402
 from infra import ownership  # noqa: E402
 from artifacts_lib import lifecycle as alifecycle  # noqa: E402
@@ -72,8 +72,8 @@ def _offline_api_patches(collect_log=None):
         patch.object(ownership, "proxmox_api", _OfflinePVE()),
         patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None),
         patch.object(infra.client, "live_vmids", lambda: []),
-        patch.object(red_plant_ops, "red_vmid_candidates",
-                     lambda *a, **k: [999]),      # known vmid; live_vmids [] proves it gone
+        patch.object(red01_ops, "recorded_identity",
+                     lambda *a, **k: {"vmid": 999, "ip": "", "node": ""}),      # known vmid; live_vmids [] proves it gone
     ]
     return patches
 
@@ -125,7 +125,7 @@ class TeardownArtifactsHook(unittest.TestCase):
             patch.object(tm, "teardown_templates", return_value=[]),
             patch("estate.destroy.destroy_estate", side_effect=estate),
             patch.object(ao, "collect_for_teardown", side_effect=collect),
-            patch.object(red_plant_ops, "destroy_red", side_effect=red),
+            patch.object(tlaloc_ops, "destroy_tlaloc_red", side_effect=red),
             ] + _offline_api_patches() + [
             # The entry point refuses without the ambient estate identity (teardown's
             # verify_clean needs it); this harness exercises the hook, not the refusal.
@@ -282,8 +282,8 @@ class CrashedHarnessRecovery(unittest.TestCase):
         def scp(ssh, remote, dest, timeout=120):
             dest = Path(dest)
             dest.mkdir(parents=True, exist_ok=True)
-            if remote.endswith("report-*.md"):
-                report = dest / "report-20261003-0200.md"
+            if remote.endswith("report.md"):
+                report = dest / "report.md"
                 report.write_text("# red after-action\n\nTook the DC at T+22.\n")
                 return [report]
             raise FileNotFoundError(remote)
@@ -314,7 +314,7 @@ class CrashedHarnessRecovery(unittest.TestCase):
             # 75s subprocess timeout). Patched at its owning module.
             patch("artifacts_lib.lifecycle.stage_red_artifacts",
                   side_effect=lambda manifest: calls.append("stage_red")),
-            patch.object(red_plant_ops, "destroy_red",
+            patch.object(tlaloc_ops, "destroy_tlaloc_red",
                          side_effect=lambda *a, **k: calls.append("red_destroy") or
                          __import__("subprocess").CompletedProcess(["x"], 0, "", "")),
             ] + _offline_api_patches() + [
@@ -340,7 +340,7 @@ class CrashedHarnessRecovery(unittest.TestCase):
         self._teardown()
         self.assertEqual((self.path / "RED-TEAM.md").read_text(),
                          "# red after-action\n\nTook the DC at T+22.\n")
-        self.assertTrue((self.path / "evidence" / "red" / "report-20261003-0200.md").exists())
+        self.assertTrue((self.path / "evidence" / "red" / "report.md").exists())
 
     def test_the_folder_is_complete_and_the_verdict_is_folded_in(self):
         self._teardown()

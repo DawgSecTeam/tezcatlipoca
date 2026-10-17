@@ -46,7 +46,7 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
         tactic = ev.get("tactic", "?")
         ok = bool(ev.get("ok"))
         m["actions_ok" if ok else "actions_failed"] += 1
-        # health_check's detail carries bad-auto's own eviction tally ("N footholds
+        # health_check's detail carries the agent's own eviction tally ("N footholds
         # alive, M evicted"); each rise in M is blue removing access red had.
         if tactic == HEALTH_CHECK and ok:
             em = re.search(r"(\d+) evicted", ev.get("detail", ""))

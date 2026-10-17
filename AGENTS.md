@@ -62,13 +62,13 @@ mgmt-IP conflicts) wherever provable, and `acquire_engine_lock` refuses a second
 the same scoring engine. Safe coexistence is otherwise on you: distinct `--scoring-vmid` and
 `--team-identifiers` blocks per range, relying on run-id tags to scope teardown.
 
-**bad-auto state is per-competition.** red01's config, deploy stamp, and identity live in
-`competitions/<id>/` (`.badauto-config.yaml` + the stamp bad-auto writes next to it); its vmid is
-reserved per comp (Compfile `red01_vmid`, else derived one golden stride past this placement's
-last band) and its IP is selected from the red band `10.0.0.240-10.0.0.249` at deploy time
-(`red01_ip` overrides it). The vmid is preflight-gated like the engine's — an occupied red01 slot
-is a refusal naming the owner, never a silent default. Two worktrees may deploy ranges with red01s
-concurrently against the one shared bad-auto checkout with zero coordination.
+**red01 is tezcatlipoca's VM, and its identity is per-competition.** Its vmid is reserved per
+comp (Compfile `red01_vmid`, else derived one golden stride past this placement's last band) and
+its IP is selected from the red band `10.0.0.240-10.0.0.249` at deploy time (`red01_ip` overrides
+it). The vmid is preflight-gated like the engine's — an occupied slot is a refusal naming the
+owner, never a silent default. The VM carries the run's ownership tags, so two worktrees may
+deploy ranges with red01s concurrently with zero coordination, and teardown destroys only what
+its own tag set proves it deployed.
 
 Teardown after a practice run is `destroy-competition.py` (`teardown/`,
 [docs/usage-agents.md § destroy-competition.py](docs/usage-agents.md#destroy-competitionpy)). It
@@ -130,11 +130,9 @@ cp /path/to/main-tree/proxmox . && chmod 600 proxmox # the SSH key the config po
   lvmthin): it counts that fraction of the provisioned team-disk math, since linked clones only
   allocate written blocks. Unset keeps the strict provisioned-bytes gate. Size the factor to the
   pool, not to hope.
-- The sibling-repo tools have one read-only shared fallback: `bad-auto/deploy` loads
-  `../tezcatlipoca/.env` (the MAIN tree's) via `setdefault`, so export the worktree's
-  `TEZ_PROXMOX_ENDPOINT`/`TEZ_PROXMOX_API_TOKEN`/`TEZ_PROXMOX_NODE` before calling bad-auto by hand
-  if the main tree points at a different node. Deploy identity is NOT shared — it lives in each
-  comp's own `competitions/<id>/.badauto-config.yaml`.
+- Everything red needs is in this tree (`red/red01_ops.py`, `tlaloc/`): there is no sibling
+  checkout to copy a key or a config into. The deploy's identity is the run's tag set in its own
+  state document, not a file another session can rewrite.
 
 Then the normal flow: `create-competition.py --competition <id> --scoring-vmid <free> --plan-only`,
 real `--teams N --yes`, verify, destroy — all from the worktree root.
@@ -145,8 +143,8 @@ real `--teams N --yes`, verify, destroy — all from the worktree root.
   run exists to find defects so they can be killed at the root: the goal is a
   stack that runs end-to-end with no agent intervention, not a run that an
   agent shepherds past its failures. Diagnose from evidence before retrying; a
-  failure you cannot explain is not resolved, and "flaky" means broken. Every
-  fix lands in code with a regression test. No workarounds during a run (no
+  failure you cannot explain is not resolved, and "flaky" means broken. No
+  workarounds during a run (no
   manual SSH repairs, hand-edited VMs, hand-cleared flags, `--force`) — if a
   workaround feels necessary, the thing that made it feel necessary is the
   bug. Fixes may cross layers when that is the elegant fix; the exception is

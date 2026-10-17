@@ -1,17 +1,16 @@
-"""Phase 7: AD domains, the final disruption/boot-hostile pass, beacons, the tz-ready snapshot."""
+"""Phase 7: AD domains, the final disruption/boot-hostile pass, red, the tz-ready snapshot."""
 
 import json
 from functools import partial
 
-from red.beacon_ops import plant_team_beacons
 from common.constants import PER_MACHINE_NAKON_BUDGET, SNAP_READY
 from guests.domain_ops import deploy_domain_configs
 from guests.service_fixup_ops import reensure_mysql_credlist_users
 from nakonops.nakon_bundle_ops import build_nakon_bundle
 from nakonops.nakon_run_ops import run_nakon
-from red.red_plant_ops import plant_assume_breach
 from common.timing import timed
 from common.utils import compfile_flag, run_concurrent
+from red import tlaloc_ops
 
 from deploy_lib.coverage import record_clean_coverage, record_stage_coverage
 from deploy_lib.phases._snapshots import snap_ready
@@ -32,19 +31,18 @@ def _wipe_targets(managed_targets):
             for t in managed_targets]
 
 
-def _publish_bad_auto_state(ctx):
-# bad-auto's nakon intel reads the box account from `<comp_dir>/.deploy_state.json`, its
-#     terraform-era contract; the modern pipeline never wrote it, so every seed sprayed
-#     `(box_user, None)`, paramiko failed with "no authentication methods", and cred_spray
-#     reported the whole seed as `unreachable over SSH` on every box (caught live).
-#     The file rides to red01 with the other intel files. 0600: it holds the box password
-#     and the credlist.
-    path = ctx.comp_dir / ".deploy_state.json"
-    path.write_text(json.dumps({
+def _publish_red_intel_state(ctx):
+    """The agent's intel contract: the box account, the credlist and the admin login.
+
+    tlaloc's sensors use the admin account to read Quotient; without it every
+    scoreboard read is anonymous. 0600, atomic: the file carries the box password.
+    """
+    from config.config_ops import write_text_atomic
+    write_text_atomic(ctx.comp_dir / ".deploy_state.json", json.dumps({
         "box_password": ctx.box_password,
         "box_creds": ctx.box_creds or {},
-    }), encoding="utf-8")
-    path.chmod(0o600)
+        "admin_password": ctx.admin_password,
+    }))
 
 
 def phase7_domains_and_final(ctx):
@@ -58,7 +56,7 @@ def phase7_domains_and_final(ctx):
     if ctx.from_phase > 7:
         print("[7/8] Skipped (resume).")
         return
-    _publish_bad_auto_state(ctx)
+    _publish_red_intel_state(ctx)
     print("[7/8] Configuring Windows AD domains (if any), then the final "
           "disruption/boot-hostile pass and beacons...")
     with timed(ctx.comp_dir, 7, "domains"):
@@ -99,41 +97,18 @@ def phase7_domains_and_final(ctx):
     reensure_mysql_credlist_users(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx, ctx.box_creds)
 
     if compfile_flag(ctx.comp_dir / "Compfile", "team_beacons"):
-        print("  Planting team beacons (hunt artifacts)...")
-        with timed(ctx.comp_dir, 7, "beacons"):
-            plant_team_beacons(ctx.teams, ctx.boxes, ctx.tf_ctx, box_username=ctx.box_username,
-                               box_password=ctx.box_password)
+        print("  ERROR: `team_beacons` is a v1 feature and no longer exists — remove it "
+              "from the Compfile")
+        raise RuntimeError("team_beacons is not supported")
 
-    # Assume-breach (CCDC realism): red is ALREADY inside when the clock starts.
-    # Deploy red01 + the realm engine DNAT and run the day-0 seed (access +
-    # prebaked Realm C2 beacons + the persistence/evasion layer) BEFORE the
-    # snapshot, so the restore point every box carries is already-compromised
-    # and phase 8 starts the clock on a range red owns.
-    # Engine selection: `red.engine tlaloc` runs the v2 design (same red01, its
-    # own loop/decisions/effects); anything else — including every existing
-    # Compfile — keeps the v1 path. v2 is not the production red until it has
-    # passed a scrim (migration plan phase 0/6).
-    from red import tlaloc_ops
-    tlaloc_selected = tlaloc_ops.red_engine(ctx.comp_dir) == "tlaloc"
-    if tlaloc_selected or compfile_flag(ctx.comp_dir / "Compfile", "assume_breach"):
-        if tlaloc_selected:
-            print("  Planting assume-breach red presence (tlaloc v2: red01 + "
-                  "C2 payloads + persistence)...")
-            with timed(ctx.comp_dir, 7, "assume_breach"):
-                red_out = tlaloc_ops.plant_assume_breach(ctx)
-                # Red failing to deploy is a BLOCKER for a v2 comp (owner's directive,
-                # the run that found it): warn-and-continue covers a range whose other components
-                # are healthy, not one with no red team at all — the first live smoke
-                # went "live" with red skipped entirely and looked successful.
-                if not (red_out or {}).get("ok"):
-                    raise RuntimeError(
-                        "tlaloc v2 red deployment failed ("
-                        f"{(red_out or {}).get('reason') or 'see degradations'}) — "
-                        "refusing to leave a v2 competition without its red team")
-        else:
-            print("  Planting assume-breach red presence (red01 + beacons + persistence)...")
-            with timed(ctx.comp_dir, 7, "assume_breach"):
-                plant_assume_breach(ctx)
+    # Red is already inside when the clock starts: deploy red01, install its C2,
+    # freeze the payloads and seed the agent BEFORE the snapshot, so the restore
+    # point every box carries is already compromised and phase 8 starts on a range
+    # red owns. Every failure here aborts the deploy: a range with no red team is
+    # not a range.
+    print("  Planting assume-breach red presence (tlaloc: red01 + C2 + persistence)...")
+    with timed(ctx.comp_dir, 7, "red"):
+        tlaloc_ops.plant_assume_breach(ctx)
 
     # Account-file MODES last, after every account writer this deploy has: fix_services'
     # credlist useradd (phase 6) and the assume-breach seed's persistence user (above).

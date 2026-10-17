@@ -10,7 +10,6 @@ from config.config_ops import write_text_atomic
 from estate import config
 __all__ = ["local_python"]
 REPO = Path(__file__).resolve().parent.parent
-BAD_AUTO = REPO.parent / "bad-auto"
 SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 # The same two options as argv pairs, for the callers that build an ssh/scp argv list.
 SSH_NOCHECK = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]

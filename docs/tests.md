@@ -31,6 +31,7 @@ config (`tlaloc/pyproject.toml`); it is not collected by `tests/`:
 
 ```bash
 cd tlaloc && python3 -m pytest tests/ -q
+python3 -m pytest tlaloc/tests -q      # equivalent, from the repo root
 ```
 
 One `conftest.py` exists for exactly one reason: `estate.config` is a deliberate process
@@ -62,7 +63,7 @@ the pytest run above rather than this table.
 | `test_estate_config.py` | The config object: file/env/override precedence, canonical `TEZ_` env-name derivation (`knobs.` prefix dropped), `require`/`is_set`, per-node activation, SSH key resolution |
 | `test_estate_apply.py` | The create path against a fake API: bridge create, engine NIC order and cloud-init, per-box NIC/cloud-init rules (Windows and unmanaged skip it), adopt-ours/refuse-foreign, grow-only disk sizing |
 | `test_estate_engine_setup.py` | The engine's guest-side setup: netplan ens numbering (including the private red-segment NIC), the sysctls, the persisted satellite-route unit, cold boot, readiness |
-| `test_red_bridge.py` | The private per-run red segment: the `vmbrR<run hex>` name, which Compfiles stage red, and the bad-auto `deploy.red_bridge`/`red_subnet`/`red_seg_ip` keys |
+| `test_red_bridge.py` | The private per-run red segment: the `vmbrR<run hex>` bridge name, and that every range stages red |
 | `test_estate_destroy.py` | Teardown tier order (clones before goldens — the base-volume constraint), a refusal that never aborts a tier, `full=False` keeping templates |
 
 **Range/config contracts**
@@ -95,7 +96,7 @@ the pytest run above rather than this table.
 
 | File | Guards |
 |---|---|
-| `test_smoke.py` | CI smoke gate: undefined names/syntax errors anywhere, plus an offline `--plan-only` run |
+| `test_smoke.py` | CI smoke gate: undefined names/syntax errors in the repo-root entry scripts, plus an offline `--plan-only` run |
 | `test_auth_ladder.py` | SSH retry ladders: definitive rejections fail fast instead of burning the full ladder |
 | `test_non_apt_prep.py` | apt-prep/settle scripts are honest fast no-ops on non-apt distros (fedora, alpine) |
 | `test_thin_headroom.py` | Datastore headroom gate and the `TEZ_THIN_HEADROOM` factor |
@@ -130,7 +131,7 @@ defining `verifier.*` module — the entrypoint only re-exports.
 | File | Guards |
 |---|---|
 | `test_verify_gates.py` | Gate correctness: fail-closed plant coverage, tri-state SKIP semantics, the isolation decision table, strict-services "nothing scored" failure, SUMMARY/exit-code single source of truth (`--allow-unverified`) |
-| `test_parallel_verify.py` | Domain/misconfig-survival/beacon loops on the 8-worker pool: parallel and re-serialized runs produce byte-identical stdout, statuses, exit code |
+| `test_parallel_verify.py` | Domain/misconfig-survival loops on the 8-worker pool: parallel and re-serialized runs produce byte-identical stdout, statuses, exit code |
 
 **Packets, scrim, hygiene**
 

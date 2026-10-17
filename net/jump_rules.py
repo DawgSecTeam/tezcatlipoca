@@ -72,16 +72,10 @@ def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
 
 
 def red_segment_from_env():
-    # `TEZ_RED_SEGMENT` as a CIDR, or "" (no red rules — single-node and masq-mode red unchanged).
-    # A malformed value is a hard error: a typo that silently produced no rules would put a live
-    # range back in the state that lost the soak's red coverage.
-    raw = (config.active().knobs.red_segment or "").strip()
-    if not raw:
-        return ""
-    try:
-        return str(ip_network(raw, strict=False))
-    except ValueError as e:
-        raise SystemExit(f"  ERROR: TEZ_RED_SEGMENT={raw!r} is not a CIDR: {e}")
+    # One segment, one definition (common.constants): a second knob let the engine and
+    # the satellite jumps disagree about the address red01 actually lives on.
+    from common.constants import RED_SEGMENT_SUBNET
+    return str(ip_network(RED_SEGMENT_SUBNET, strict=False))
 
 
 def jump_sysctl_script():

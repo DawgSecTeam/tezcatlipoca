@@ -23,7 +23,6 @@ from scrim import test_folder
 from scrim.core import log
 from common.comp_paths import resolve_comp_dir
 from common.utils import valid_comp_name
-from estate import config
 
 
 def main():
@@ -59,13 +58,8 @@ def main():
     p.add_argument("--from-template", default=None)
     p.add_argument("--teams", type=int, default=2)
     p.add_argument("--duration-min", type=int, default=90)
-    p.add_argument("--no-seed-red", dest="seed_red", action="store_false",
-                   help="skip the pre-T0 assume-breach seed (no pre-planted beacons)")
-    p.add_argument("--seed-depth", type=int, default=3, choices=[0, 1, 2, 3],
-                   help="assume-breach seed depth: 0 access | 1 +implant | 2 +artifacts "
-                        "| 3 +evasion (default 3)")
     p.add_argument("--blue-model", default="openai/gpt-5.6-luna", help="cheap cloud model for blue agents")
-    p.add_argument("--red-model", default="openai/gpt-5.6-luna", help="cheap cloud model for bad-auto")
+    p.add_argument("--red-model", default="openai/gpt-5.6-luna", help="cheap cloud model for red")
     p.add_argument("--reasoning-effort", default="",
                    help="reasoning effort sent to the LLM (GPT-5.x/o-series only — "
                         "the local qwen endpoints 500 on it); pass e.g. 'minimal' "
@@ -78,35 +72,13 @@ def main():
                    help="separate LLM base URL for team2's blue (default: same as --blue-base-url)")
     p.add_argument("--blue2-model", default=None,
                    help="model for team2's blue when --blue2-base-url is set")
-    # No default: `None` is what lets `red_stage._resolve_red_ip` consult the comp's own
-    # reservation (Compfile `red01_ip`). Hardcoding bad-auto's own default here made that
-    # resolver unreachable, and a re-stage moved red01 off the address the deploy recorded
-    # and the realm C2 still pointed at (caught live: deploy planted at the legacy .196
-    # default, re-stage re-selected the address). `--red-vmid` has always
-    # defaulted to None for the same reason.
+    # No default: `None` lets the resolver consult the comp's own reservation
+    # (Compfile `red01_ip`), else select a free red-band address at stage time.
     p.add_argument("--red-ip", default=None,
                    help="red01 IP on the cluster; empty resolves the comp's own reservation "
-                        "(Compfile red01_ip), else the tez default")
-    p.add_argument("--red-gw", default="10.0.0.1", help="red01 gateway")
-    p.add_argument("--red-storage", default="hdd", help="storage pool red01 clones from")
+                        "(Compfile red01_ip), else selects one from the red band")
     p.add_argument("--red-vmid", type=int, default=None,
-                   help="red01 vmid when the cluster default collides")
-    p.add_argument("--red-template", default=config.active().knobs.red_template or None,
-                   help="red01 template name when it differs from the cluster default "
-                        "(default: $TEZ_RED_TEMPLATE — bad-auto's built-in default is a "
-                        ".193 name; .150 wants base-ubuntu24.04-fix)")
-    p.add_argument("--red-mode", choices=["routed", "masq"], default=None,
-                   help="red's network identity: routed (bad-auto default) gives red01 a "
-                        "dedicated segment and keeps its source IP visible end-to-end, so "
-                        "blue can hunt and firewall the attacker while scoring keeps "
-                        "sourcing from the team gateway; masq = gateway masquerade "
-                        "(red unblockable-by-IP, indistinguishable from scoring)")
-    p.add_argument("--red-subnet", default=None,
-                   help="red segment CIDR in routed mode (bad-auto default 10.200.0.0/24); "
-                        "must not overlap the team 192.168.0.0/16 or the mgmt LAN")
-    p.add_argument("--red-seg-ip", default=None,
-                   help="red01's address on the red segment (bad-auto default 10.200.0.10; "
-                        "the engine takes the segment gateway x.x.x.1)")
+                   help="red01 vmid when the derived slot collides")
     p.add_argument("--red-tunnel", choices=["auto", "on", "off"], default="auto",
                    help="reverse-SSH tunnel so red01 can reach a local LLM endpoint "
                         "(auto = on for non-openrouter endpoints)")
@@ -114,7 +86,7 @@ def main():
     p.add_argument("--resume-event", action="store_true", dest="resume_event",
                    help="the driver died mid-event: skip staging entirely and re-run the blue "
                         "feeds + monitor + capture + teardown from the T0 recorded in "
-                        "run_dir/T0.txt (badauto red keeps running on red01 regardless)")
+                        "run_dir/T0.txt (red keeps running on red01 regardless)")
     p.add_argument("--from-phase", dest="resume", type=int, default=None,
                    help="resume create-competition at this phase")
     p.add_argument("--force-resume", action="store_true", dest="force_resume",

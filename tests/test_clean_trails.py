@@ -91,7 +91,7 @@ class TestSkipList(unittest.TestCase):
 
     def test_red01_world_artifacts_reads_the_deploy_state_record(self):
         comp = Path(tempfile.mkdtemp())
-        estate_state.write_flat(comp, {"assume_breach": {"red_ip": "10.0.0.198"}})
+        estate_state.write_flat(comp, {"red": {"red_ip": "10.0.0.198"}})
         creds = {"KEY_PATH": "/k"}
         world = {"artifacts": [{"ip": "192.168.120.2", "kind": "realm-imix",
                                 "detail": "imix[grpc] /usr/local/lib/.x-cache",
@@ -244,5 +244,5 @@ class TestTeardownStaging(unittest.TestCase):
             self.assertTrue(lifecycle.stage_red_artifacts(manifest))
         self.assertIn("sysadmin@10.0.0.198", argv_seen["argv"])
         self.assertIn("ProxyCommand=x", argv_seen["argv"])
-        self.assertTrue(any("sudo -n cp /var/lib/bad-auto/world.json" in str(a)
+        self.assertTrue(any("cp /var/lib/tlaloc/$f" in str(a)
                             for a in argv_seen["argv"]))

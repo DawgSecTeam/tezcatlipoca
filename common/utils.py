@@ -231,11 +231,9 @@ def compfile_value(path, key, default=""):
 
 
 def stages_red(comp_dir):
-# Compfile states red presence as `assume_breach <n>` (v1) or `red.assume_breach`/`red.engine` (v2).
-    compfile = Path(comp_dir) / "Compfile"
-    return bool(compfile_flag(compfile, "assume_breach", 0)
-                or compfile_value(compfile, "red.assume_breach", "")
-                or compfile_value(compfile, "red.engine", ""))
+    # Every range stages a red team; the private red bridge and the engine's red NIC
+    # exist for the life of the range.
+    return True
 
 
 def env_summary():

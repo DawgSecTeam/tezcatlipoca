@@ -79,7 +79,7 @@ def _fetch_cluster_vms_single():
 
 def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
                      engine_mgmt_ip, our_run_tag):
-    from red import badauto_config_ops
+    from red import red01_ops
     share = NodeShare(
         name="", node=config.active().proxmox.node, multi=False, slot=0, is_engine=True,
         teams=teams or {}, num_teams=num_teams,
@@ -89,15 +89,15 @@ def single_node_plan(comp_dir, boxes, num_teams, teams, engine_vmid, check_free,
         check_collisions=bool(check_free and teams))
     return PreflightPlan(comp_dir, boxes, engine_vmid, [share], our_run_tag=our_run_tag,
                          engine_mgmt_ip=engine_mgmt_ip,
-                         red01_vmid=badauto_config_ops.red01_vmid_for(comp_dir, engine_vmid),
-                         red01_ip=badauto_config_ops.red01_ip_for(comp_dir),
-                         red01_ip_explicit=badauto_config_ops.red01_ip_is_explicit(comp_dir),
+                         red01_vmid=red01_ops.red01_vmid_for(comp_dir, engine_vmid),
+                         red01_ip=red01_ops.red01_ip_for(comp_dir),
+                         red01_ip_explicit=red01_ops.red01_ip_is_explicit(comp_dir),
                          resuming=not check_free)
 
 
 def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_ip,
                    check_free, our_run_tag):
-    from red import badauto_config_ops
+    from red import red01_ops
     from multinode import placement_record
     from infra.client import cluster_vms_for
 
@@ -131,7 +131,7 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
     return PreflightPlan(comp_dir, boxes, engine_vmid, shares, our_run_tag=our_run_tag,
                          engine_mgmt_ip=engine_mgmt_ip, placement=placement,
                          red01_vmid=red.get("vmid")
-                         or badauto_config_ops.red01_vmid_for(comp_dir, engine_vmid, placement),
+                         or red01_ops.red01_vmid_for(comp_dir, engine_vmid, placement),
                          red01_ip=red.get("ip") or "",
                          # A recorded address was typed or proven free when selected; not re-litigated.
                          red01_ip_explicit=bool(red.get("ip")),

@@ -114,7 +114,7 @@ def collect_run_artifacts(args):
 
     This is the harness's half of the two-caller contract: destroy-competition.py runs the
     same collector for a run whose harness died, so the pull logic exists once
-    (artifacts_ops.collect). It must run before `badauto destroy`, which erases red01; an
+    (artifacts_ops.collect). It must run before the red01 destroy; an
     unreachable box is recorded as `unreachable`, not raised, so a dead guest can never
     hold the destroy hostage."""
     test_dir = getattr(args, "test_dir", None)

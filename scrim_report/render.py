@@ -32,7 +32,7 @@ def build_report(run_dir):
         max_sim = None
     empty_room = (bm["cycles_rc0"] == 0 and restorations == 0
                   and rm["blue_restore_events"] == 0)
-    evictions = max(rm["evictions"], bm["evictions_logged"])
+    evictions = rm["evictions"]   # only red's own health checks count; blue prose is not evidence
     score = (restorations + rm["restore_reactions"] + evictions
              + bm["injects"] + bm["eradication"])
     # Per-run gate calibration:
@@ -102,7 +102,7 @@ def build_report(run_dir):
         L.append(f"  - {timefmt.fmt_t(tp)} {host} {svc} ({mode})")
     # Rotation health (informational, not gated — yet): the biggest single target's
     # share of all takedowns (measured pathological skew: 20 of 22 were one service;
-    # the number that justifies — and then measures — bad-auto's rotation rule).
+    # the number that justifies — and then measures — the rotation rule).
     if rm["timeline"]:
         per_host = Counter(host for _, host, _, _ in rm["timeline"])
         top_host, top_n = per_host.most_common(1)[0]

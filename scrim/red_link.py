@@ -14,7 +14,7 @@ from scrim.core import log
 # nothing), never a narrative: 524 bytes was the observed BLUE-TEAM.md stub size.
 STUB_MAX_BYTES = 1024
 # Bounded grace for red's OWN report to land after the event clock stops. red writes
-# /var/lib/bad-auto/report-<utc>.md when its director sees the duration run out, which can be
+# /var/lib/tlaloc/report.md when its loop sees the duration run out, which can be
 # seconds after the harness stops its own clock — the pre-teardown pull used to race exactly
 # that gap and record a present red as "unreachable", losing its account of the event every run.
 RED_REPORT_GRACE_SEC = 90
@@ -28,17 +28,16 @@ def _red_ssh_spec(args):
     `record_red_agent` (the `ssh` record in test.json that the teardown-time collector
     dials). They must not be able to disagree — a collector pointing at a different address
     fails silently as `unreachable`. The address is THIS run's own: the competition's
-    bad-auto config (written by stage_red from the comp's reservation) when it
-    carries one, else the CLI arg — never the sibling checkout's shared
-    config.yaml, which on concurrent sessions names whichever red01 staged last
-    (that read used to overwrite --red-ip outright)."""
-    from red import badauto_config_ops
-    red_ip = getattr(args, "red_ip", None) or badauto_config_ops.DEFAULT_RED01_IP
+    record in the state/placement documents, else the CLI arg — never the
+    sibling checkout's shared config.yaml, which on concurrent sessions names
+    whichever red01 staged last (that read used to overwrite --red-ip outright)."""
+    from red import red01_ops
     comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
-    configured = ((badauto_config_ops.load_config(comp).get("deploy") or {})
-                  .get("red_ip"))
-    if configured:
-        red_ip = configured
+    red_ip = (getattr(args, "red_ip", None)
+              or red01_ops.recorded_identity(comp).get("ip") or "")
+    if not red_ip:
+        raise RuntimeError("red01's address is not recorded for this competition — "
+                           "stage red first, or pass --red-ip")
     key = str(core.REPO / "proxmox")
     user = core.vm_username()
     engine = None
@@ -83,40 +82,22 @@ def _pull_red_files(args, files, tag=None):
     return got
 
 
-# The red01 paths each engine keeps: v1 (bad-auto) writes under /var/lib/bad-auto
-# with dated reports; tlaloc v2 writes /var/lib/tlaloc/{report.md,
-# report-secrets.md,restore-table.json,world.json,events.jsonl} from its unit.
-RED_STATE_DIRS = {"badauto": "/var/lib/bad-auto", "tlaloc": "/var/lib/tlaloc"}
-RED_UNITS = {"badauto": "bad-auto.service", "tlaloc": "tlaloc.service"}
-
-
-def red_engine_of(args):
-    """The engine this run's competition selects (badauto when it says nothing)."""
-    try:
-        from red import tlaloc_ops
-        comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
-        return tlaloc_ops.red_engine(comp)
-    except Exception:                                       # noqa: BLE001 - v1 default
-        return "badauto"
+RED_STATE_DIR = "/var/lib/tlaloc"
+RED_UNIT = "tlaloc.service"
 
 
 def red_state_dir(args):
-    return RED_STATE_DIRS.get(red_engine_of(args), RED_STATE_DIRS["badauto"])
+    return RED_STATE_DIR
 
 
 def red_unit(args):
-    return RED_UNITS.get(red_engine_of(args), RED_UNITS["badauto"])
+    return RED_UNIT
 
 
 def red_artifact_names(args):
     """The root-owned artifacts to stage + pull from red01's state dir."""
-    names = ["world.json", "events.jsonl", "report-secrets.md"]
-    if red_engine_of(args) == "tlaloc":
-        # v2's after-action artifacts: the restore table is what the verdict and
-        # the organizer's undo list are built from, and report.md is the one the
-        # canonical RED-TEAM.md is landed from.
-        names += ["report.md", "restore-table.json"]
-    return names
+    return ["world.json", "events.jsonl", "report-secrets.md", "report.md",
+            "restore-table.json"]
 
 
 def _red_report_names(args, base=None):
@@ -125,10 +106,9 @@ def _red_report_names(args, base=None):
     Best effort, never raises: an unreadable listing means "no report yet", not a failed pull.
     """
     base = base or red_state_dir(args)
-    # v1 writes dated reports (report-<utc>.md); tlaloc v2 writes report.md from
-    # its own unit. report-secrets.md is the organizer-only file, never the
-    # narrative, so it is filtered out either way.
-    glob = "report*.md" if red_engine_of(args) == "tlaloc" else "report-*.md"
+    # The narrative is report.md; report-secrets.md is the organizer-only file,
+    # never the narrative, so it is filtered out below.
+    glob = "report*.md"
     target, common, jump = _red_ssh_ctx(args)
     cmd = f"ls -1 {base}/{glob} 2>/dev/null || true"
     for extra in ([], (["-o", jump] if jump else [])):
@@ -170,7 +150,7 @@ def await_red_report(args, grace=RED_REPORT_GRACE_SEC, interval=RED_REPORT_POLL_
 
     red is an autonomous agent: it writes its report when IT sees the event end, and the harness
     stops the clock first. Polling the remote listing (the report is written directly into
-    /var/lib/bad-auto as root, so this looks at the originals, not the staged copies) closes that
+    /var/lib/tlaloc as root, so this looks at the originals, not the staged copies) closes that
     race without turning teardown into a gate — an expired grace is logged and the run continues.
     """
     deadline = time.time() + max(0, grace)
@@ -195,7 +175,7 @@ def _land_canonical_red_report(args, got):
     if not test_dir:
         return None
     reports = [Path(args.run_dir) / "evidence" / "red" / n for n in got
-               if n.startswith("report-") or n == "report.md"]
+               if n == "report.md" or n.startswith("report-")]
     reports = [p for p in reports if p.is_file() and p.stat().st_size > 0]
     if not reports:
         return None
@@ -216,25 +196,26 @@ def _land_canonical_red_report(args, got):
 def _staged_report_names(args):
     """Basenames of the report-*.md copies already staged under /tmp/ba (best effort)."""
     target, common, jump = _red_ssh_ctx(args)
-    cmd = "ls -1 /tmp/ba 2>/dev/null | grep '^report-' || true"
+    cmd = "ls -1 /tmp/ba 2>/dev/null | grep '^report' || true"
     for extra in ([], (["-o", jump] if jump else [])):
         try:
             r = procs.run_tree(["ssh"] + common + extra +
                                ["-o", "ConnectTimeout=10", target, cmd], timeout=45, check=False)
         except subprocess.TimeoutExpired:
             continue
-        names = [n for n in (r.stdout or "").split() if n.startswith("report-")]
+        names = [n for n in (r.stdout or "").split()
+                 if n.startswith("report") and "secrets" not in n]
         if names:
             return names
     return []
 
 
 def pull_red_state(args):
-    """Final pull of what red actually planted, BEFORE `badauto destroy` erases red01.
+    """Final pull of what red actually planted, BEFORE red01 is destroyed.
 
     world.json is the only record of the artifact set the persistence verification
     works from, and both it and events.jsonl are root-owned 0600 inside
-    /var/lib/bad-auto — so they are staged to a readable path with sudo first. The
+    /var/lib/tlaloc — so they are staged to a readable path with sudo first. The
     artifact collector treats red01 as ONE target and marks every later file
     "skipped: target unreachable" after the first scp failure (RED-TEAM.md is a
     root-owned pattern match that fails when report-secrets.md is 0600), which is
@@ -252,7 +233,7 @@ def pull_red_state(args):
     stage = ("sudo -n mkdir -p /tmp/ba && sudo -n chmod 755 /tmp/ba; " +
              "".join(f"sudo -n cp {red_state_dir(args)}/{name} /tmp/ba/{name} "
                      f"2>/dev/null; " for name in red_artifact_names(args)) +
-             f"for f in {red_state_dir(args)}/report-*.md; do "
+             f"for f in {red_state_dir(args)}/report*.md; do "
              "sudo -n cp \"$f\" /tmp/ba/ 2>/dev/null; done; "
              "sudo -n chmod 644 /tmp/ba/* 2>/dev/null; true")
     for extra in ([], (["-o", jump] if jump else [])):
@@ -277,7 +258,7 @@ def pull_red_state(args):
 def start_red_director(args):
     """Start red's director AFTER the day-0 seed has landed.
 
-    `badauto deploy --start` boots the director before the seed runs: the director
+    The agent must not boot its loop before the seed runs: the director
     loads an EMPTY world.json, and its next save then overwrites the seed's artifact
     record (lost update — meta.seed_done gone, beacon_score reading single digits,
     per-channel re-plant blind to the seeded set). Starting it here fixes that and

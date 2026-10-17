@@ -38,7 +38,7 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 from artifacts_lib import artifacts_ops  # noqa: E402
-from red import red_plant_ops  # noqa: E402
+from red import red01_ops, tlaloc_ops  # noqa: E402
 
 from infra import client as infra_client  # noqa: E402
 from infra import ownership  # noqa: E402
@@ -248,12 +248,12 @@ class MainSequence(unittest.TestCase):
             patch.object(machinery, "teardown_templates", return_value=[]),
             patch("estate.destroy.destroy_estate", side_effect=estate),
             patch.object(artifacts_ops, "collect_for_teardown", side_effect=collect),
-            patch.object(red_plant_ops, "destroy_red", side_effect=red),
+            patch.object(tlaloc_ops, "destroy_tlaloc_red", side_effect=red),
             patch.object(infra_client, "proxmox_api", FakePVE()),
             patch.object(ownership, "proxmox_api", FakePVE()),
             patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None),
             patch.object(infra_client, "live_vmids", lambda: []),
-            patch.object(red_plant_ops, "red_vmid_candidates", lambda *a, **k: [999]),
+            patch.object(red01_ops, "recorded_identity", lambda *a, **k: {"vmid": 999, "ip": "", "node": ""}),
             # The entry point refuses without the ambient estate identity (teardown's
             # verify_clean needs it); this harness exercises the sequence, not the refusal.
             patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://pve.invalid:8006"}),

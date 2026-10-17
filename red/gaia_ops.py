@@ -24,7 +24,7 @@ The callback address — the part that decides whether the channel ever works
     instance's port), since the range's DNAT translates port-for-port.
 
 Gaia itself
-    Its checkout lives on the engine host at `TEZ_GAIA_PATH` (default `~/gaia`),
+    Its checkout lives on the engine host at `knobs.gaia_path` (default `~/gaia`),
     the same shape as TEZ_BADAUTO_PATH / TEZ_NAKON_PATH so the paths live in the
     dashboard's `.env`. Every command runs with that checkout as CWD: gaia.py
     reads its `.env` relative to the working directory. Verified against
@@ -53,10 +53,9 @@ from pathlib import Path
 from common.utils import compfile_value, local_python, record_degradation
 
 GAIA_REPO = "https://github.com/winterknight1337/Gaia"
-# Pinned at clone time for reproducibility; the resolved commit is recorded in
-# the step's result so a scrim names the Gaia revision it validated.
+# A moving branch, not a pin: the deploy clones it and the step's result records the
+# resolved revision, which is how a scrim names what it validated.
 GAIA_REF = "main"
-GAIA_PATH_ENV = "TEZ_GAIA_PATH"
 DEFAULT_GAIA_PATH = "~/gaia"
 
 MYTHIC_WEB_PORT = 7443
@@ -78,9 +77,10 @@ AUTH_ATTEMPTS = 4
 AUTH_RETRY_SECONDS = 30
 
 
-def gaia_path(env=None):
+def gaia_path():
     """The Gaia checkout on this host (engine host in production)."""
-    raw = (env or os.environ).get(GAIA_PATH_ENV) or DEFAULT_GAIA_PATH
+    from estate import config
+    raw = config.active().knobs.gaia_path or DEFAULT_GAIA_PATH
     return Path(raw).expanduser()
 
 
@@ -338,9 +338,18 @@ def tlaloc_c2_block(comp_dir, *, server, operation, callback_host, callback_port
 # the step
 # --------------------------------------------------------------------------- #
 
+# Gaia is a third-party installer: it needs the ssh key path, never the estate's
+# credentials. Handing it the driver's environment would put the Proxmox token and the
+# dashboard bearer into an external process tree.
+_STRIPPED_ENV = ("TEZ_PROXMOX_API_TOKEN", "TEZ_OPS_TOKEN", "TEZ_DASHBOARD_TOKENS")
+
+
 def _default_runner(argv, **kwargs):
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
+    if "env" not in kwargs:
+        kwargs["env"] = {k: v for k, v in os.environ.items()
+                         if k not in _STRIPPED_ENV}
     return subprocess.run(argv, **kwargs)
 
 
@@ -612,12 +621,44 @@ def mythic_enabled(comp_dir):
     return str(raw).strip().lower() not in ("off", "false", "0", "no")
 
 
+def _team_records(comp_dir):
+    import json
+    try:
+        teams = json.loads((Path(comp_dir) / "teams.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [tv for tv in teams.values() if isinstance(tv, dict)]
+
+
+def _in_path_firewall(comp_dir):
+    import json
+    try:
+        boxes = json.loads((Path(comp_dir) / "boxes.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return any(box.get("in_path") for box in boxes.values() if isinstance(box, dict))
+
+
+def callback_host_for(comp_dir):
+    """The address team boxes dial for the C2 on this topology.
+
+    Behind an in-path firewall that is the engine's transit address; otherwise it
+    is their own gateway (the engine's team NIC). Multi-team comps are DNATed per
+    gateway at the engine; the payload host names the first team's.
+    """
+    identifiers = [tv.get("identifier") for tv in _team_records(comp_dir)
+                   if tv.get("identifier") is not None]
+    if not identifiers:
+        return None
+    prefix = "172.31" if _in_path_firewall(comp_dir) else "192.168"
+    return f"{prefix}.{identifiers[0]}.1"
+
+
 def c2_plan(comp_dir, *, red_ip=None, comp_id=None):
-    """Everything the step needs, derived from the Compfile alone."""
-    from red import realm_c2_ops
+    """Everything the step needs, derived from the Compfile and the topology."""
     return {
         "box": c2_box_for(comp_dir, default_ip=red_ip),
-        "callback_host": realm_c2_ops.callback_ip_for(comp_dir),
+        "callback_host": callback_host_for(comp_dir),
         "callback_port": callback_port_for(comp_dir),
         "operation": comp_id or Path(comp_dir).name,
     }

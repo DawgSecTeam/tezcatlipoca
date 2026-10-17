@@ -24,22 +24,25 @@ def plan_targets(manifest, *, comp_dir=None):
         targets.append({
             "name": "red01", "route": "scp-jump", "kind": "remote",
             "node": red.get("node"), "vmid": red.get("vmid"), "ssh": red.get("ssh") or {},
-            "note": ("bad-auto's VM, not a tezcatlipoca box — `badauto destroy` removes it, so a "
-                     "missing red report after a normal harness run is expected unless the "
-                     "harness or teardown collected before that"),
+            "note": ("red01 is destroyed by the teardown's red step after this collection, so "
+                     "a missing red report here is the last chance to have it"),
             "want": [
                 # The sudo-staged copies: the originals are 0600 root, and one
                 # unreadable file used to make the collector give up on the whole
                 # red target (taking world.json with it).
-                {"remote": "/tmp/ba/report-*.md", "to": "evidence/red/",
+                {"remote": "/tmp/ba/report.md", "to": "evidence/red/",
                  "canonical": SIDES["red"]},
+                {"remote": "/tmp/ba/restore-table.json",
+                 "local": "evidence/red/restore-table.json"},
+                {"remote": "/tmp/ba/manifest.json",
+                 "local": "evidence/red/manifest.json"},
                 {"remote": "/tmp/ba/events.jsonl",
                  "local": "evidence/red/events.jsonl"},
                 {"remote": "/tmp/ba/world.json", "local": "evidence/red/world.json"},
                 {"remote": "/tmp/ba/report-secrets.md",
                  "local": "evidence/red/report-secrets.md"},
-                {"cmd": "sudo -n journalctl -u bad-auto --no-pager",
-                 "local": "evidence/red/bad-auto-journal.log"},
+                {"cmd": "sudo -n journalctl -u tlaloc --no-pager",
+                 "local": "evidence/red/tlaloc-journal.log"},
             ],
         })
     else:

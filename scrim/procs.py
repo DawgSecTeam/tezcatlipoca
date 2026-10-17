@@ -56,7 +56,7 @@ def _kill_tree(proc, grace=TREE_STOP_GRACE):
 
 
 # own session so a timeout kills the whole tree, not just the direct child: subprocess.run
-# SIGKILLs the DIRECT child only, after which create-competition.py/badauto/their
+# SIGKILLs the DIRECT child only, after which create-competition.py/tlaloc/their
 # nakon/ssh grandchildren survive with the deploy lock held and keep mutating
 # infrastructure (one hung opencode cycle held the shared lock ~80 min because a
 # grandchild outlived the kill). SIGINT to the group, escalate to SIGKILL after `grace`.
@@ -97,7 +97,7 @@ def run(cmd, cwd=None, env=None, timeout=None, check=True, tail=None):
 # the password goes on stdin — a running command's argv is world-readable via ps, and
 # interpolating a generated password into the remote shell string is one shell
 # metacharacter from a syntax error aborting the fire test; same pin every other box
-# path uses (beacon_ops._ssh_box). The script follows the password on the same stdin
+# path uses. The script follows the password on the same stdin
 # stream, which is what `sudo -S -p '' bash -s` expects.
 def box_sudo_stdin(base, host, box_pw, script):
     return list(base) + [host, "sudo -S -p '' bash -s"], box_pw + "\n" + script

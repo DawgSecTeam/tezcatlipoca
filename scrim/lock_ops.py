@@ -19,7 +19,7 @@ def acquire_scrim_lock(comp):
     """Take this range's scrim flock, or refuse naming the holder; idempotent per process.
 
     Two scrims of one range collide on everything the harness touches: the fire test (each
-    stops nginx, so the second reads the first's DOWN), red01 (a second bad-auto deploy
+    stops nginx, so the second reads the first's DOWN), red01 (a second red deploy
     reconfigures the first's live red), and the Quotient sessions (every qlogin evicts the
     other harness's cookie — seen with two concurrent scrims on one range, one of them
     cancelled). The flock releases on process exit

@@ -43,8 +43,7 @@ class TeardownOrdering(unittest.TestCase):
              mock.patch.object(teardown_stage, "teardown_red",
                                lambda *a, **k: order.append("teardown_red") or 999), \
              mock.patch.object(teardown_stage, "run_range_teardown",
-                               lambda *a, **k: order.append("destroy-competition")), \
-             mock.patch.object(teardown_stage.procs, "run", _fake_proc):
+                               lambda *a, **k: order.append("destroy-competition")):
             teardown_stage.stage_teardown(args, creds={"user": "sysadmin"})
         self.assertEqual(order[:3], ["pull", "collect", "report"],
                          f"the final red pull must precede the report, got {order}")
@@ -58,8 +57,7 @@ class TeardownOrdering(unittest.TestCase):
              mock.patch.object(teardown_stage, "teardown_red",
                                lambda *a, **k: order.append("teardown_red") or 999), \
              mock.patch.object(teardown_stage, "run_range_teardown",
-                               lambda *a, **k: order.append("destroy-competition")), \
-             mock.patch.object(teardown_stage.procs, "run", _fake_proc):
+                               lambda *a, **k: order.append("destroy-competition")):
             teardown_stage.stage_teardown(args, creds=None)
         self.assertEqual([x for x in order if x in ("pull", "collect")], [],
                          f"a teardown with no creds must not collect (got {order})")

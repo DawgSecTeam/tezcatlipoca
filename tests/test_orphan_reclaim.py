@@ -182,8 +182,7 @@ class Reclaim(unittest.TestCase):
 
     def test_an_absent_handoff_prints_the_retire_call(self):
         out = []
-        with mock.patch.object(orphan_ops, "load_dotenv"):
-            result = orphan_ops.reclaim("comp", "run-aaaa1111", node=self.node, log=out.append)
+        result = orphan_ops.reclaim("comp", "run-aaaa1111", node=self.node, log=out.append)
         self.assertEqual([d["vmid"] for d in result["destroyed"]], [100])
         text = "\n".join(out)
         self.assertIn("run-aaaa1111", text)
@@ -237,18 +236,9 @@ class Handoff(unittest.TestCase):
         self.assertEqual(orphan_ops.dashboard_handoff(), ("http://127.0.0.1:8787", "tok-a"))
 
     def test_absent_or_tokenless_handoffs_do_not_resolve(self):
-        with mock.patch.object(orphan_ops, "load_dotenv"):
-            self.assertEqual(orphan_ops.dashboard_handoff(), ("", ""))
-            os.environ["TEZ_DASHBOARD_HOST"] = "dash.local"
-            self.assertEqual(orphan_ops.dashboard_handoff(), ("", ""))
-
-    def test_the_checkout_env_can_carry_the_handoff(self):
-        with tempfile.TemporaryDirectory() as d:
-            (Path(d) / ".env").write_text(
-                "TEZ_DASHBOARD_HOST=127.0.0.1\nTEZ_DASHBOARD_TOKENS=engine=from-dotenv\n")
-            with mock.patch.object(orphan_ops, "REPO_ROOT", Path(d)):
-                self.assertEqual(orphan_ops.dashboard_handoff(),
-                                 ("http://127.0.0.1:8787", "from-dotenv"))
+        self.assertEqual(orphan_ops.dashboard_handoff(), ("", ""))
+        os.environ["TEZ_DASHBOARD_HOST"] = "dash.local"
+        self.assertEqual(orphan_ops.dashboard_handoff(), ("", ""))
 
 
 class Cli(unittest.TestCase):

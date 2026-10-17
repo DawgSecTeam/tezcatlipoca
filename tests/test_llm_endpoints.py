@@ -56,7 +56,7 @@ class ApiKey(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "DEEPSEEK_API_KEY"}
         with mock.patch.dict(os.environ, env, clear=True), \
              tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(endpoints.core, "BAD_AUTO", Path(tmp)):
+            with tempfile.TemporaryDirectory():
                 with self.assertRaises(RuntimeError) as ctx:
                     endpoints.api_key(DEEPSEEK)
         self.assertIn("DEEPSEEK_API_KEY", str(ctx.exception))
@@ -67,7 +67,7 @@ class ApiKey(unittest.TestCase):
                if k not in ("DEEPSEEK_API_KEY", "OPENROUTER_API_KEY")}
         with mock.patch.dict(os.environ, env, clear=True), \
              tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(endpoints.core, "BAD_AUTO", Path(tmp)):
+            with tempfile.TemporaryDirectory():
                 self.assertEqual(endpoints.api_key(LLAMA), "local")
                 self.assertEqual(endpoints.api_key(local=True), "local")
 
@@ -92,14 +92,13 @@ class RedProfileAndTunnel(unittest.TestCase):
         llm = red_stage.red_llm_config(self._args())
         self.assertEqual(llm["base_url"], DEEPSEEK)
         self.assertEqual(llm["model"], "deepseek-flash")
-        self.assertEqual(llm["max_tokens"], 4096)
-        self.assertEqual(llm["timeout"], 240)
-        self.assertEqual(llm["json_retries"], 1)
+        self.assertTrue(llm["enabled"])
+        self.assertEqual(llm["timeout_sec"], 240)
+        self.assertEqual(llm["api_key_env"], "TLALOC_LLM_API_KEY")
 
     def test_local_endpoint_keeps_the_slow_profile(self):
         llm = red_stage.red_llm_config(self._args(llm_base_url=LLAMA))
-        self.assertEqual(llm["max_tokens"], 6144)
-        self.assertEqual(llm["timeout"], 300)
+        self.assertEqual(llm["timeout_sec"], 300)
 
     def test_auto_never_tunnels_to_a_public_endpoint(self):
         with mock.patch.object(red_tunnel.RedTunnel, "start") as start:

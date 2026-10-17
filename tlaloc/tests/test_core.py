@@ -103,15 +103,15 @@ def test_explicit_missing_config_is_a_hard_error():
         config_mod.load_config("/nonexistent/config.yaml")
 
 
-def test_compfile_red_block_and_legacy_knobs(tmp_path):
+def test_compfile_red_block_is_the_authority(tmp_path):
     comp = tmp_path / "comp"
     comp.mkdir()
     (comp / "Compfile").write_text(
-        "comp demo\nteams 2\nassume_breach 1\nassume_breach_depth 2\n"
+        "comp demo\nteams 2\nred.assume_breach light\nred.depth 2\n"
         "red.duration_min 60\nred.caps.max_down 3\n")
     cfg = config_mod.load_config()
     cfg = config_mod.apply_compfile(cfg, comp)
-    assert cfg["red"]["assume_breach"] == "light"      # legacy 1 -> light
+    assert cfg["red"]["assume_breach"] == "light"
     assert cfg["red"]["depth"] == 2
     assert cfg["red"]["duration_min"] == 60
     assert cfg["red"]["caps"]["max_down"] == 3

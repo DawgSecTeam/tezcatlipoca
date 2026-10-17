@@ -61,7 +61,7 @@ DOMAIN_INFRA_CONFIGS = {"ADDS", "Domain Join", "domain-join"}
 #              flakiness). This is the
 #              as-started competition flavor, so it lands right before beacons/tz-ready.
 #   last     — account-file MODES, planted after the last account writer of the deploy
-#              (bad-auto's assume-breach seed) and before the trail wipe; see
+#              (the red team's assume-breach seed) and before the trail wipe; see
 #              ACCOUNT_FILE_MODE_CONFIGS for why no earlier pass can hold them.
 #
 # Within each pass, DISRUPTIVE_CONFIGS still sort last per machine.
@@ -127,7 +127,7 @@ def is_domain_dependent(name):
 #     preserves it (probed in the Debian 13 and Ubuntu 24.04 base images:
 #     666 -> 664 on useradd, unchanged on chpasswd). Two account writers run after the
 #     pre-domain and final passes — `guests.service_fixup_ops.fix_services_on_boxes`
-#     (a credlist `useradd` for every team box, end of phase 6) and bad-auto's assume-breach
+#     (a credlist `useradd` for every team box, end of phase 6) and the red team's assume-breach
 #     seed (its depth-3 persistence `user` method, phase 7). caught live:
 #     bad-perms-userConfig read ABSENT on every team clone while writable-sudoers — a
 #     DIRECTORY mode neither writer touches — was present on all of them, and
@@ -143,9 +143,11 @@ ACCOUNT_FILE_MODE_CONFIGS = {
 POST_CLONE_CONFIGS = (PREDOMAIN_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
                       | ACCOUNT_FILE_MODE_CONFIGS)
 
-# Pin-var requirements (M4 pin fix). The catalog DB carries no required-vars metadata
-# (only depends_on), so this curated table is the operator-level source of truth:
-# a bare-name selection of one of these configs is rejected at generate time instead
+# Pin-var requirements (M4 pin fix). The catalog now carries real required-vars metadata —
+# each configuration row declares `required_vars` (curated via vulndb-cli; nakon gates pins
+# on it), so this table's job narrowed to the two things the catalog cannot know: the var
+# KIND (auto-fill machine identity vs operator literal) and pre-domain/final-stage-only
+# timing. A bare-name selection of one of these configs is rejected at generate time instead
 # of failing mid-plant (caught live: sudoers-rule rc=2, hosts-redirect-linux
 # rc=2, unrealircd rc=127). Var kinds:
 #   "ip"      — machine-identity: auto-filled with that machine's own IP at stage-file
@@ -158,7 +160,8 @@ POST_CLONE_CONFIGS = (PREDOMAIN_STAGE_CONFIGS | FINAL_STAGE_CONFIGS
 #               boxes.json or generate fails loudly.
 #   "literal" — operator-supplied: pin as {"name": ..., "vars": {...}} in
 #               box_services.json / box_vulns.json; a bare name is a generate error.
-# Catalog-side resolution is deferred to upstream nakon/vulndb (see known-issues).
+# Catalog-side var DECLARATION lives upstream now (vulndb required_vars column, gated
+# by nakon catalog check); this table adds operational kinds/timing the catalog can't know.
 REQUIRED_VARS = {
     # writes "IP  HOSTS" into /etc/hosts: IP = the machine's own address
     # (identity — auto-filled per machine, post-clone only), HOSTS = the

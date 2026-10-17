@@ -7,15 +7,15 @@ the bug.
 
 ## What this repo is
 
-tlaloc v2 — the red-team component of the tezcatlipoca scoring range. An
-assume-breach CCDC red teamer: it is already inside when the event starts, then
-pressures scored services while adapting to blue. It is a **rebuild** of v1
-(a private v1 agent repo); the v1
-audit's findings are what every module here is shaped by. This folder is part of
-the tezcatlipoca tree: the range deploys it through `red/tlaloc_ops.py`, and the
-ownership split (the engine owns the range, tlaloc owns decisions and effects) is
-in [`docs/deploy.md`](docs/deploy.md). Read the docs before proposing an
-architecture change.
+tlaloc v2 — the tezcatlipoca range's red team. An assume-breach CCDC red teamer:
+it is already inside when the event starts, then pressures scored services while
+adapting to blue. It is a **rebuild** of v1; the v1 audit's findings are what
+every module here is shaped by. This folder is part of the tezcatlipoca tree:
+phase 7 of every deploy provisions red01, installs the C2 unless `red.c2 off`,
+and stages the package through `red/tlaloc_ops.py` — there is no engine selector
+and no fallback. The ownership split (the engine owns the range, tlaloc owns
+decisions and effects) is in [`docs/deploy.md`](docs/deploy.md). Read the docs
+before proposing an architecture change.
 
 ## Non-negotiable invariants
 

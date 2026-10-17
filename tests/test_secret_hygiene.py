@@ -53,6 +53,10 @@ INTERNAL_ENV = {
     "TEZ_DASHBOARD_HOST": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire call",
     "TEZ_DASHBOARD_PORT": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire call",
     "TEZ_DASHBOARD_TOKENS": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire bearer",
+    # The portal container's ops-sync handoff: the run queue writes them into the
+    # portal's env, and portal_ops/ops_sync read them directly (container-side).
+    "TEZ_OPS_URL": "tezcatlipoca-dashboard -> portal ops sync",
+    "TEZ_OPS_TOKEN": "tezcatlipoca-dashboard -> portal ops sync bearer",
     # artifacts_lib/seal.py seal step: default author attribution from the OS user, not
     # operator configuration.
     "USER": "OS username, recorded as the default write-up author on seal",

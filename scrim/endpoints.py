@@ -1,6 +1,5 @@
 import os
 
-from scrim import core
 from scrim import llm_endpoints
 
 
@@ -21,9 +20,8 @@ def api_key(base_url=None, local=None):
     like a working defense).
 
     No base_url, or a host that is not in the table (operator-side llama.cpp / a tailnet LLM
-    host), keeps the
-    legacy order: `OPENROUTER_API_KEY`, then bad-auto/.env's `BAuto_LLM_API_KEY`, then the
-    literal "local" when `local=True` (a local llama.cpp ignores whatever it is sent).
+    host), uses `OPENROUTER_API_KEY`, then the literal "local" when `local=True` (a local
+    llama.cpp ignores whatever it is sent).
     """
     ep = llm_endpoints.lookup(base_url) if base_url else None
     if ep and ep.kind == llm_endpoints.PUBLIC:
@@ -36,14 +34,9 @@ def api_key(base_url=None, local=None):
     for var in ("OPENROUTER_API_KEY",):
         if os.environ.get(var):
             return os.environ[var]
-    env_file = core.BAD_AUTO / ".env"
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            if line.startswith("BAuto_LLM_API_KEY="):
-                return line.split("=", 1)[1].strip()
     if local or (base_url is not None and ep is None):
         return "local"
-    raise RuntimeError("no API key: set OPENROUTER_API_KEY or BAuto_LLM_API_KEY in bad-auto/.env")
+    raise RuntimeError("no API key: set OPENROUTER_API_KEY (or the provider's key env)")
 
 
 def provider_key(base_url):

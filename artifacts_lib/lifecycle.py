@@ -41,14 +41,15 @@ def finalize(test_path, *, manifest=None):
 
 
 # The same staging scrim/red_link.pull_red_state does for the harness, kept here so
-# the TEARDOWN path can read red's record too: /var/lib/bad-auto is 0600 root and the
+# the TEARDOWN path can read red's record too: /var/lib/tlaloc is 0600 root and the
 # collector scp's as the box user, so an unstaged target records absent — and for the
 # run whose harness died, this collection is the only copy of what red planted.
 _STAGE_CMD = ("sudo -n mkdir -p /tmp/ba && sudo -n chmod 755 /tmp/ba; "
-              "sudo -n cp /var/lib/bad-auto/world.json /tmp/ba/world.json && "
-              "sudo -n cp /var/lib/bad-auto/events.jsonl /tmp/ba/events.jsonl && "
-              "for f in /var/lib/bad-auto/report-*.md; do "
-              'sudo -n cp "$f" /tmp/ba/ 2>/dev/null; done; '
+              "for f in world.json events.jsonl report.md report-secrets.md "
+              "restore-table.json; do "
+              "sudo -n cp /var/lib/tlaloc/$f /tmp/ba/$f 2>/dev/null; done; "
+              "sudo -n cp /var/lib/tlaloc/intel/red/manifest.json /tmp/ba/manifest.json "
+              "2>/dev/null; "
               "sudo -n chmod 644 /tmp/ba/* 2>/dev/null; true")
 
 
@@ -101,7 +102,7 @@ def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=
 #     Ordering is the entire point. destroy-competition.py calls this after the confirmation
 #     prompt and *before* its first destructive call (the `collect_for_teardown` call ahead of the pre-stop): `pre_stop_windows_boxes` hard-
 #     stops every clone, and a stopped guest's agent can no longer answer, so anything not read by
-#     then is gone. Red01 is worse — `badauto destroy` removes it before teardown even starts, so
+#     then is gone. Red01 is destroyed by the teardown's own red step, so
 #     this is the safety net for the run whose harness died, not the primary path.
 #
 #     Warns and proceeds; never blocks (deliberate operator decision): a dead box must not wedge a

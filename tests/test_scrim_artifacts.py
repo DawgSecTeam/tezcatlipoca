@@ -10,7 +10,7 @@ Each test here pins one invariant of the harness half of the artifact contract:
   INV4  `record_phase` mirrors into test.json and keeps writing run.json exactly as before;
   INV5  red's and blue's identity is recorded when it is known, from the same ssh helper
         `_red_ssh_ctx` uses (bad-auto's config.yaml is a rewritten singleton at teardown time);
-  INV6  teardown collects BEFORE `badauto destroy`, reports are best-effort, finalize runs
+  INV6  teardown collects BEFORE the red01 destroy, reports are best-effort, finalize runs
         last and on the --keep-range path too;
   INV7  the blue submission globs match what the prompt actually asks for (`sub.md`);
   INV8  the engine capture is COPIED into evidence/engine/ (scrim-report.py reads the original);
@@ -280,8 +280,7 @@ class EvidenceDoneFollowsTheCollection(TmpCase):
     def _stage(self, collection):
         args = make_args(self.comp)
         args.test_dir = str(self.comp / ".automated-tests" / RUN_ID)
-        with mock.patch.object(teardown_stage.endpoints, "api_key", lambda **k: "k"), \
-                mock.patch.object(teardown_stage.test_folder, "collect_run_artifacts",
+        with mock.patch.object(teardown_stage.test_folder, "collect_run_artifacts",
                                   return_value=collection), \
                 mock.patch.object(teardown_stage.test_folder, "write_interaction_report"), \
                 mock.patch.object(teardown_stage, "teardown_red", return_value=999), \
@@ -314,43 +313,35 @@ class AgentIdentity(TmpCase):
         super().setUp()
         # A fake repo root, so the ssh helper reads THIS run's files without
         # ever touching the real repo, the sibling bad-auto, or the network.
-        # red01's address lives in the COMP's own bad-auto config now (the
-        # sibling checkout's singleton is no longer a source).
+        # red01's address lives in the competition's own recorded identity.
         self.repo = self.root
-        self.bad = self.root / "bad-auto"
-        self.bad.mkdir()
-        (self.comp / ".badauto-config.yaml").write_text(
-            "deploy:\n  red_ip: 10.0.0.199\n  red_vmid: 999\n")
+        from estate import state as estate_state
+        estate_state.write_flat(self.comp, {"red": {"vmid": 999, "ip": "10.0.0.199"}})
         (self.comp / "credentials.txt").write_text("engine http://203.0.113.20:8006/\n")
-        # teams.json feeds realm_c2's callback_ip (172.31.<id>.1); without it the
-        # staged realm block is refused as a dark C2 (the completeness check).
         (self.comp / "teams.json").write_text(
             json.dumps({"team1": {"identifier": "130", "password": "pw"}}))
         for patch in (mock.patch.object(core, "REPO", self.repo),
-                      mock.patch.object(core, "BAD_AUTO", self.bad),
                       mock.patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "sysadmin",
                                                    "TEZ_PROXMOX_NODE": "pve"})):
             patch.start()
             self.addCleanup(patch.stop)
 
     def test_red_ssh_spec_is_the_one_helper_red_ssh_ctx_uses(self):
-        args = make_args(self.comp, red_ip="10.0.0.198")  # the comp config disagrees on purpose
+        args = make_args(self.comp, red_ip="10.0.0.198")  # the CLI wins over the record
         target, common, jump = red_link._red_ssh_ctx(args)
         spec, spec_common = red_link._red_ssh_spec(args)
-        self.assertEqual(spec["host"], "10.0.0.199")
+        self.assertEqual(spec["host"], "10.0.0.198")
         self.assertEqual(spec["user"], "sysadmin")
         self.assertEqual(spec["key"], str(self.repo / "proxmox"))
         self.assertEqual(spec["jump"], jump)
         self.assertIn("ProxyCommand=ssh", jump)
         self.assertIn("203.0.113.20", jump)
-        self.assertEqual(target, "sysadmin@10.0.0.199")
+        self.assertEqual(target, "sysadmin@10.0.0.198")
         self.assertEqual(common, spec_common)
         self.assertIn(spec["key"], common)
 
     def test_stage_red_records_the_identity_in_the_manifest(self):
         args = make_args(self.comp, run_dir=None, red_ip="10.0.0.199", red_vmid=999,
-                         red_gw="10.0.0.1", red_storage="hdd", red_mode=None,
-                         red_template=None, red_subnet=None, red_seg_ip=None,
                          llm_base_url="https://openrouter.ai/api/v1", red_model="m",
                          reasoning_effort=None, red_tunnel="off")
         run_dir, test_dir = self.resolve(args)
@@ -361,15 +352,15 @@ class AgentIdentity(TmpCase):
                                    a[0], 0, gate_out, "")), \
                 mock.patch.object(red_link, "check_red_llm", lambda *a, **k: True), \
                 mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
-                mock.patch.object(red_stage.red_plant_ops, "_seed_red",
-                                  lambda *a, **k: subprocess.CompletedProcess(
-                                      ["seed"], 0,
-                                      json.dumps({"boxes": 2, "failed": [],
-                                                  "access": ["192.168.101.2",
-                                                             "192.168.102.2"]}), "")), \
-                mock.patch.object(red_stage.realm_c2_ops, "provision_realm_c2",
-                                  lambda *a, **k: {"ok": True, "transports": ["http1"],
-                                                   "mcp": "http://10.0.0.199:8000/mcp"}), \
+                mock.patch("red.tlaloc_ops.plant_assume_breach",
+                                  lambda *a, **k: {"ok": True, "red_ip": "10.0.0.199"}), \
+                mock.patch.object(red_stage.core, "read_state",
+                                  lambda *a, **k: {"run_id": "run-1a2b3c4d",
+                                                   "scoring_vm_id": 1300,
+                                                   "engine_mgmt_ip": "203.0.113.20"}), \
+                mock.patch.object(red_stage, "verify_tlaloc_seeded",
+                                  lambda *a, **k: ["192.168.101.2", "192.168.102.2"]), \
+                mock.patch("scrim.clean_trails.clean_trails", lambda *a, **k: None), \
                 mock.patch.object(red_link, "start_red_director", lambda *a, **k: None):
             # creds must be real-shaped: routed red runs the pre-T0 reachability gate,
             # which reads ENGINE_IP/ADMIN_PW (mocked run answers with PASS lines)
@@ -417,7 +408,7 @@ class AgentIdentity(TmpCase):
 
 
 class TeardownCollection(TmpCase):
-# INV6/INV9: collect -> scrim-report -> ingest_verdict, all before `badauto destroy`.
+# INV6/INV9: collect -> scrim-report -> ingest_verdict, all before `red destroy`.
 
     def setUp(self):
         super().setUp()
@@ -431,8 +422,6 @@ class TeardownCollection(TmpCase):
         text = " ".join(str(c) for c in cmd)
         if "scrim-report.py" in text:
             return "scrim-report"
-        if "badauto" in text:
-            return "badauto destroy"
         if "destroy-competition.py" in text:
             return "destroy-competition"
         return text
@@ -456,6 +445,9 @@ class TeardownCollection(TmpCase):
             # that staged no red is skipped outright by teardown_red — covered in
             # tests/test_teardown_red_skip.py
             mock.patch.object(teardown_stage, "_manifest_red_vmid", lambda *a, **k: 999),
+            mock.patch("red.tlaloc_ops.destroy_tlaloc_red",
+                       side_effect=lambda *a, **k: self.calls.append("red destroy") or
+                       {"ok": True}),
         ]
         if log:
             patches.append(mock.patch.object(test_folder, "log",
@@ -471,7 +463,7 @@ class TeardownCollection(TmpCase):
     def test_the_collector_runs_before_badauto_destroy(self):
         self._teardown()
         self.assertEqual(self.calls, ["collect", "scrim-report", "ingest",
-                                      "badauto destroy", "destroy-competition"])
+                                      "red destroy", "destroy-competition"])
 
     def test_badauto_destroy_still_runs_when_the_collector_raises(self):
         def boom(*a, **k):
@@ -479,7 +471,7 @@ class TeardownCollection(TmpCase):
             raise RuntimeError("scp: connect to host 10.0.0.199: No route to host")
 
         self._teardown(collect=boom)
-        self.assertIn("badauto destroy", self.calls)
+        self.assertIn("red destroy", self.calls)
         self.assertIn("destroy-competition", self.calls)
         self.assertTrue(any("WARNING" in w and "collection" in w for w in self.warnings),
                         self.warnings)
@@ -495,7 +487,7 @@ class TeardownCollection(TmpCase):
         self._teardown(run=failing_run)
         self.assertLess(self.calls.index("collect"), self.calls.index("scrim-report"))
         self.assertLess(self.calls.index("scrim-report"), self.calls.index("ingest"))
-        self.assertLess(self.calls.index("ingest"), self.calls.index("badauto destroy"))
+        self.assertLess(self.calls.index("ingest"), self.calls.index("red destroy"))
         self.assertTrue(any("WARNING" in w and "scrim-report" in w for w in self.warnings),
                         self.warnings)
 
@@ -503,7 +495,7 @@ class TeardownCollection(TmpCase):
         def rc1_run(cmd, **kwargs):
             label = self._label(cmd)
             self.calls.append(label)
-            # only the report fails: a failing badauto destroy raises (fail-loud
+            # only the report fails: a failing red destroy raises (fail-loud
             # teardown, scale8-hardening), and this gate is about the report's rc
             if label == "scrim-report":
                 return subprocess.CompletedProcess(cmd, 1, "", "no such run dir")
@@ -511,7 +503,7 @@ class TeardownCollection(TmpCase):
 
         self._teardown(run=rc1_run)
         self.assertIn("ingest", self.calls)
-        self.assertIn("badauto destroy", self.calls)
+        self.assertIn("red destroy", self.calls)
         self.assertTrue(any("WARNING" in w and "exited 1" in w for w in self.warnings),
                         self.warnings)
 
@@ -525,6 +517,9 @@ class TeardownCollection(TmpCase):
         with mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
                 mock.patch.object(test_folder, "log", side_effect=self.warnings.append), \
                 mock.patch.object(teardown_stage, "_manifest_red_vmid", lambda *a, **k: 999), \
+                mock.patch("red.tlaloc_ops.destroy_tlaloc_red",
+                           side_effect=lambda *a, **k: self.calls.append("red destroy") or
+                           {"ok": True}), \
                 mock.patch.object(procs, "run", side_effect=self._fake_run), \
                 mock.patch.object(teardown_stage, "run_range_teardown",
                                   side_effect=lambda *a, **k: self.calls.append("destroy-competition")), \
@@ -536,7 +531,7 @@ class TeardownCollection(TmpCase):
         self.assertEqual(verdict.get("score"), 11)
         self.assertEqual(verdict.get("source"), "evidence/harness/INTERACTION.md")
         self.assertTrue((self.test_dir / "evidence" / "harness" / "INTERACTION.md").exists())
-        self.assertIn("badauto destroy", self.calls)
+        self.assertIn("red destroy", self.calls)
 
 
 class Finalize(TmpCase):
@@ -553,12 +548,12 @@ class Finalize(TmpCase):
     def _fake_run(self, cmd, **kwargs):
         text = " ".join(str(c) for c in cmd)
         self.calls.append("destroy-competition" if "destroy-competition.py" in text
-                          else ("badauto destroy" if "badauto" in text else text))
+                          else ("red destroy" if "badauto" in text else text))
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     def test_finalize_runs_last_on_the_keep_range_path(self):
         # this scenario is a run that DID stage red (a red01 exists to destroy); a run that
-        # staged no red skips `badauto destroy` entirely (tests/test_teardown_red_skip.py)
+        # staged no red skips `red destroy` entirely (tests/test_teardown_red_skip.py)
         self.args.keep_range = True
         with mock.patch.object(event_run, "stage_run", lambda *a: self.calls.append("stage_run")), \
                 mock.patch.object(evidence, "stage_capture",
@@ -566,6 +561,9 @@ class Finalize(TmpCase):
                 mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"), \
                 mock.patch.object(test_folder, "log", lambda *a, **k: None), \
                 mock.patch.object(teardown_stage, "_manifest_red_vmid", lambda *a, **k: 999), \
+                mock.patch("red.tlaloc_ops.destroy_tlaloc_red",
+                           side_effect=lambda *a, **k: self.calls.append("red destroy") or
+                           {"ok": True}), \
                 mock.patch.object(procs, "run", side_effect=self._fake_run), \
                 mock.patch.object(ao, "collect",
                                   side_effect=lambda *a, **k: self.calls.append("collect") or {}), \
@@ -577,9 +575,9 @@ class Finalize(TmpCase):
             failure = event_run.run_event_and_finish(self.args, {"ENGINE_IP": "x"}, 0.0)
         self.assertIsNone(failure)
         self.assertEqual(self.calls[-1], "finalize")
-        self.assertIn("badauto destroy", self.calls)
+        self.assertIn("red destroy", self.calls)
         self.assertNotIn("destroy-competition", self.calls)  # --keep-range kept the range
-        self.assertLess(self.calls.index("badauto destroy"), self.calls.index("finalize"))
+        self.assertLess(self.calls.index("red destroy"), self.calls.index("finalize"))
 
     def test_finalize_failure_only_warns(self):
         warnings = []

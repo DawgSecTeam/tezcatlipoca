@@ -54,22 +54,15 @@ class RedLlmHeadroom(unittest.TestCase):
         from scrim import red_stage
         llm = red_stage.red_llm_config(
             _args(None, llm_base_url="http://100.64.0.47:8000/v1", red_model="qwen3.8-flash-next"))
-        self.assertEqual(llm["timeout"], 300)
-        self.assertEqual(llm["max_tokens"], 6144)
-        self.assertEqual(llm["json_retries"], 0)
+        self.assertEqual(llm["timeout_sec"], 300)
         self.assertEqual(llm["model"], "qwen3.8-flash-next")
-        # a live run: a 360 s decide budget turned endpoint latency into
-        # a 20-min red stall; the harness bounds the decision wait so the
-        # deterministic ladder (which presses) takes over.
-        self.assertEqual(llm["decide_budget_sec"], 180)
-        self.assertEqual(llm["first_decision_budget_sec"], 90)
+        self.assertTrue(llm["enabled"])
 
     def test_cloud_endpoint_keeps_the_tighter_pair(self):
         from scrim import red_stage
         llm = red_stage.red_llm_config(_args(None))  # openrouter URL in _args
-        self.assertEqual(llm["timeout"], 240)
-        self.assertEqual(llm["max_tokens"], 4096)
-        self.assertEqual(llm["json_retries"], 1)
+        self.assertEqual(llm["timeout_sec"], 240)
+        self.assertTrue(llm["enabled"])
 
 
 class Base(unittest.TestCase):

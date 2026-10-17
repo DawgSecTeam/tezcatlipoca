@@ -60,18 +60,10 @@ username = "sysadmin"
 # cycle_timeout = 1500
 # Interpreter for the harness's operator-side children (default: sys.executable).
 # python = ""
-# Red's routed segment when red01 runs in routed mode.
-# red_segment = "10.200.0.0/24"
-# red01's Proxmox template name when it differs from bad-auto's built-in default.
-# red_template = ""
 # Competition definitions live outside the engine (tezcatlipoca-competitions).
 # competitions_root = ""
 # Where test-run folders are archived outside the repo.
 # artifacts_archive = ""
-# Set by the run-queue dashboard, never by hand:
-# ops_url = ""
-# ops_token = ""
-# dashboard_data = ""
-# dashboard_host = ""
-# dashboard_port = 0
-# dashboard_tokens = ""
+# Gaia (the Mythic C2 installer) checkout on the engine host. The dashboard/portal
+# handoff variables (TEZ_DASHBOARD_*, TEZ_OPS_*) are internal, not config.
+# gaia_path = ""

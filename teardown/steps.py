@@ -14,13 +14,6 @@ REFUSE = "refuse"
 WARN_AND_PROCEED = "warn"
 
 
-# the truthful vmid: config.yaml is a shared checkout whose deploy.red_vmid another session's deploy can rewrite mid-flight; the target line is what the guards verified and what got deleted
-def _red_target_vmid(proc):
-    m = re.search(r"destroy target: .*\(vmid (\d+)\)", (proc.stdout or "") + "\n"
-                  + (proc.stderr or ""))
-    return int(m.group(1)) if m else None
-
-
 @dataclass
 class StepResult:
     name: str
@@ -151,58 +144,35 @@ def _log(msg):
 
 
 class RedStep(Step):
-    """red01 is bad-auto's VM; reaching the standalone teardown with it alive means the harness died."""
+    """Remove this run's red01: capture its verdict, stop the unit, destroy the VM."""
     name = "red01"
     destructive = True
     resumable = True
 
     def run(self, ctx):
-        from red import red_plant_ops, tlaloc_ops
+        from estate import config as estate_config
+        from red import red01_ops, tlaloc_ops
         if ctx.keep_red:
             return StepResult(self.name, "skipped", "--keep-red")
-        candidates = red_plant_ops.red_vmid_candidates(ctx.comp_dir, ctx.deployed_state)
-        if not candidates:
-            # No per-comp bad-auto config and no recorded vmid: `badauto destroy` would aim at the
-            # HOST's default config (red_vmid 999 — caught live: it destroyed another session's red01).
+        identity = red01_ops.recorded_identity(ctx.comp_dir)
+        vmid = identity.get("vmid")
+        if not vmid:
             return StepResult(self.name, "skipped",
-                              "no per-comp bad-auto config and no recorded red vmid — "
-                              "this run staged no red agent")
-        print("  red01      : badauto destroy (not estate-managed — this script cannot "
-              "remove it any other way)...")
-        if tlaloc_ops.red_engine(ctx.comp_dir) == "tlaloc":
-            r = tlaloc_ops.destroy_tlaloc_red(ctx.comp_dir, env=ctx.env)
-        else:
-            r = red_plant_ops.destroy_red(ctx.comp_dir, env=ctx.env)
-        tail = " ".join(((r.stderr or "") + (r.stdout or "")).split())[-200:]
-        self.last_vmid = _red_target_vmid(r) or (
-            red_plant_ops.red_vmid_candidates(ctx.comp_dir, ctx.deployed_state) or [None])[0]
-        if r.returncode == 0:
-            return StepResult(self.name, "ok", tail or "no output")
-        refusal = red_plant_ops.parse_teardown_refusal(r)
-        if refusal:
-            # bad-auto refuses without ITS marker, and a deploy that died before stamping leaves
-            # exactly that — a red01 no destroy will claim. Reclaim narrowly, then FAIL if still there.
-            from infra import red01
-            vmid = self.last_vmid
-            # comp_name arms reclaim's another-competition guard: a VM whose marker names a
-            # different competition is a recycled vmid, never ours.
-            if vmid and red01.reclaim_unstamped_red(vmid, comp_name=competition_name(ctx.comp_dir),
-                                                    log=_log):
-                return StepResult(self.name, "ok",
-                                  f"reclaimed unstamped red01 vmid {vmid} (badauto refused: "
-                                  f"{refusal.get('saw')})")
+                              "this run recorded no red01 — nothing was staged")
+        self.last_vmid = vmid
+        tlaloc_ops.destroy_tlaloc_red(
+            ctx.comp_dir, ownership=ctx.ownership,
+            engine_ip=ctx.deployed_state.get("engine_mgmt_ip") or "",
+            engine_user=estate_config.active().engine.username,
+            ssh_key=str(estate_config.ssh_key_path()), env=ctx.env)
+        from infra import red01
+        if red01.vm_at(vmid) is not None:
             return StepResult(self.name, "failed",
-                              f"badauto destroy REFUSED (rc {r.returncode}) — saw: "
-                              f"{refusal.get('saw')}; expected: {refusal.get('expected')}; "
-                              f"remedy: {refusal.get('remedy')} — a red box with the LLM key "
-                              f"is still up")
-        return StepResult(self.name, "warned",
-                          f"red01 destroy exited {r.returncode} ({tail}) — check for a "
-                          f"surviving red VM by hand (it holds the LLM key)")
+                              f"red01 vmid {vmid} is STILL PRESENT after destroy — "
+                              f"the estate is not clean")
+        return StepResult(self.name, "ok", f"destroyed red01 vmid {vmid}")
 
     def journal_detail(self, result):
-        # status lets verify_clean tell "red01 destroyed" from "skipped — no red staged":
-        # only the former demands an absence proof.
         return {"detail": result.detail, "vmid": getattr(self, "last_vmid", None),
                 "status": result.status}
 

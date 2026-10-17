@@ -4,8 +4,11 @@
 
 ```bash
 cd tlaloc                            # from the tezcatlipoca checkout root
-python3 -m pytest tests/ -q          # the ONLY runner
-python3 -m pytest tests/ -q -m "not net"     # what CI runs
+python3 -m pytest tests -q           # the ONLY runner
+python3 -m pytest tests -q -m "not net"     # what CI runs
+
+# from the repo root, the same suite:
+python3 -m pytest tlaloc/tests -q
 ```
 
 `unittest discover` is NOT a runner here. It silently skips pytest-only files
@@ -69,7 +72,8 @@ The suite proves the agent's logic. It cannot prove the club's live
 infrastructure, and this repo does not pretend otherwise:
 
 - a live Mythic (install via Gaia, comp-prep payload freeze, DNAT);
-- a real scrim through the engine (phases 3-6 exit gates in the migration plan);
+- a real scrim through the engine (deploy including the seed → run →
+  report/verdict → destroy);
 - the restore table's recipes against real boxes.
 
 `python3 -m tlaloc --dry-run run --cycles 1` is the closest local end-to-end:

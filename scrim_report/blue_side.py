@@ -39,7 +39,7 @@ def down_windows(snaps):
 def blue_metrics(run_dir):
     m = {"cycles_rc0": 0, "cycles_total": 0, "manual_rc0": 0, "timeouts": 0, "injects": 0,
          "notebook_entries": 0, "eradication": 0, "evictions_logged": 0}
-    # Artifact names are drawn per family now (badauto/artifactnames.py), so
+    # Artifact names are drawn per family now (tlaloc/effects/artifactnames.py), so
     # attribution is behavioural: keys, drop-ins, cron dir, immutability, SUID,
     # Windows task/service/WMI machinery — not red's old literals.
     erad_re = re.compile(

@@ -32,10 +32,10 @@ def _record_placement_identities(ctx):
 # Write every identity this run will create into the placement, before preflight reads it.
     from estate import config
     from multinode.placement_record import record_placement_identities
-    from red import badauto_config_ops
+    from red import red01_ops
     record_placement_identities(
         ctx.comp_dir, ctx.placement, ctx.engine_mgmt_ip, config.active().engine.mgmt_gw,
-        red01=badauto_config_ops.red01_identity(
+        red01=red01_ops.identity(
             ctx.comp_dir, ctx.engine_vmid, config.active().proxmox.node,
             placement=ctx.placement))
 

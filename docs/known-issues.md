@@ -23,19 +23,6 @@ somewhere a later full teardown can find without a deploy.
 
 `tools/build-{pfsense,vyos}-provision-template.py` alias `192.168.1.2` on the node's bridge and `ssh -W` through `root@<node>` to drive the scratch VM's bootstrap LAN (`192.168.1.0/24`); their ISO fetch (`download-url`) and template rename (`PUT .../config`) are API-only, leaving this hop and template sync ([multi-node.md](multi-node.md#template-copies)) as the repo's only node-shell uses. The pfSense agent retrofit cannot simply switch to the agent channel instead: installing that agent is what the hop is for. **Next action**: on a host whose shell is closed, either alias `192.168.1.2` on the *operator's* NIC where the operator shares the scratch VM's bridge L2, or console-type an operator-routable bootstrap address (`/monitor sendkey`, which these tools already drive the console with).
 
-### The deploy-time seed reports "every box is owned" for a partial seed
-
-`red/red_plant_ops.plant_assume_breach` (deploy phase 7) gates on bad-auto's exit code, so a wholly
-failed seed is now correctly recorded as a degradation and returns `ok: False` — that half is
-fixed. What remains is the *partial* case: `_seed_red` reaching one box of six still exits 0 and
-the deploy prints `seeded (depth N) — every box is owned before T0`, which is false for the five it
-missed (caught live on a scrim run). The scrim's own pre-T0
-gate is stricter and refuses a partial seed; the deploy path is warn-and-continue by design, so it
-should still say what it actually achieved.
-**Next action**: reuse `scrim/red_stage.seed_verdict` on the report `_seed_red` already captures
-and print the real numbers ("seeded N of M box(es)"), recording the unseeded boxes as degradations
-— the helper exists, so this is wiring, not new logic.
-
 ### A per-run workspace keeps disappearing, and no code in this repo deletes it
 
 The original entry claimed the dashboard removes each run's workspace when the run ends, including

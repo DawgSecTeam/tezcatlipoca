@@ -97,7 +97,7 @@ class SlotBandsAreDisjoint(unittest.TestCase):
         from multinode.nodes_config import JUMP_VMID_OFFSET, MAX_SATELLITES
         from multinode.placement_record import (engine_template_vmid, golden_slot_span,
                                                 reserved_vmids)
-        from red.badauto_config_ops import default_red_vmid
+        from red.red01_ops import default_red_vmid
         for engine in self.ENGINES:
             for slots in range(MAX_SATELLITES + 1):
                 placement = {

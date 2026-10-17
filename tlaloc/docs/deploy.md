@@ -2,26 +2,17 @@
 
 Who owns what (design principle 3):
 
-- **tezcatlipoca** owns the range: cloning red01, the red segment, the engine
-  DNAT (with its 30s re-assert timer), the Mythic VM, destroy, and the coverage
-  proof behind `red-verdict`.
+- **tezcatlipoca** owns the range: cloning red01, the red segment, the engine's
+  red rules and C2 DNAT (with their 30s re-assert timer), the Mythic install,
+  destroy, and the teardown that captures red's verdict.
 - **tlaloc** owns decisions and effects: what to do, to which box, with what
   mechanism, and the restore knowledge for everything it changed.
 
-## Selecting the engine
+## Compfile red block
 
-A competition's Compfile picks the red engine:
-
-```
-red.engine tlaloc        # this competition deploys tlaloc v2
-red.assume_breach full   # seed depth profile (v1 knob, still honoured)
-```
-
-`red.engine` defaults to **badauto** (v1): every existing Compfile keeps running
-exactly what it ran before, which is the migration plan's phase-0 rule (v1 stays
-the production red until v2 passes a scrim).
-
-## The Compfile red block
+Every competition stages tlaloc in phase 7: there is no `red.engine` knob and no
+fallback engine. The Compfile's `red.*` block is the competition's ROE and the
+only red input the deploy reads:
 
 ```
 red.assume_breach full      # full | light | off
@@ -31,14 +22,19 @@ red.caps.max_down 4
 red.caps.min_standing 1
 red.windows.endgame_teardown 15
 red.windows.lockout 3
+red.budget.extra_pressure_max 2
 red.clef_url http://203.0.113.30:8080
 red.c2_url https://10.0.0.210
+red.c2_callback_port 4470   # else the Compfile's `firewall_dnat` supplies it
+red.c2_ip 10.0.0.210        # optional: the C2 box; default is red01
+red.c2 off                  # opt out of Mythic/C2 (instead of the red.c2* values)
+red.disk_gb 60
+red01_vmid <vmid>           # else derived one golden stride past the golden band
+red01_ip 10.0.0.245         # else picked from the red band at deploy time
 red_yaml red.yaml           # a nested block (ladder/tiers) as YAML, if you prefer
 ```
 
-Legacy v1 knobs keep working: `assume_breach 0|1|≥2` maps to `off|light|full`, and
-`assume_breach_depth N` maps to `red.depth`. `red_yaml` is merged first and dotted
-`red.*` keys win over it.
+`red_yaml` is merged first and dotted `red.*` keys win over it.
 
 `red/tlaloc_ops.validate_red_block()` checks the block at deploy time and the
 deploy REFUSES to plant red when it is invalid (unknown mechanism in a ladder
@@ -47,41 +43,56 @@ malformed ROE must fail before T0, not mid-event.
 
 ## The phase-7 sequence
 
-`deploy_lib/phases/final.py` runs this before the `tz-ready` snapshot, so the
-restore point every box carries is already compromised:
+`deploy_lib/phases/final.py` calls `red/tlaloc_ops.plant_assume_breach()` before
+the `tz-ready` snapshot, so the restore point every box carries is already
+compromised:
 
-1. **render** `competitions/<id>/.tlaloc-config.yaml` (the file red01 will read),
-2. **provision red01 + the engine DNAT** through the existing v1 path
-   (`red_plant_ops._deploy_red`), including its per-competition identity
-   reservation so a validation deploy can never recycle another session's red01,
-3. **comp-prep** (`tlaloc c2-prep`): build the payload matrix against the
+1. **render** `competitions/<id>/.tlaloc-config.yaml` from the Compfile red block
+   (the file red01 will read),
+2. **provision red01** (`red/red01_ops.py`): clone from `base-ubuntu24.04-fix` on
+   this run's reserved vmid, attach the management NIC and the run's private
+   red-bridge NIC, pin the interfaces with netplan (cloud-init networking is
+   disabled on the box), grow the disk to `red.disk_gb` (default 60G), and stamp
+   the run's ownership tags. An occupied vmid is a refusal naming the owner, never
+   a silent reuse,
+3. **install Mythic** with Gaia unless `red.c2 off` (on red01, or on `red.c2_ip`)
+   and merge the agent's `c2.*` block into the rendered config; a competition
+   with no callback port fails here,
+4. **install the engine's red rules** (`range-red-firewall.service` + `.timer`,
+   re-asserted every 30s): the routed FORWARD trio, the per-team-gateway C2 DNAT
+   to `10.200.0.10:<port>`, and the nat ACCEPT that exempts the C2 flow from team
+   SNAT. The FORWARD trio is installed even with `red.c2 off` (red01 must reach
+   the teams); only the DNAT is skipped, because there is no callback port,
+5. **freeze payloads** (`tlaloc c2-prep`): build the payload matrix against the
    competition's Mythic operation and freeze it into
    `competitions/<id>/red/payloads/` with a `uuid → box` manifest. Builds never
    run mid-event,
-4. **stage red01**: push the tlaloc package to `/opt/tlaloc` (staged, never
-   pip-installed — the systemd unit is what puts it on the import path), push the
+6. **stage red01**: push the tlaloc package to `/opt/tlaloc` (staged, never
+   pip-installed — the systemd unit is what puts it on the import path) and the
    competition's nakon intel to `/var/lib/tlaloc/intel`,
-5. **push the config** to `/etc/tlaloc/config.yaml` (0600) and **verify the
-   contract**: the pushed file is fetched back and diffed against
-   `tlaloc verify-config --print-contract` — a field the push omits is a feature
-   that is dead on the VM while every local test stays green (the v1 lesson),
-6. **install `tlaloc.service`** (enabled, not started — the seed runs explicitly),
-7. **seed** (`tlaloc seed`): access → escalation → C2 channel → persistence +
-   one evasion touch per box, at the depth the config declares, writing
-   `world.meta["seed"]` and `competitions/<id>/red/manifest.json`,
-8. `clean_trails` + snapshot as before.
+7. **push the config** to `/etc/tlaloc/config.yaml` (0600), push the C2/LLM env
+   files (0600) if the Mythic step or the LLM key produced one, and **verify the
+   per-field contract**: the pushed file is fetched back and diffed against
+   `tlaloc verify-config --print-contract` — a field the deploy meant to set but
+   the push dropped is a feature that is dead on the VM while every local test
+   stays green,
+8. **install `tlaloc.service`** (enabled, not started — the seed runs explicitly),
+9. **seed** (`tlaloc seed --comp /var/lib/tlaloc/intel`): access → escalation →
+   C2 channel → persistence + one evasion touch per box, at the depth the config
+   declares, writing `world.meta["seed"]` and the seed manifest,
+10. **pull the seed manifest** to `competitions/<id>/red/manifest.json`.
 
-Everything degrades: a red problem records a degradation and continues (a plant
-problem must not abort a healthy range). `verify-competition` and the red report
-catch it before T0.
+Every failure here aborts the deploy: a range with no red team is not a range.
 
 ## red01 layout
 
 ```
 /opt/tlaloc/            the staged package (+ systemd/ + config.example.yaml)
 /etc/tlaloc/config.yaml 0600, pushed by the deploy
-/etc/tlaloc/env         optional KEY=VALUE secrets (TLALOC_MYTHIC_PASSWORD, TLALOC_LLM_API_KEY)
+/etc/tlaloc/env         optional 0600 KEY=VALUE (TLALOC_LLM_API_KEY)
+/etc/tlaloc/c2.env      0600 Mythic password for the agent (TLALOC_MYTHIC_PASSWORD)
 /var/lib/tlaloc/        state + audit + reports (per competition: fresh dir)
+  intel/                the pushed nakon facts (`seed --comp` reads this)
   world.json            belief state (0600, schema+comp stamped)
   events.jsonl          the audit log: every decision with its bundle
   KILL                  the kill switch (create it to stop red mid-cycle)
@@ -107,32 +118,30 @@ python3 -m tlaloc --config /etc/tlaloc/config.yaml verify-config --pushed /etc/t
 
 ## Verdict and teardown
 
-- **Evidence first.** Before anything is destroyed, tlaloc's
-  `restore-table.json`, `report.md`, `report-secrets.md` (0600) and `world.json`
-  are pulled into `evidence/red/`. `tlaloc_ops.write_verdict()` derives
-  `evidence/red/verdict.json`: the red-side facts (planted, taken down, undo
-  recipes) that the dashboard and the after-action read.
+- **Evidence first.** Teardown runs `tlaloc report` on red01, then pulls
+  `/var/lib/tlaloc/` into `competitions/<id>/red/`: `report.md`,
+  `report-secrets.md` (0600), `restore-table.json`, `world.json`, `events.jsonl`
+  and the seed `manifest.json`. `tlaloc_ops.write_verdict()` derives
+  `red/verdict.json`: the red-side facts (planted, taken down, undo recipes) that
+  the dashboard and the after-action read.
 - **Coverage** (per scored pin, DOWN→UP proof) is the ENGINE's job: it reads the
   scoreboard, never the agent's own report. tlaloc's verdict deliberately does
   not claim coverage.
 - **Teardown**: `tlaloc_ops.destroy_tlaloc_red()` stops `tlaloc.service` on
-  red01 (ending the event clock and flushing the audit log) and then runs the
-  VM/NAT teardown that owns red01. red01 is not estate-managed: skipping this
-  step leaves the VM, its config, its key and its DNAT rules standing.
+  red01 (ending the event clock and flushing the audit log), removes the engine's
+  red rules, and destroys the VM through the run's ownership tags. A vmid that is
+  not this run's is refused, not deleted; skipping this step leaves the VM, its
+  config, its key and its DNAT rules standing.
 
-## First tlaloc scrim (cutover gate)
+## Scrim checks
 
-Run one scrim with `red.engine tlaloc` on a copy of a working competition, v1
-standing by. What to grade (migration plan phase 6):
+One scrim on a copy of a working competition proves the live path. Grade:
 
-- pressure + adaptivity at or above the v1 baseline (the decision log's `source`
-  mix and the impact ledger are the numbers; `restore-table.json`'s summary has
-  them),
+- pressure + adaptivity (the decision log's `source` mix and the impact ledger are
+  the numbers; `restore-table.json`'s summary has them),
 - zero guardrail incidents (`guardrail_halt` absent from `events.jsonl`),
 - verdict + restore table complete: every impact row has a restore row,
 - the re-plant loop actually fired (dead artifacts observed, `replant` candidates
-  in the log).
-
-Then, and only then: flip the default engine, archive v1's repo and its vendored
-C trees out of the tree, update the in-repo docs, and register the cutover in the
-infra-registry.
+  in the log),
+- the C2 DNAT survives a Docker restart on the engine (the 30s timer re-asserts
+  it).

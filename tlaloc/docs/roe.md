@@ -23,8 +23,6 @@ red.caps.max_down 4
 red_yaml red.yaml          # optional: ladder/windows/budget as YAML
 ```
 
-Legacy v1 knobs are mapped (`assume_breach 0|1|≥2` → `off|light|full`,
-`assume_breach_depth N` → `red.depth`) so existing competitions keep working.
 `validate_config()` runs at load and at every Compfile merge: a bad ROE is a
 deploy-time error, never a runtime surprise.
 

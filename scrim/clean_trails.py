@@ -67,7 +67,7 @@ for h in /root/.bash_history /home/*/.bash_history /root/.python_history \
 done
 # staging leftovers from the deploy/seed — expanded and filtered, never a blind
 # rm: a decoy planted under /tmp must survive its own wipe
-for g in /tmp/.ba-* /tmp/ba /tmp/bad-auto* /tmp/nakon* /tmp/.imix* /tmp/.badauto* \
+for g in /tmp/.ba-* /tmp/ba /tmp/tlaloc* /tmp/nakon* \
          /tmp/tezcatlipoca* /tmp/*.tar.gz; do
   for p in $g; do
     if [ -e "$p" ] && ! in_skip "$p"; then rm -rf "$p" 2>/dev/null; fi
@@ -105,11 +105,11 @@ if ($env:SCRIM_CLEAR_WIN_EVENTLOGS -eq '1') {
 "TRAILS_WIN_OK"
 """
 
-# Absolute-path tokens inside an artifact's detail (realm beacons record the
-# binary path in `imix[transport] <bin> -> <dsn>`, not under `paths`).
+# Absolute-path tokens inside an artifact's detail (a planted binary's path is
+# recorded in the detail, not under `paths`).
 _ABS_PATH_RE = re.compile(r"(?<![\w.-])(/[A-Za-z0-9_@%+=:.~^-][A-Za-z0-9_@%+=:.~^/-]*)")
 _CHECK_CMD_MAX = 300          # shell length we are willing to relay to a box
-RED01_WORLD = "/var/lib/bad-auto/world.json"
+RED01_WORLD = "/var/lib/tlaloc/world.json"
 
 
 def creds_for_deploy(ctx):
@@ -145,7 +145,7 @@ def box_targets(comp, creds):
 # re-runs. Best-effort: any failure logs and returns empty.
 def red01_world_artifacts(comp, creds):
     state = estate_state.load_flat(comp)
-    red_ip = (state.get("assume_breach") or {}).get("red_ip")
+    red_ip = (state.get("red") or {}).get("red_ip")
     key = creds.get("KEY_PATH")
     if not red_ip or not key:
         log("trail wipe: no red01 record (deploy state / key missing) — wipe runs "

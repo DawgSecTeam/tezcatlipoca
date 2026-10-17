@@ -28,7 +28,7 @@ Single source for vmid math, snapshot names, nakon budgets, naming.
 ## common/utils.py, ssh_ops.py
 
 - `DNS_FIX_CMD`: cloud-init ignores `dns.servers` on static IPs, so DNS is repaired live (`/etc/resolv.conf`, `.head`, a `resolved.conf.d/upstream.conf` drop-in, restart `systemd-resolved`; 8.8.8.8). `DNS_FIX_CMD_ROOT` is the same without `sudo`, for the guest-agent path (needs neither sudoers nor network).
-- `load_compfile()`: key=value; non-numeric `difficulty` → 0. `compfile_flag()`: integer knobs (`team_beacons 1`), default when absent.
+- `load_compfile()`: key=value; non-numeric `difficulty` → 0. `compfile_flag()`: integer knobs (`nakon_jobs 4`), default when absent.
 - `engine/round_loop.py` is the one definition of "round loop stopped" (`round_loop_state`/`is_stale`), used by verify.
 - `run_concurrent(items, fn, max_workers=8)`: returns an index-aligned list of values or exceptions (never raises). Aggregation: `wait_for_boxes_ssh`/`fix_dns_on_boxes` abort only if **all** boxes fail; `prep_apt_on_boxes`/`fix_services_on_boxes` warn per box; `setup_ubuntu_auth` raises if any box ends without auth (after trying all). Cap 8 is under the engine's sshd `MaxSessions` 64. `fix_services_on_boxes` builds scripts serially and executes in parallel.
 - `quote_sshkeys()` (URL-encodes the key for Proxmox's `sshkeys`) is defined once in `ssh_ops`.
@@ -212,7 +212,7 @@ A box with `"unmanaged": true, "in_path": true` is the team gateway (`utils.is_i
 - **Phase 4**: after the golden set and the team-box clone pass: Windows bootstrap for all teams, concurrent waits, `setup_ubuntu_auth`, DNS fix, apt prep, `tz-base`. Clones boot with working DNS/apt because the golden disk carries no disruptive configs.
 - **Phase 5**: print-and-return without an `in_path` box (keeps phase indexes stable). Order is load-bearing: the engine owns bridge addressing while configs are pushed, and phases 6–7 mustn't run before cutover. Records `state["firewalls_bootstrapped"]`; resume re-pushes (unchanged config isn't reapplied). Firewall `tz-base` is taken after cutover.
 - **Phase 6**: `.nakon-predomain.json`, lenient (`strict=False`: one flaky plant mustn't kill a sweep that's 98% landed), `--jobs N`, gated by `.postclone-swept`. `fix_services_on_boxes` runs after it (the ssh-\* configs restart sshd and can trip start-limit).
-- **Phase 7**: domains run concurrently per team; then the final pass; team beacons (`team_beacons 1`) are planted before `tz-ready` so restore points carry them. **Assume-breach** (`assume_breach 1`, `red/red_plant_ops.py`) deploys bad-auto's red01 and the realm engine DNAT and runs the day-0 seed (access, prebaked Realm C2 beacons, persistence/evasion), also before the snapshot, so boxes are compromised at T0. With `realm_c2_local 1` (default) the C2 lives on red01: `red/badauto_config_ops.py`/`red/realm_c2_ops.py` write the comp's bad-auto config before the deploy (reserved red01 vmid/IP + realm layer; the engine DNAT bakes in `realm.c2_ip`), then build tavern from source on red01 with every transport (`grpc` + http1/dns/quic/icmp redirectors) and the MCP server (`ENABLE_AI_MCP=1`, `/mcp`), relaying prebuilt imix implants from `realm_c2_implant_host` (`realm_c2_repo`, `realm_c2_go_version` override the upstream URL/toolchain). Provisioning failure degrades rather than aborts; `realm_c2_local 0` keeps the C2 on VM101. Red01's identity goes to `state["assume_breach"]`; teardown runs `badauto destroy` for it (run tags never covered it) under the same refusal contract (`TEARDOWN-REFUSAL {saw,expected,remedy}`, exit 17), and bad-auto pulls red's evidence before its VM delete. `nakon_failed_steps` is merged across passes (deduped, capped at 40).
+- **Phase 7**: domains run concurrently per team; then the final pass; then **red** (`red/tlaloc_ops.plant_assume_breach`) — red01, the C2, the payload freeze and the day-0 seed — before `tz-ready`, so the restore points carry a compromised range. Every red step raises; a range with no working red team is a failed deploy. The account-file mode pass runs last — after phase 6's credlist `useradd` and after the red seed — then the trail wipe, then the snapshot. A Compfile that still sets `team_beacons` is a hard error (v1 feature). `nakon_failed_steps` is merged across passes (deduped, capped at 40).
 - **Phase 8**: Quotient is polled (`/api/login`). Sub-steps are flag-gated because `unpause_engine` isn't idempotent; in the crash window between POST and flag-save it asks the engine first (`engine_paused`) and re-POSTs only if still paused.
 - **Failure handler**: names the resume phase. An "already exists" error at phase ≥2 means something a prior attempt created still occupies a slot: a leftover range is a preflight refusal now, so reclaim it with `destroy-competition.py` and deploy fresh (a `--from-phase 1` re-run refuses the same leftovers), or resume the run that owns it.
 - `credentials.txt` (0600) is the authoritative record of generated secrets (incl. `box-login`, `box-credlist-*`). `--plan-only` exists because nothing otherwise confirms between the box picker and a real deploy. `--competition` skips straight to `deploy()` but boxes are still interactive.
@@ -223,7 +223,7 @@ The import surface for the hyphenated entry points. Explicit `__all__`, each nam
 
 ## Teardown (`teardown/`)
 
-One engine: `infra.ownership.Ownership` (destruction identity), `Refusal` (saw/expected/remedy, with the `TEARDOWN-REFUSAL` line bad-auto also speaks), `Inventory` (classified estate view, fail-closed on listing errors), steps with declared failure policies (`REFUSE` aborts; `WARN_AND_PROCEED` records), `TeardownPlan` (evidence-before-destruction validated at construction), `TeardownEngine` (gates → completion journal → steps → `verify_clean`, the only exit-0 path). Mechanics are in `teardown/machinery.py` (pre-stop, the run-id-scoped leftover sweep, the vmid-math template fallback, gates); the recorded estate itself is destroyed by `estate/destroy.py`. `destroy-competition.py` and the scrim harness (via `teardown/runner.run_terminal_teardown`) are shims, and the terminal plan is the only kind: deploy phase 1 composes no plan at all (a deploy destroys nothing a run owns) and uses `ownership_verdict` directly for its interrupted-clone reclaim. Tests patch `teardown.machinery`, `artifacts_ops`/`red_plant_ops`, `infra.ownership`, `teardown.runner`.
+One engine: `infra.ownership.Ownership` (destruction identity), `Refusal` (saw/expected/remedy, printed as a `TEARDOWN-REFUSAL` JSON line), `Inventory` (classified estate view, fail-closed on listing errors), steps with declared failure policies (`REFUSE` aborts; `WARN_AND_PROCEED` records), `TeardownPlan` (evidence-before-destruction validated at construction), `TeardownEngine` (gates → completion journal → steps → `verify_clean`, the only exit-0 path). Mechanics are in `teardown/machinery.py` (pre-stop, the run-id-scoped leftover sweep, the vmid-math template fallback, gates); the recorded estate itself is destroyed by `estate/destroy.py`. `destroy-competition.py` and the scrim harness (via `teardown/runner.run_terminal_teardown`) are shims, and the terminal plan is the only kind: deploy phase 1 composes no plan at all (a deploy destroys nothing a run owns) and uses `ownership_verdict` directly for its interrupted-clone reclaim. Tests patch `teardown.machinery`, `artifacts_ops`, `red01_ops`/`tlaloc_ops`, `infra.ownership`, `teardown.runner`.
 
 Exit 0 = `verify_clean`: plan completed, nothing of ours running or tagged (teams-only reports kept templates as kept-by-design), red01 gone, evidence archived, no node unlistable. Order: portal → engine capture → evidence → red01 → pre-stop → estate (the recorded inventory, in `estate/destroy.py`'s `TIERS` order) → remote access. `EngineCaptureStep` records the engine's final scoreboard into `<comp_dir>/evidence/` when the harness never captured one (that directory becomes the collector's engine source); the scoring DB does not survive `EstateStep`, and a harness capture already present is never overwritten. A lost evidence item is a `verify_clean` NOTE, never a problem: exit 0 still means "the estate is clean", but a lossy teardown says so where the operator reads it. The template step is `full`-gated: `destroy-competition.py --teams-only` and the harness's `run-agent-scrim.py --keep-templates` both reach it with `full=False` (the harness keeps `keep_templates` in the run manifest, OR-semantics, so a resume cannot drop the intent the first run had).
 
@@ -305,22 +305,114 @@ Local-files → Markdown. The packet is the same for every team (real credential
 
 ## red/ and tlaloc/
 
-Two red engines, one provisioning path. `red_plant_ops` owns the range-side pieces both share —
-red01's clone and per-competition identity reservation, the engine DNAT — and `Compfile
-red.engine` chooses which agent runs: `badauto` (v1, the default, unchanged for every existing
-Compfile) or `tlaloc` (v2).
+One red engine, owned by this tree. There is no sibling checkout and no `red.engine` switch: tlaloc
+v2 is the only engine, and the range side of red is a component like the engine and the team boxes.
+Three modules: `red/red01_ops.py` owns red01 and its engine-side rules, `red/tlaloc_ops.py` is
+deploy phase 7, `red/gaia_ops.py` installs Mythic. The agent itself lives IN this tree at `tlaloc/`
+(package, tests, docs, systemd unit); its own map is `tlaloc/README.md` and `tlaloc/AGENTS.md`, and
+the deploy contract is `tlaloc/docs/deploy.md`.
 
-- **badauto**: `.badauto-config.yaml` in the competition dir, the `bad-auto` checkout beside this
-  tree, `badauto deploy`/`seed`/`destroy`, Realm C2.
-- **tlaloc v2**: the agent lives IN this tree at `tlaloc/` (package, tests, docs, systemd unit).
-  `red/tlaloc_ops.py` parses the competition's `red.*` block, renders `.tlaloc-config.yaml` (the
-  file red01 reads), freezes the C2 payload matrix, stages `tlaloc/` onto red01 at `/opt/tlaloc`,
-  pushes the config and verifies the per-field contract against `tlaloc verify-config
-  --print-contract`, installs `tlaloc.service` and runs the day-0 seed. Staging, not installation,
-  is deliberate: red01 has no pip, and the unit is what puts the package on the import path.
-  `scrim/red_stage.py` takes the same path for a scrim.
-- The agent's own map is `tlaloc/README.md` and `tlaloc/AGENTS.md`; the deploy contract (which
-  side owns what) is `tlaloc/docs/deploy.md`.
+**`red01_ops.py` — the VM, its network, the engine rules, teardown**
+
+- **Identity is reserved per competition.** vmid: Compfile `red01_vmid`, else the placement's
+  recorded `red01.vmid`, else one golden stride past this placement's last golden band
+  (`engine_vmid + 150 + (satellites + 1) * 10`). IP: Compfile `red01_ip`, else the placement's
+  recorded address, else selected immediately before the clone from `10.0.0.240-10.0.0.249`
+  (`infra/collisions.select_red_ip`: the lowest address no running guest answers and the placement
+  does not already claim; the legacy `.196`-`.199` values are excluded). The selection is recorded
+  for the run — written back into the placement, or into the deploy's `red` summary on single-node.
+  `infra/red01.py` preflight-gates the slot: an occupied vmid is a refusal
+  naming the owner (another run of this competition vs. a foreign VM), unreadable tags are refused
+  too, and an address a running guest answers is refused.
+- **The VM** is a linked clone (`full=0`) of the fixed `base-ubuntu24.04-fix` template (a
+  qemu-guest-agent + cloud-init Ubuntu; there is no per-comp template knob), named `tlaloc-red01`.
+  The clone POST carries the competition's clone marker, then the config PUT lands the run's full
+  tag set, `onboot`, the guest agent, cloud-init user (`sysadmin`) + the deploy's public key,
+  `net0` on the placement's management bridge and `net1` on `red_bridge_name(run_id)`
+  (`vmbrR<hex>`, this run's private red-segment bridge). A resume adopts a VM already carrying this
+  run's tags and reconfigures it; a VM in the slot without them is a refusal, never a reconfigure or
+  destroy.
+- **Network is pinned by netplan, not cloud-init.** `/etc/netplan/51-tlaloc.yaml` (0600) sets the
+  management address/gateway on the first NIC and `RED_SEGMENT_IP` (`10.200.0.10/24`) on the second,
+  with `192.168.0.0/16 via RED_SEGMENT_GW` (`10.200.0.1`);
+  `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg` disables cloud-init networking — a
+  kernel-upgrade reboot re-applied cloud-init and came back with no IPv4 at all.
+- **Engine rules** (`install_engine_rules`; installed even when `red.c2 off`, because the segment
+  rules are not optional): `/usr/local/sbin/range-red-firewall.sh` plus
+  `range-red-firewall.service`/`.timer`, `After=docker.service`, re-asserted every 30 s. The unit is
+  separate from `range-firewall.*` because Docker wipes iptables on a container restart. The script
+  is a routed-segment FORWARD trio in load-bearing order (red→`192.168.0.0/16` ACCEPT, return
+  `RELATED,ESTABLISHED` ACCEPT, DROP toward red) and, when a callback port is known, a
+  per-team-gateway DNAT (TCP+UDP) to `10.200.0.10:<port>`, a FORWARD accept for it, and a nat
+  POSTROUTING ACCEPT that exempts the flow from the range's team SNAT (so blue does not see the
+  check-in sourced from the gateway). `remove_engine_rules` is best-effort teardown of the unit and
+  its FORWARD rules: the engine survives a teams-only teardown, so the red segment must not outlive
+  its red01.
+- **Teardown** destroys through `infra.ownership.destroy_vm_if_exists` with `expect_tags` = the
+  run's full tag set, so a recycled vmid or another run's red01 is refused rather than deleted. The
+  identity is read from the placement/state (`recorded_identity`), never re-derived at teardown.
+
+**`tlaloc_ops.py` — phase 7**
+
+- **The `red.*` block** comes from the Compfile (`red_yaml <file>` may point at a YAML body;
+  `red.*` dotted lines override it). `validate_red_block` checks `red.assume_breach full|light|off`
+  (default `full`), `red.depth 0..3` (default 3), `red.duration_min`, the `red.ladder` tiers
+  (`at_pct`/`at_min`, sorted by time, known takedown modes) and `red.caps.min_standing >= 1`.
+  `red.disk_gb`, `red.clef_url`, `red.c2_url`, `red.c2_callback_port`, `red.c2_ip`, `red.c2 off`,
+  `red01_vmid` and `red01_ip` are the engine/VM knobs; `red.windows` and `red.budget` travel to
+  tlaloc with the rest of its block.
+- **The config**: `.tlaloc-config.yaml` in the comp dir is rendered from the block and pushed to
+  `/etc/tlaloc/config.yaml` (0600). Only values the deploy knows are written, so the pushed file is
+  a diff against tlaloc's documented defaults; `verify_config_contract` fetches it back and diffs it
+  against `tlaloc verify-config --print-contract`, refusing when a field the deploy MEANT to set is
+  absent (that feature would run on defaults on the VM while every local test stays green).
+- **Order, every step fatal** (a range with no working red team is a failed deploy):
+  render config → provision red01 (`red01_ops.deploy`, then `record_identity` into the placement) →
+  grow the disk to `red.disk_gb` (default 60G; Mythic's images filled a 9.8G disk, Docker never
+  started and the channel had nowhere to call home) → unless `red.c2 off`: install Mythic via Gaia
+  and freeze the payloads (`tlaloc c2-prep`) → install the engine's red rules (the DNAT only when
+  the C2 supplied a callback port) → stage the agent to `/opt/tlaloc` (package, unit,
+  `config.example.yaml`, plus the comp's intel files) → push the config and prove the contract →
+  install and enable `tlaloc.service` → run the day-0 seed on the box (`python3 -m tlaloc --config …
+  --comp /var/lib/tlaloc/intel seed`) → pull the seed manifest to `<comp>/red/manifest.json`. A
+  scrim-supplied LLM key rides a 0600 `/etc/tlaloc/env`. Staging, not installation, is deliberate:
+  red01 has no pip, and the unit is what puts the package on the import path. `scrim/red_stage.py`
+  calls the same `plant_assume_breach`, so the harness and the deploy cannot drift.
+
+**`gaia_ops.py` — Mythic via Gaia**
+
+- The Gaia checkout is on the deploy host at `knobs.gaia_path` (empty → `~/gaia`); the step clones
+  it at `main` if missing, builds its venv from `requirements.txt`, and runs every `gaia.py`
+  command with the checkout as CWD (Gaia reads its `.env` relative to the working directory).
+  Commands: `install` (apt/deps/Mythic), `auth` (API key; the password goes in on stdin), `user
+  create` for the agent's own `tlaloc` account, `operation create` for the competition.
+- The admin password's authority is the C2 box's own `/opt/Mythic/.env`, not the handoff file an
+  installer re-run can leave stale; the handoff file is corrected when the box disagrees. `auth`
+  runs before `user`/`operation` because those speak through the API key it writes, and a
+  just-installed web UI that is up but not yet serving JSON gets retried before the step calls it
+  broken.
+- The agent's config gets `c2.*` with `password_env` (never the password); the password travels in
+  a 0600 root `/etc/tlaloc/c2.env` that `tlaloc.service` reads. `c2_plan` puts the C2 on red01
+  unless `red.c2_ip` names a box, makes the callback host the first team's gateway
+  (`192.168.<id>.1`, or `172.31.<id>.1` behind an in-path firewall) and the port
+  `red.c2_callback_port`, else the Compfile's `firewall_dnat` port. A competition with no derivable
+  callback port refuses before installing — the frozen payloads would dial nothing and the channel
+  could never check in. `red.c2 off` skips the Mythic install and the payload freeze; the engine's
+  segment rules are installed either way.
+
+**Verdict and evidence**
+
+- Before red01 is destroyed, `destroy_tlaloc_red` runs `tlaloc report` on the box, tars
+  `/var/lib/tlaloc` into `<comp>/red/` and fetches the seed manifest there — `report.md`,
+  `restore-table.json`, `report-secrets.md`, `world.json`, `events.jsonl`, `manifest.json` — then
+  writes `verdict.json` (engine, entry/command counts, restore-table summary, report path). Only
+  then does it stop the unit and destroy the VM.
+  A failed capture warns and teardown proceeds — the box still holds the record, but destroying it
+  gives up the last chance to pull it. `collect_evidence` copies the pulled files into an evidence
+  tree.
+- Artifact collection is the other copy: `artifacts_lib` sudo-stages those files into `/tmp/ba`
+  (the originals are 0600 root), pulls `journalctl -u tlaloc`, and collects them into the run's
+  evidence before the teardown's red step.
 
 ## estate/
 
@@ -346,14 +438,14 @@ already-created resource instead of re-planning; nothing runs a resource out of 
 
 **config.py** — the native config surface for the deploy's process settings (`tezcatlipoca.toml` and its `TEZ_*` env overrides).
 
-- A `Config` over `tezcatlipoca.toml` (`TEZ_CONFIG` overrides the path), resolved per key as override → env → file → default (env beats file because the dashboard injects per-run node tokens and the engine mgmt IP into the process environment). `_SPEC` is the one place the key set lives, as `key -> default`; `config.env_name(key)` is `TEZ_` + the key upper-cased with dots as underscores and the `knobs.` prefix dropped, and the default's type drives parsing. `config.require(key)` raises on an unset key; `Config.is_set` distinguishes unset from deliberately empty (an empty engine mgmt IP means DHCP, not "re-default me").
+- A `Config` over `tezcatlipoca.toml` (`TEZ_CONFIG` overrides the path), resolved per key as override → env → file → default (env beats file because the dashboard injects per-run node tokens and the engine mgmt IP into the process environment). `_SPEC` is the one place the key set lives, as `key -> default`, and it is the operator-facing set; names the code reads that are deliberately not operator config (the dashboard's `TEZ_PAUSE_FILE`/`TEZ_DASHBOARD_*` handoffs, the portal's `TEZ_OPS_*`) are allowlisted with a reason in `tests/test_secret_hygiene.py`'s `INTERNAL_ENV`, not declared here. `config.env_name(key)` is `TEZ_` + the key upper-cased with dots as underscores and the `knobs.` prefix dropped, and the default's type drives parsing. `config.require(key)` raises on an unset key; `Config.is_set` distinguishes unset from deliberately empty (an empty engine mgmt IP means DHCP, not "re-default me"). `knobs.gaia_path` names the Gaia checkout the Mythic step runs from (empty → `~/gaia`).
 - `Config.activate`/`deactivate` are in-process overrides, which is what lets multi-node placement point the process at one host (`multinode/nodes_config.apply_node_env`) without mutating `os.environ`.
 - `ssh_key_path()` resolves a relative private key against the checkout root.
 
 **apply.py** — the creators (the bridge/engine/team-box resources as API calls).
 
 - `create_bridge`: POST a Linux bridge with `bridge_ports=none` (isolated, no uplink), then a PUT that applies the staged network config — a VM cannot attach to a bridge that is only staged.
-- `create_engine`: linked-clone the engine template (`agent: 1`, cores/memory/disk from `ENGINE_*`), then PUT the NIC list in order — `vmbr0`, one per slot-0 team bridge, then the transit bridges — because the engine's netplan names `ens19+` positionally. Cloud-init identity (`ciuser`/`sshkeys`/`ipconfig0`) only when a static mgmt IP is set, since the template's netplan and baked key/sudo suffice otherwise. `ensure_disk_size`/`set_discard` follow, then start.
+- `create_engine`: linked-clone the engine template (`agent: 1`, cores/memory/disk from `ENGINE_*`), then PUT the NIC list in order — `vmbr0`, one per slot-0 team bridge, then the transit bridges, then the private red bridge LAST (so the netplan's `ens19+` numbering is unchanged) — because the engine's netplan names interfaces positionally. Cloud-init identity (`ciuser`/`sshkeys`/`ipconfig0`) only when a static mgmt IP is set, since the template's netplan and baked key/sudo suffice otherwise. `ensure_disk_size`/`set_discard` follow, then start.
 - `create_team_box(es)`: linked-clone the source vmid the phase passes (each box's golden, or its own base template when unmanaged); the in-path firewall's WAN NIC comes FIRST (pfSense keys its interfaces on `vtnet0`/`vtnet1`), then the team-bridge NIC. Cloud-init identity only for a managed, non-Windows box, with `nameserver 8.8.8.8` — never the team's own `dns*` box, whose bind9 is installed by nakon over apt and needs a resolver that already works. Clones are serial on purpose: one API writer per node is the shape this estate is proven at, and the datastore saturation to avoid is bulk clone writes.
 - `ensure_disk_size` grows the root disk only when `disk_gb` is set (a shrink destroys data); `_root_disk` finds the key by scanning `scsi*`/`virtio*`/`sata*`/`ide*` and skipping cdrom/cloud-init, so a SATA-booting Windows template resizes the same way. `set_discard` adds `discard=on` to the inherited clone disk.
 - Every create is idempotent through `_adopt`: a VM carrying this run's full tag set is adopted, one carrying only this competition's clone marker is an interrupted clone and is rebuilt, anything else is a `Refusal` naming the remedy. The clone POST writes the clone marker into `description` because `/clone` takes no tags and the tagging PUT only lands after the task finishes. `_configure` retries the brief post-clone 400 window (caught live: three deploys died on it). There is no per-VM readiness cap here: the phases' `wait_*` helpers own waiting.

@@ -8,7 +8,7 @@ re-exported all 74 names it imported for its own use, so a consumer could start 
 new symbol without anyone noticing, and the shim's surface could change silently under it.
 
 This module is the deliberate replacement. Every name here is a symbol a hyphenated
-script actually calls (17 of them, measured by grepping `driver.` out of
+script actually calls (16 of them, measured by grepping `driver.` out of
 redeploy-competition.py), imported from the module that owns it rather than through
 another re-export. Keep it exactly that: add a name only when a consumer needs it. An
 unused re-export here is invisible again by construction, which is the bug we removed.

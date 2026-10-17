@@ -54,8 +54,7 @@ class BlueGateThresholds(unittest.TestCase):
         self.assertEqual(gate_table.GATES["red"], [
             ("takedowns", 6, ">="), ("restore_reactions", 3, ">="),
             ("distinct_tactics", 4, ">="), ("windows_footholds", 1, ">="),
-            ("max_simultaneous_down", 4, ">="), ("stalls", 0, "=="),
-            ("evictions", 1, ">=")])
+            ("max_simultaneous_down", 4, ">="), ("stalls", 0, "==")])
 
 
 if __name__ == "__main__":

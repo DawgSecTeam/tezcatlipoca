@@ -4,8 +4,9 @@ RESTORE_TTR_GATE_MIN = 15
 GATES = {
     "red": [("takedowns", 6, ">="), ("restore_reactions", 3, ">="),
             ("distinct_tactics", 4, ">="), ("windows_footholds", 1, ">="),
-            ("max_simultaneous_down", 4, ">="), ("stalls", 0, "=="),
-            ("evictions", 1, ">=")],
+            ("max_simultaneous_down", 4, ">="), ("stalls", 0, "==")],
+    # evictions is deliberately NOT a gate: red's health checks only see SSH-class
+    # footholds, so zero is an observability gap, not a failed red.
     # cycles_rc0/timeouts tuned 6/0 -> 2/2  per docs/rehearsal-gates.md's
     # post-rehearsal protocol: a meaningful blue cycle costs 20-30 min at the club's
     # qwen3.8-27b endpoint and the two teams serialise on one shared LLM lock, so a

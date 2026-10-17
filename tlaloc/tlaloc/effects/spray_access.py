@@ -1,6 +1,6 @@
 """spray_access — try the credentials intel already knows, over SSH, until one lands.
 
-The v1 mechanic (`badauto/tactics/cred_spray.py`), restated on the v2 contract:
+The mechanic, restated on the v2 contract:
 
 * **candidates come from intel, never a hand-maintained table.** For each box
   `ctx.intel.candidate_pairs(ip)` gives the per-box ground truth first (the box

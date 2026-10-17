@@ -61,7 +61,7 @@ class RedIpResolution(unittest.TestCase):
             red_stage._resolve_red_ip(args, comp, None)
             self.assertEqual(args.red_ip, "10.0.0.240")
 
-    def test_the_tlaloc_restage_passes_the_placement_to_the_resolver(self):
+    def test_the_red_stage_passes_the_placement_to_the_resolver(self):
         """The v2 path called the resolver without its `placement` argument, so every
         tlaloc scrim crashed after red staging and before T0 (live 2026-10-17,
         run-b0395fba)."""
@@ -83,7 +83,7 @@ class RedIpResolution(unittest.TestCase):
                     mock.patch.object(red_stage, "_resolve_red_vmid"), \
                     mock.patch.object(red_stage, "_resolve_red_ip", side_effect=resolve):
                 with self.assertRaises(Stop):
-                    red_stage.stage_red_tlaloc(args, comp, {}, Path(td) / "run")
+                    red_stage.stage_red(args, comp, {}, Path(td) / "run")
             self.assertIs(seen["placement"], placed)
 
 

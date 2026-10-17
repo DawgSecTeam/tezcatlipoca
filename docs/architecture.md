@@ -5,7 +5,9 @@ eight phases: generate Quotient config and a nakon machine list, provision Proxm
 (the one component that mutates real infrastructure), bootstrap the scoring engine, plant services
 and misconfigurations with nakon. Quotient scores; nakon provisions. The engine is the only host with
 a NIC on every team bridge: SSH jump host, nakon execution host, NAT gateway. Team isolation is
-iptables on the engine, not bridge separation.
+iptables on the engine, not bridge separation. Red is a range component like the engine and the team
+boxes: tlaloc v2 is the only red engine, provisioned by `red/` in phase 7 and torn down with the
+range.
 
 There is one pipeline version. The deploy refuses a state document written by a different
 `pipeline_version`; teardown and redeploy both refuse a document without a `run_id`
@@ -30,8 +32,8 @@ Per-symbol rationale: [internals.md](internals.md). Open problems: [known-issues
 | `quotient/setup.py` | `event.conf`, team seeding, unpause, injects; `_SERVICE_TO_CHECK` map |
 | `common/` | `constants` (vmid math, limits, snapshot names), `targets`, `ssh_ops`, `windows_ops`, `timing`, `utils` |
 | `estate/` | The one component that mutates real infrastructure: `state` (the competition's document + resource inventory), `config` (native process config), `apply` (bridges, engine, team boxes), `engine_setup` (guest-side engine setup), `destroy` (tier order) |
-| `red/`, `run-agent-scrim.py`, `scrim-report.py` | Red/blue agent scrim ([scrim-harness.md](scrim-harness.md)) |
-| `tlaloc/` | The red teamer (v2) as a self-contained folder: package, tests, docs, systemd unit. Staged to red01 by `red/tlaloc_ops.py` when a Compfile says `red.engine tlaloc`; the default stays badauto |
+| `red/`, `run-agent-scrim.py`, `scrim-report.py` | Red-team range ops (`red01_ops` for red01 + the engine's red rules, `tlaloc_ops` for phase 7, `gaia_ops` for Mythic) and the red/blue scrim ([scrim-harness.md](scrim-harness.md)) |
+| `tlaloc/` | The red agent as a self-contained folder: package, tests, docs, systemd unit. Staged to red01 at `/opt/tlaloc` by `red/tlaloc_ops.py` and run by `tlaloc.service` |
 | `vendor/nakon` | Submodule pinned to a release; CLI-only catalog access and bundle builder |
 
 ## Phases
@@ -72,13 +74,15 @@ the earlier phases complete (`--force-from-phase` overrides).
 6. **Pre-domain pass** — plant the pre-domain stage (sshd/sudoers touchers) on every team box
    (lenient, `--jobs`), then `fix_services_on_boxes` on Linux boxes only. Failures are recorded per
    machine. `.postclone-swept` lets a resume skip it.
-7. **Domains → final pass → beacons → account-file modes → `tz-ready`** — per-team AD forests
+7. **Domains → final pass → red → account-file modes → `tz-ready`** — per-team AD forests
    concurrently (serial within a
-   team), then the final stage (disruptive DNS/apt and boot-hostile configs) after the joins, beacons,
-   the assume-breach seed, the last pass for account-file mode pins (they must follow every account
-   writer — see `constants.ACCOUNT_FILE_MODE_CONFIGS`), then the `tz-ready` snapshot (pool of 4). The
-   firewall's `tz-base` lands at the end of phase 5, after
-   cutover.
+   team), then the final stage (disruptive DNS/apt and boot-hostile configs) after the joins. Then
+   red is planted before the snapshot (`red/tlaloc_ops.py`: red01, its C2, the day-0 seed; every
+   step is fatal), so the restore point every box carries is already compromised. Then the last
+   pass for account-file mode pins (they must follow every account writer — see
+   `constants.ACCOUNT_FILE_MODE_CONFIGS`), and the `tz-ready` snapshot (pool of 4). A Compfile that
+   still says `team_beacons` is refused: it is a v1 feature. The firewall's `tz-base` lands at the
+   end of phase 5, after cutover.
 8. **Seed** — poll Quotient, `seed_teams`, `unpause_engine`, `create_injects`, each gated on
    state-document flags. Opt-in (Compfile `portal 1`): the student portal ([portal.md](portal.md)).
 
@@ -101,7 +105,7 @@ Compfile + boxes.json
 
 - `Compfile` (`name`/`scenario`/`difficulty`) and `boxes.json` (`name`/`template`/`cpu`/`memory_mb`/`disk_gb`/`last_octet`) are the only required inputs; `users.json` and `domain_roles.json` are optional.
 - `box_services.json`/`box_vulns.json` are per box type, so every team defends the identical set and Quotient wildcard checks (`192.168._.<octet>`) hold.
-- Stage split: linked clones inherit the golden disk, so identity-free, non-disruptive configs plant once per box type. The rest splits by ordering: **pre-domain** must precede the domain pass (member joins authenticate over SSH, which a clone's fresh cloud-init can disturb); **final** must follow it (joins reboot members and need working DNS/apt); **last** holds account-file mode pins, which must follow every account writer of the deploy (`fix_services_on_boxes`' credlist `useradd` in phase 6 and the assume-breach seed's `useradd` in phase 7 — shadow-utils recreates those files at their default modes). Membership: `constants.PREDOMAIN_STAGE_CONFIGS` / `FINAL_STAGE_CONFIGS` / `ACCOUNT_FILE_MODE_CONFIGS`; `POST_CLONE_CONFIGS` is the union.
+- Stage split: linked clones inherit the golden disk, so identity-free, non-disruptive configs plant once per box type. The rest splits by ordering: **pre-domain** must precede the domain pass (member joins authenticate over SSH, which a clone's fresh cloud-init can disturb); **final** must follow it (joins reboot members and need working DNS/apt); **last** holds account-file mode pins, which must follow every account writer of the deploy (`fix_services_on_boxes`' credlist `useradd` in phase 6 — shadow-utils recreates those files at their default modes), and phase 7 orders the last pass after the final stage and the red seed. Membership: `constants.PREDOMAIN_STAGE_CONFIGS` / `FINAL_STAGE_CONFIGS` / `ACCOUNT_FILE_MODE_CONFIGS`; `POST_CLONE_CONFIGS` is the union.
 - Bundles are built operator-side; the engine never sees vulndb credentials. `--only` scopes a deploy without changing bundle content.
 
 ## Targets
@@ -137,24 +141,40 @@ Each rebooting step is its own single-machine nakon pass. A missing `domain_role
 - Engine iptables: `FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP` (inserted at line 1); `POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE`.
 - Docker wipes `FORWARD` on every restart, so `bootstrap_scoring_engine` installs `range-firewall.{sh,service,timer}` (after `docker.service`; 30 s) to re-assert both rules, and `range-healthcheck.{sh,service,timer}` (60 s, offset from :00/:30) logging to `/var/log/range-healthcheck.log`. `ensure_nat_forwarding` re-asserts at phase 3 and on redeploy.
 
-The agent is selected per competition by `red.engine`: `badauto` (v1, the default) or `tlaloc`
-(v2, the `tlaloc/` folder of this tree, staged to red01 — [internals.md](internals.md#red-and-tlaloc)).
-Provisioning is shared either way: red identity is owned by `../bad-auto`
-(`badauto/deploy/engine_nat.py`, `deploy.red_mode`), installed as a `bad-auto-firewall` unit + 30 s timer:
+Red is a range component owned by this tree; there is no sibling checkout and no second engine
+([internals.md](internals.md#red-and-tlaloc)). `red/red01_ops.py` provisions red01: a linked clone of
+the fixed `base-ubuntu24.04-fix` template on the run's reserved vmid/IP, with `net0` on the
+management bridge, `net1` on the run's **private per-run bridge** `vmbrR<run hex>`
+(`red_bridge_name(run_id)`), cloud-init user/key, `onboot`, and the run's ownership tags. Netplan
+pins the network (`cloud-init` networking is disabled): the management address on the first NIC,
+`10.200.0.10/24` on the second (`RED_SEGMENT_IP`), and `192.168.0.0/16 via 10.200.0.1`
+(`RED_SEGMENT_GW`). The engine also gets a NIC on that bridge (last in its NIC order) holding
+`10.200.0.1`; the private L2 is what keeps those two fixed addresses unique across concurrent
+ranges.
 
-- **routed** (default): red01 holds a segment address on a **private per-run bridge** (`vmbrR<run hex>`, created by the deploy; the engine gets an extra NIC there holding the gateway `.1`, red01 the `.10`). The private L2 is what keeps those two fixed addresses unique — on the shared management bridge every range's engine would claim `.1`. Attacks keep the red source end-to-end; scoring still sources from the team gateway.
-- **masq**: red01 is MASQUERADEd into the team gateways, indistinguishable from scoring.
-
-Both: `FORWARD ACCEPT red→192.168.0.0/16`, ESTABLISHED accept ahead of the DROP, `FORWARD DROP` toward red. Beacon C2 is a DNAT from the team gateway to red01. `verify-competition.py --red-identity` proves the routed source survives.
+`red01_ops.install_engine_rules` installs the engine's red rules: `range-red-firewall.service` +
+`.timer` (30 s re-assert), separate from `range-firewall.*` because Docker wipes iptables on a
+container restart. The segment rules are not optional — they are installed even when `red.c2 off`.
+The script is a routed-segment FORWARD trio (`red → 192.168.0.0/16` ACCEPT, return
+`RELATED,ESTABLISHED` ACCEPT, DROP toward red) plus, when the C2 supplies a callback port, a
+per-team-gateway DNAT of that port to `10.200.0.10:<port>` and a nat-ACCEPT that keeps the flow out
+of the range's team SNAT. `red.c2 off` skips the Mythic install and the payload freeze; of the
+engine rules, only the DNAT is skipped. Satellite teams are reached through their jump: the jump
+carries the single `RED_SEGMENT_SUBNET` path, accepts red to its local teams and SNATs it to
+`192.168.<id>.1` (so red's source identity survives only on engine-node teams)
+([multi-node.md](multi-node.md#routed-red)).
+Attacks keep the red source end-to-end; scoring still sources from the team gateway.
+`verify-competition.py --red-identity --red-teams all` proves the source survives and every team is
+reachable.
 
 ## Snapshots
 
 | Snapshot | When | Scope |
 |---|---|---|
 | `tz-base` | After boot/auth/DNS/apt prep, before plant (golden boxes) or before the post-clone sweep (team boxes) | Per VM |
-| `tz-ready` | End of phase 7, after sweep, hardening, domains | Per VM |
+| `tz-ready` | End of phase 7, after domains, red, the account-file mode pass and the trail wipe | Per VM |
 
-Disk-only (`vmstate 0`, fsfreeze via guest agent); constants `SNAP_BASE`/`SNAP_READY`. The golden `tz-base` guards a failed golden plant (pre-conversion only; templates cannot roll back). Needs ZFS, LVM-thin, Ceph, or qcow2 on file storage; thick LVM falls back to `reconfigure`/`rebuild`. Redeploy modes: [usage-agents.md](usage-agents.md#redeploy-modes-cheapest-first).
+Disk-only (`vmstate 0`, fsfreeze via guest agent); constants `SNAP_BASE`/`SNAP_READY`. The golden `tz-base` guards a failed golden plant (pre-conversion only; templates cannot roll back). Needs ZFS, LVM-thin, Ceph, or qcow2 on file storage; thick LVM falls back to `reconfigure`/`rebuild`. Redeploy modes: [usage-agents.md](usage-agents.md#redeploy-modes).
 
 ## Nakon contract
 
@@ -170,7 +190,7 @@ Nakon is consumed as a CLI with `cwd = vendor/nakon` (reads `vendor/nakon/.env`)
 
 Per-run secrets are generated in `deploy()` and written to `competitions/<id>/credentials.txt`
 (0600) and the competition's state document `estate-state.json` (0600, atomic via the shared
-`write_text_atomic`; the document is the only copy of the box passwords):
+`write_text_atomic`; the document is the authoritative source of the box passwords, and `credentials.txt`/`teams.json` are generated handoffs):
 
 - `box_password` — `box_username` login on every box.
 - `box_creds` — `admin`/`user1`/`user2`; must match `linux.credlist` on the engine.
@@ -179,8 +199,13 @@ Per-run secrets are generated in `deploy()` and written to `competitions/<id>/cr
 `estate/config.py` resolves the deploy's process config from `tezcatlipoca.toml` with `TEZ_*` env
 overrides — the env name for a key is `TEZ_` + the key upper-cased with dots as underscores, the
 `knobs.` prefix dropped (`knobs.thin_headroom` → `TEZ_THIN_HEADROOM`, `headscale.key_ttl` →
-`TEZ_HEADSCALE_KEY_TTL`); env beats the file. The entrypoints load `.env` as a plain dotenv layer
-carrying those same names. Neither file is ever rewritten. `vendor/nakon/.env` holds vulndb
+`TEZ_HEADSCALE_KEY_TTL`); env beats the file, and an in-process `config.activate()` override
+(multi-node placement activation) beats both. The entrypoints load `.env` from the working
+directory as a plain dotenv layer carrying those same names, so run them from the repo/worktree
+root. Neither file is ever rewritten. `_SPEC` in `estate/config.py` is the
+operator-facing key set; dashboard/portal handoff env vars (`TEZ_PAUSE_FILE`, `TEZ_DASHBOARD_*`,
+`TEZ_OPS_*`) are internal handoffs, not config ([internals.md](internals.md#estate)).
+`vendor/nakon/.env` holds vulndb
 credentials. Everything per-run is gitignored:
 `estate-state.json`, `teams.json`, `event.conf`, `linux.credlist`, `credentials.txt`,
 `nakon-config.json`, `.nakon-*.json`, `.deploy-timings.jsonl`, `.postclone-swept`, `logs/`,
@@ -189,7 +214,7 @@ credentials. Everything per-run is gitignored:
 | File | Owns | Key fields |
 |---|---|---|
 | `estate-state.json` | Everything the run records: identity, secrets, roster, template records and the frozen flag, the multi-node placement, teardown progress, deploy bookkeeping, and the resource inventory | sections `identity`, `secrets`, `roster`, `templates`, `placement`, `run`, `external`, `teardown`, plus `resources`, `schema_version`, `updated_at`; API and section map in [internals.md](internals.md#estate) |
-| `teams.json` | Generated credentials handoff for the tools that read files rather than the document (verifier, scrim, bad-auto) | `{<team>: {identifier, password}}` |
+| `teams.json` | Generated credentials handoff for the tools that read files rather than the document (verifier, scrim) | `{<team>: {identifier, password}}` |
 | `credentials.txt` | The human-readable secret sheet | same secrets, for an operator |
 
 `deployed_endpoint` + `scoring_vm_id` (the document's `run`/`identity` sections) are the stale-state
@@ -207,6 +232,8 @@ sweep; `run-agent-scrim.py` skips it), `.nakon-domain-<team>-*.json` (AD chain p
 - On fresh clones the NOPASSWD sudoers grant lands before the DNS fix.
 - The golden plant is the only strict pass and `qm template` is the checkpoint. A non-green plant must not convert; a partially converted set has no resume (destroy and redeploy). Clones inherit golden mistakes.
 - A deploy never tears down a range: a leftover team box/engine/bridge is a preflight refusal and `destroy-competition.py` reclaims it. Linked clones still die before their golden templates — `estate/destroy.py`'s `TIERS` (team boxes and jumps, goldens, engine, engine template, bridges) is the only thing that decides it, because a clone shares its golden's base volume.
+- Red is required and fatal: `common.utils.stages_red` is always true, so every range gets the red bridge, the engine's red NIC and red01, and every red step that runs (red01, the C2 install, the payload freeze, staging, the config contract, the day-0 seed, the seed manifest) raises on failure — a deploy that cannot stand up red fails instead of continuing.
+- Teardown captures red's verdict (`tlaloc report`, `/var/lib/tlaloc` and the manifest into `<comp>/red/`) before destroying red01, and destroys it through `destroy_vm_if_exists` with the run's full tag set.
 - Golden sets are per-competition; tear them down when the run's goal is met. Teams-only teardown is a mid-run mode.
 - Never point a competition's state document at another host or engine vmid: its recorded VMs are not there, so nothing here could own or reclaim them. `gates.check_stale_estate_state` refuses.
 - The competitor packet omits `box_vulns.json` (it would spoil the exercise).

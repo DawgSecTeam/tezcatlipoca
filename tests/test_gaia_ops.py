@@ -198,13 +198,12 @@ class CallbackAddressTest(unittest.TestCase):
     def test_callback_address_reaches_the_agent_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp = comp_dir(tmp, "firewall_dnat 4470->10.0.0.198\n")
-            from red import realm_c2_ops
-            host = realm_c2_ops.callback_ip_for(comp)
+            host = g.callback_host_for(comp)
             port = g.callback_port_for(comp)
-            assert host == "172.31.2.1" and port == 4470
+            assert host == "192.168.2.1" and port == 4470
             block = g.tlaloc_c2_block(comp, server="10.0.0.198", operation="comp",
                                       callback_host=host, callback_port=port)
-            assert block["callback_host"] == "http://172.31.2.1"
+            assert block["callback_host"] == "http://192.168.2.1"
             assert block["callback_port"] == 4470
 
     def test_callback_url_normalisation(self):

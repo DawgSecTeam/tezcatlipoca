@@ -273,19 +273,11 @@ def load_config(path=None):
 #   red.caps.max_down 4
 #   red_yaml red.yaml                 pointer to a nested block (ladder etc.),
 #                                     path relative to the comp dir
-# Legacy v1 knobs are mapped so existing comps keep working:
-#   assume_breach 0|1|>=2   -> off | light | full
-#   assume_breach_depth N   -> red.depth
-
-_LEGACY_ASSUME = {0: "off", 1: "light"}
-
-
 def load_compfile_red(comp_dir):
     """Extract the red block from a comp dir's Compfile (may be {})."""
     comp_dir = Path(comp_dir)
     path = comp_dir / "Compfile"
     red = {}
-    legacy_depth = None
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
@@ -303,18 +295,6 @@ def load_compfile_red(comp_dir):
             red = _deep_merge(red, data)
         elif key.startswith("red."):
             _set_dotted(red, key[len("red."):], _coerce(value))
-        elif key == "assume_breach":
-            try:
-                red["assume_breach"] = _LEGACY_ASSUME.get(int(value), "full")
-            except ValueError:
-                red["assume_breach"] = str(value)
-        elif key == "assume_breach_depth":
-            try:
-                legacy_depth = int(value)
-            except ValueError:
-                pass
-    if legacy_depth is not None and "depth" not in red:
-        red["depth"] = legacy_depth
     return red
 
 

@@ -51,7 +51,7 @@ def build_parser():
     parser.add_argument("--red-identity", action="store_true", dest="red_identity",
                         help="also verify red's routed identity: red01 must reach a box with "
                              "its red-segment source IP (not the team gateway). Needs red01 "
-                             "deployed; seg IP falls back to ../bad-auto/config.yaml")
+                             "deployed; seg IP defaults to the range red segment address")
     parser.add_argument("--red-teams", choices=["own", "all"], default="own",
                         help="--red-teams all: additionally prove red01 can reach EVERY "
                              "team over SSH (one box each), not just its own segment. This "
@@ -60,11 +60,11 @@ def build_parser():
                              "Needs red01 deployed; pairs with --red-identity.")
     parser.add_argument("--red-ip", default=None,
                         help="red01 mgmt IP for --red-identity "
-                             "(default: the comp's bad-auto config, else 10.0.0.198)")
+                             "(default: this competition's recorded red01 address)")
     parser.add_argument("--red-user", default="sysadmin", help="red01 SSH user for --red-identity")
     parser.add_argument("--red-seg-ip", default=None,
                         help="red01's red-segment address for --red-identity "
-                             "(default: the comp's bad-auto config, else 10.200.0.10)")
+                             "(default: the range red segment address)")
     parser.add_argument("--interim", action="store_true",
                         help="this is the deploy-time reading, taken before red/blue staging: "
                              "label its gates as interim, because staging still registers "
@@ -105,11 +105,10 @@ def main(argv=None):
     base_url = f"http://{engine_ip}"
     print(f"Verifying competition '{comp_dir.name}' against engine {base_url}")
 
-    # red01's address resolves from the comp's own bad-auto config unless the operator passed one.
+    # red01's address resolves from what this competition's deploy recorded.
     if args.red_ip is None:
-        from red import badauto_config_ops
-        args.red_ip = ((badauto_config_ops.load_config(comp_dir).get("deploy") or {})
-                       .get("red_ip")) or "10.0.0.198"
+        from red import red01_ops
+        args.red_ip = red01_ops.recorded_identity(comp_dir).get("ip") or ""
 
     if args.unfreeze:
         return 0 if do_unfreeze(comp_dir, args.confirm_unfreeze) else 1

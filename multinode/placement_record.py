@@ -30,7 +30,7 @@ def read_placement(comp_dir):
 def _upgrade_v1(comp_dir, placement):
 # Resolve red01 the way the v1 code did — that is where the live red01 sits.
     from estate import state
-    from red import badauto_config_ops
+    from red import red01_ops
     upgraded = dict(placement)
     engine_vmid = int(upgraded["engine_vmid"])
     engine = engine_record(upgraded)
@@ -41,12 +41,11 @@ def _upgrade_v1(comp_dir, placement):
     upgraded["engine_mgmt_ip"] = flat.get("engine_mgmt_ip") or ""
     upgraded["engine_mgmt_gw"] = flat.get("engine_mgmt_gw") or ""
     upgraded["mgmt_bridge"] = mgmt_bridge_for(engine)
-    vmid, ip = badauto_config_ops.red01_v1_target(comp_dir, engine_vmid)
     upgraded["red01"] = {
-        "vmid": vmid,
-        "ip": ip,
+        "vmid": red01_ops.red01_vmid_for(comp_dir, engine_vmid, upgraded),
+        "ip": red01_ops.red01_ip_for(comp_dir, upgraded),
         "node": engine.node,
-        "explicit_ip": badauto_config_ops.red01_ip_is_explicit(comp_dir),
+        "explicit_ip": red01_ops.red01_ip_is_explicit(comp_dir),
     }
     return upgraded
 
@@ -107,7 +106,7 @@ def write_red01_ip(comp_dir, placement, ip):
 
 
 def reserved_vmids(placement):
-    from red.badauto_config_ops import default_red_vmid
+    from red.red01_ops import default_red_vmid
     engine_vmid = int(placement["engine_vmid"])
     reserved = {engine_vmid, engine_template_vmid(engine_vmid),
                 default_red_vmid(engine_vmid, len(placement.get("satellites") or []))}

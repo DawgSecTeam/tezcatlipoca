@@ -11,6 +11,7 @@ Each has burned a real deploy. Per AGENTS.md, each is also a defect to fix in co
 - **Template has a cloud-init drive**: a tagged template with no `ide*/scsi*/sata*` entry containing `cloudinit` clones into an unreachable box. Use the `-fix` variants ([environment-facts.md](environment-facts.md#templates)).
 - **Config profile matches the node and has no dead vmid** (`proxmox.template_vm_id`). Set `TEZ_TEAM_IDENTIFIERS` (or `--team-identifiers`) explicitly: packet-profile identifiers and the 101+ default are not availability checks.
 - **Free golden/engine slots**: another session may have squatted an ad-hoc template vmid in the same block.
+- **red01's slot**: each competition reserves a red01 vmid; its IP comes from the Compfile, the recorded placement, or a selection at stage time. Preflight refuses an occupied vmid (other than this run's) and an IP a running guest answers, so a stale red01 from another worktree surfaces before the deploy.
 - **Distinct `engine.mgmt_ip` per concurrent comp**: `clean_engine_for_template` SSHes to the planned mgmt IP, so a shared IP can wipe a live foreign engine's `.env`, `event.conf`, and host keys.
 - **Reclaim orphaned ranges** with `destroy-competition.py` from the matching comp dir, never an ad-hoc sweep.
 - **Probe the API port, not ping**: `curl -k https://<node>:8006/` must return an HTTP code, not `000`. If a node went down, resume with `--from-phase`; state, snapshots and disks survive.
@@ -52,7 +53,8 @@ Dominant time sinks historically: environmental saturation and unvetted pin dens
 - **Markers**: `.postclone-swept`, `.nakon-domain-<team>-adds.json` (+ live join probes).
 - **Snapshots**: `tz-base` (end of phase 4; goldens pre-plant), `tz-ready` (end of phase 7). A failed snapshot is only a WARNING; check `list_snapshots` before relying on one. Modes: [usage-agents.md](usage-agents.md#redeploy-modes).
 - **Verify** is the pass/fail gate for any deploy claim. An unwaived SKIP fails the run; triage a gate that never ran before assuming the range is broken. `pytest tests/` covers helpers, not the pipeline ([tests.md](tests.md)).
-- **Logs**: `run-agent-scrim.py` writes `<run_dir>/deploy.log` only on deploy failure; a bare `create-competition.py` leaves console scrollback only. Always capture (§4). The artifact folder keeps phase markers and timings, not stdout ([automated-test-artifacts.md](automated-test-artifacts.md)).
+- **Logs**: `run-agent-scrim.py` writes `<run_dir>/deploy.log` for every deploy, success included (stdout plus a `=== STDERR ===` section); a bare `create-competition.py` leaves console scrollback only. Always capture (§4). The artifact folder keeps phase markers and timings, not stdout ([automated-test-artifacts.md](automated-test-artifacts.md)).
+- **Deploy lock**: `acquire_deploy_lock` refuses a second driver on the same comp dir and prints `pgrep -af create-competition`; kill that PID (never `pkill -f`, which matches every session's command line), confirm it is gone, then retry.
 
 ### Cost map
 
@@ -65,7 +67,7 @@ Phases 1–2 are the expensive, dice-rolling part; 3–8 are mostly idempotent. 
 | 4 | Strict abort on a bad row; golden build/convert; phase-4 create race | Trim → `--from-phase 4` | `--from-phase 1`. A partially *converted* golden set is fatal (destroy and redeploy) |
 | 5 | Firewall bootstrap/cutover (no-op without `in_path`) | `--from-phase 5` | Skip it on a firewall lineup |
 | 6 | Pre-domain pass (lenient: usually a tally); DNS/auth; fix_services | Trim → `--from-phase 6`; rerun once for transients | Assume it re-clones (cloning is phase 4) |
-| 7 | Domains, final pass, beacons, `tz-ready` | Trim → `--from-phase 7`; check `.nakon-domain-*-adds.json` exist | Expect re-clone |
+| 7 | Domains, final pass, red01 + seed, `tz-ready` | Trim → `--from-phase 7`; check `.nakon-domain-*-adds.json` exist | Expect re-clone |
 | 8 | Seed/inject/unpause | `--from-phase 8` | Rerun past an unpaused engine |
 
 ## 3. Trim-then-resume
@@ -110,7 +112,8 @@ After: `verify-competition.py` (no deploy is green without it); new failure clas
 - Persistent engine cutover: one reboot with all transit NICs added, netplan MAC-matching each (`set-name: transit<id>`, `172.31.<id>.1/30`, route via `.2`), no `.1` on team NICs. NIC hotplug past the first is unreliable.
 - Firewalls need `onboot=1`. A Windows DC's agent may be down after reboot; that breaks verify's agent probe, not scoring.
 
-**bad-auto red against an in-path firewall** (`../bad-auto`, `python3 -m badauto {deploy,run,status,destroy}`). Pass the comp's own `competitions/<id>/.badauto-config.yaml` via `--config`; bad-auto's repo-root `config.yaml` is standalone-operator state, and two sessions sharing it is how red01 gets killed. Modes (`deploy.red_mode`): [architecture.md](architecture.md#network-and-isolation).
+**Red: tlaloc v2 on red01.** Phase 7 deploys red01 as a range component owned by this tree (`red/red01_ops.py`, preflight-gated by `infra/red01.py`): a per-competition vmid (Compfile `red01_vmid`, else the recorded placement, else one golden stride past the placement's last golden band) and IP (Compfile `red01_ip`, else the recorded placement, else selected free from `10.0.0.240–10.0.0.249`), tagged with the run's ownership set, with a management NIC plus a second NIC on the private per-run `vmbrR<run hex>` red segment (`10.200.0.0/24`; the engine holds `.1`, red01 `.10`). `red/tlaloc_ops.py` then installs the engine's red-segment rules and a 30 s re-assert timer, runs the C2 setup (the default; `red.c2 off` opts out — the Compfile's `red.c2_ip`, else Mythic on red01 via Gaia), freezes the payloads, stages and seeds the agent, and pulls the seed manifest to `<comp>/red/manifest.json`. Every red failure aborts the deploy; there is no degraded range.
 
-- Neither mode is validated against the pfSense topology. Routed mode needs return traffic to `10.200.0.0/24` routed back via the engine.
-- The raw-socket beacon C2 does not survive either firewall kind: boxes beacon to their gateway `.1`, now the firewall, not the engine that DNATs to red01. Deploy without it or add a `firewall_dnat` forward (generated for both kinds). Core attacks (recon/spray/exploit) don't need it.
+- The C2 callback is the team gateway at the engine, or the engine's transit address (`172.31.<team>.1`) when an in-path firewall owns the gateway; the port comes from `red.c2_callback_port` else the Compfile's `firewall_dnat`. Multi-team ranges are DNATed per gateway at the engine, and the payload host names the first team's.
+- The scrim's pre-T0 gates are the deploy's proof: the seed manifest shows a planted stage, red01 reaches the LLM, and `verify-competition.py --red-identity --red-teams all` passes every team. The last is also the hand check for a red that cannot cross a firewall; `--red-ip` defaults to the competition's recorded red01 address.
+- Teardown captures `tlaloc report` and the state dir first, stops `tlaloc.service`, and destroys red01 through `destroy_vm_if_exists` with the run's tags; a surviving vmid fails the teardown.

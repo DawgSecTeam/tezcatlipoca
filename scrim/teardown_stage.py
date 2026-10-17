@@ -1,31 +1,13 @@
 import json
 import os
-from pathlib import Path
 
-from config.config_ops import write_text_atomic
 from common.comp_paths import resolve_comp_dir
-from multinode.placement_record import activate_placement, read_placement
 from common.utils import competition_name, load_compfile
 
 from scrim import core
-from scrim import endpoints
-from scrim import procs
 from scrim import red_link
 from scrim import test_folder
 from scrim.core import log
-from red import badauto_config_ops
-
-
-def _config_red_vmid(comp_dir):
-    """The red vmid bad-auto's destroy will actually act on: the comp's own
-    bad-auto config, deploy.red_vmid.
-
-    `badauto destroy` follows its config by design (cmd_destroy refuses to be a
-    silent target override), so this is the number to reconcile `--red-vmid`
-    against. Per-competition — the sibling
-    checkout's shared config.yaml named whichever session staged last."""
-    return ((badauto_config_ops.load_config(comp_dir).get("deploy") or {})
-            .get("red_vmid"))
 
 
 def _manifest_red_vmid(args):
@@ -57,150 +39,47 @@ def _red_vm_still_exists(vmid):
         return None
 
 
-def _reclaim_unstamped_red(vmid, comp_path):
-    """Delegate to the one reclaim implementation (infra/red01.reclaim_unstamped_red).
-
-    Kept as a shim so the harness path states its own intent: whatever badauto could not remove
-    because it is unstamped is reclaimed here, before the teardown fails.
-    """
-    from infra import red01
-    name = competition_name(comp_path)
-    placement = read_placement(comp_path)
-    if placement:
-        activate_placement(placement)
-    return red01.reclaim_unstamped_red(vmid, comp_name=name or None, log=log)
-
-
 def teardown_red(args, env):
-    """Destroy red01 + its NAT, then PROVE the VM is gone. Returns the vmid the
-    proof ran against (None when unknowable) so the caller can journal it for
-    verify_clean.
+    """Capture red's verdict, destroy this run's red01, and prove the VM is gone.
 
-    caught live: a stray red01 survived `badauto destroy` and had to be
-    destroyed by hand. The stage ran with check=False and never looked at the result, so
-    a destroy that removed nothing was indistinguishable from one that worked — the
-    driver printed DONE while a red box with a live LLM key and beacon tasking stayed
-    up on the range. Both halves are needed: surface the exit code, and assert the
-    specific vmid this run deployed."""
-    log("teardown: red01 + NAT")
-    # Pull what red actually planted BEFORE destroy erases the VM. The artifact
-    # collector also lists world.json, but it treats red01 as one target and skips
-    # every remaining file once the first scp fails — so the record the persistence
-    # verification depends on is fetched out-of-band here, via sudo-staged copies.
+    Returns the vmid the proof ran against (None when this run recorded no red)
+    so the caller can journal it for verify_clean.
+    """
+    log("teardown: red01 + the red segment rules")
     try:
         red_link.pull_red_state(args)
-    except Exception as e:  # evidence capture must never block teardown
+    except Exception as e:                                   # noqa: BLE001 - never blocks
         log(f"WARNING: red state pull failed before teardown: {type(e).__name__}: {e}")
-    comp_path = str(resolve_comp_dir(args.competition, getattr(args, "comp_dir", None)).resolve())
-    configured = _config_red_vmid(comp_path)
-    if args.red_vmid and configured and int(configured) != int(args.red_vmid):
-        # Not fatal — badauto's identity guards are the authority on what is safe to
-        # delete — but it is exactly the stale-config shape that lost red01, so say it.
-        log(f"WARNING: the comp config's deploy.red_vmid is {configured} but this run "
-            f"deployed {args.red_vmid}; badauto destroy follows its config")
-    # One retry: the first attempt's rc=1 can be a transient Proxmox task/API hiccup,
-    # and the fail-loud raise below aborts the whole teardown mid-sequence (the range
-    # destroy never runs, and the harness dies leaving everything up — live-found
-    # caught live: the manual re-run succeeded in seconds). Identity guards live inside
-    # badauto, so a retry cannot widen what may be deleted.
-    proc = None
-    # The --competition value must be the SAME string stage_red wrote into the
-    # config's competition_dir (the resolved path): bad-auto's destroy cross-checks
-    # the two and refuses a mismatch (teardowns failed on the bare
-    # name). --config threads the comp's OWN config so destroy reads the comp's
-    # own deploy stamp) — only when it exists:
-    # a missing --config silently falls back to built-in defaults (vmid 999).
-    cmd = [core.local_python(), "-m", "badauto"]
-    comp_cfg = badauto_config_ops.config_path(comp_path)
-    # A run that never staged red has no per-comp bad-auto config and no recorded red vmid.
-    # Running `badauto destroy` then means running it against the HOST's default config — which
-    # on a shared ops host belongs to whichever session touched bad-auto last. caught live:
-    # tearing down a workspace whose run died at phase 4 read the other session's tdred-2026
-    # checkout (`stamp competition_dir .../tezcatlipoca-teardown-redesign/competitions/tdred-2026
-    # != .../the run/comp`) and refused with rc 17, failing the whole teardown of a run that
-    # had no red01 at all; had the stamps agreed it would have destroyed another session's box.
-    # Skip the step outright; the vmid proof below still runs, so a red01 that DOES exist is
-    # caught and the teardown still fails loudly if it survives.
-    if comp_cfg.exists():
-        cmd += ["--config", str(comp_cfg)]
-        env = {k: v for k, v in env.items() if k != "BAuto_CONFIG"}
-    elif not _manifest_red_vmid(args):
-        log("teardown: red01 — this run staged no red agent (no per-comp bad-auto config, no "
-            "recorded red vmid); skipping `badauto destroy` rather than falling back to the "
-            "host's default bad-auto config")
-        cmd = None
-    if cmd:
-        cmd += ["destroy", "--competition", comp_path, "--yes"]
-    for attempt in ((1, 2) if cmd else ()):
-        proc = procs.run(cmd, cwd=core.BAD_AUTO, env=env, timeout=900, check=False)
-        if proc.returncode == 0:
-            break
-        if attempt == 1:
-            log(f"WARNING: badauto destroy rc={proc.returncode} on attempt 1 — "
-                f"retrying once before failing the teardown"
-                + (f"; stderr: {(proc.stderr or '')[-300:]}" if proc.stderr else ""))
-        else:
-            # Leave the evidence where the post-mortem will look: the test folder
-            # survives the harness crash and the archive carries it out of the worktree.
-            test_dir = getattr(args, "test_dir", None)
-            if test_dir:
-                try:
-                    write_text_atomic(
-                        Path(test_dir) / "bad-auto-destroy.log",
-                        (proc.stdout or "") + "\n=== STDERR ===\n" + (proc.stderr or ""),
-                        mode=0o600)
-                except OSError as e:
-                    log(f"WARNING: could not write bad-auto-destroy.log: {e}")
-            raise RuntimeError(
-                f"badauto destroy failed (rc={proc.returncode}) — red01 and its engine NAT "
-                f"rules may still be up. stderr tail: {(proc.stderr or '(captured nothing)')[-500:]}. "
-                f"Do not treat this run as torn down; fix and re-run "
-                f"`python3 -m badauto destroy --competition {args.competition} --yes` in "
-                f"{core.BAD_AUTO}, or destroy vmid {args.red_vmid} by hand and re-run "
-                f"destroy-competition.py.")
-
-    # Order matters: what this run deployed, then what the run recorded, then what
-    # the comp config says, then the comp's own reservation (Compfile red01_vmid,
-    # else derived from the deploy state's scoring vmid) — one of them is the
-    # number `badauto destroy` acted on, and an unknown vmid is an unverifiable
-    # teardown (one run logged "vmid None could not be verified gone").
-    # No fall-through to bad-auto's built-in 999 — a shared default vmid is the
-    # vmid-999 kill class.
-    state_vmid = None
+    comp_path = str(resolve_comp_dir(args.competition,
+                                     getattr(args, "comp_dir", None)).resolve())
+    from estate import config as estate_config
+    from infra.ownership import Ownership
+    from red import red01_ops, tlaloc_ops
+    identity = red01_ops.recorded_identity(comp_path)
+    flat = {}
     try:
-        state_vmid = core.read_state(comp_path).get("scoring_vm_id")
-    except Exception:                                        # noqa: BLE001 - best effort
+        flat = core.read_state(comp_path) or {}
+    except Exception:                                        # noqa: BLE001 - optional
         pass
-    vmid = (args.red_vmid or _manifest_red_vmid(args) or configured
-            or badauto_config_ops.red01_vmid_for(comp_path, state_vmid))
+    vmid = (args.red_vmid or identity.get("vmid") or _manifest_red_vmid(args)
+            or (flat.get("red") or {}).get("vmid"))
+    if not vmid:
+        log("teardown: red01 — this run recorded no red01; nothing to destroy")
+        return None
+    tlaloc_ops.destroy_tlaloc_red(
+        comp_path,
+        ownership=Ownership(competition_name(comp_path), flat.get("run_id") or ""),
+        engine_ip=flat.get("engine_mgmt_ip") or "",
+        engine_user=estate_config.active().engine.username,
+        ssh_key=str(core.REPO / "proxmox"), env=env, red_ip=identity.get("ip"))
     still = _red_vm_still_exists(vmid)
-    verdict = None
     if still:
-        from infra import red01
-        verdict = red01.occupant_verdict(vmid, competition_name(comp_path))
-        if verdict == "foreign":
-            # The occupant's marker names another competition: our red01 is gone and this
-            # vmid was recycled. Accounted for, so it is not this range's leak.
-            log(f"  red01 vmid {vmid} now holds another competition's red01 "
-                f"({red01.occupant_label(vmid)}) — this range's red01 is gone")
-            still = False
-        # badauto's identity guard will not act without its deploy stamp, and a deploy that died
-        # before stamping leaves exactly that (see _reclaim_unstamped_red).
-        elif _reclaim_unstamped_red(vmid, comp_path):
-            still = _red_vm_still_exists(vmid)
-    if still:
-        raise RuntimeError(
-            f"badauto destroy reported success but vmid {vmid} is STILL PRESENT "
-            f"({red01.occupant_label(vmid) if verdict else 'unattributable'}) — red01 "
-            f"survived teardown EVEN AFTER the unstamped-red01 reclaim. This is the scale8 "
-            f"soak's leak (red01 998 left running, "
-            f"with the beacon controller and its LLM key, after the driver printed DONE). "
-            f"Destroy vmid {vmid} before starting another run on this range.")
-    if still is False:
-        log(f"teardown: red01 vmid {vmid} confirmed gone")
+        raise RuntimeError(f"red01 vmid {vmid} is STILL PRESENT after destroy — the "
+                           f"range is not torn down")
+    if still is None:
+        log(f"teardown: red01 vmid {vmid} could not be verified gone — check by hand")
     else:
-        log(f"teardown: red01 vmid {vmid} could not be verified gone — check by hand "
-            f"(badauto destroy exited 0)")
+        log(f"teardown: red01 vmid {vmid} confirmed gone")
     return vmid
 
 
@@ -255,13 +134,12 @@ def stage_teardown(args, creds=None):
             log(f"WARNING: red state pull failed before the report: {type(e).__name__}: {e}")
         # The collector owns the red01 pull now — one implementation shared with
         # destroy-competition.py (artifacts_lib/artifacts_ops.py's docstring: two callers must agree) —
-        # and it MUST run before `badauto destroy` below, which erases red01. It never
+        # and it MUST run before the red01 destroy below. It never
         # raises: an unreachable red01 is recorded as `unreachable` in collection.json.
         collected = test_folder.collect_run_artifacts(args)
         test_folder.write_interaction_report(args)
     log("teardown: red01 + NAT")
-    env = {**os.environ, "BAuto_LLM_API_KEY": endpoints.api_key(local=True)}
-    red_vmid = teardown_red(args, env)
+    red_vmid = teardown_red(args, dict(os.environ))
     if args.keep_range:
         log("--keep-range: leaving the competition range up")
         return

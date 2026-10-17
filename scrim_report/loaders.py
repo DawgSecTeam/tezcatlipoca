@@ -53,7 +53,7 @@ def load_red_events(run_dir):
 
 
 # harness-first: run.json t0 is when the event ACTUALLY started (written once, after
-# red01 was up); bad-auto's world.json event_start is written on the FIRST harness
+# red01 was up); the agent's world.json event_start is written on the FIRST harness
 # contact — including a failed stage_red attempt whose red01 never deployed — so on a
 # retried red deploy it predates red01's existence and every red event reads as shifted
 # late (caught live: a 14-minute-early t0 manufactured a phantom "27-minute
@@ -66,8 +66,7 @@ def load_event_start(run_dir):
             return float(run["t0"])
     except (OSError, ValueError):
         pass
-    for cand in (Path(run_dir) / "evidence" / "red" / "world.json",
-                 Path(run_dir) / "bad-auto-state" / "world.json"):
+    for cand in (Path(run_dir) / "evidence" / "red" / "world.json",):
         try:
             w = json.loads(cand.read_text())
             t0 = (w.get("meta") or {}).get("event_start")
@@ -79,8 +78,7 @@ def load_event_start(run_dir):
 
 
 def load_world(run_dir):
-    for cand in (Path(run_dir) / "evidence" / "red" / "world.json",
-                 Path(run_dir) / "bad-auto-state" / "world.json"):
+    for cand in (Path(run_dir) / "evidence" / "red" / "world.json",):
         try:
             return json.loads(cand.read_text())
         except (OSError, ValueError):

@@ -14,9 +14,10 @@ Since placement schema v2 that section also records every identity the run will 
 `engine_template_vmid`, `golden_vmids` per node, the engine management IP and gateway, the
 management bridge, and red01's `{vmid, ip, node, explicit_ip}`. `prepare()` writes them once,
 before preflight reads anything, so preflight, resume, verify and teardown derive no vmid
-independently. A v1 section is upgraded on read — red01 resolved by the v1 derivation, from the
-Compfile or the comp's own bad-auto config — and written back, so a teardown run by newer code
-can still find the red01 an older deploy left live.
+independently. A v1 section is upgraded on read — red01 resolved by the current derivation
+(`red/red01_ops.py`: Compfile `red01_vmid`/`red01_ip`, else the value recorded for the range, else
+the stride) — and written back, so a teardown run by newer code can still find the red01 an older
+deploy left live.
 
 ## Why routing, not bridging
 
@@ -34,20 +35,19 @@ only for established, engine→its teams, teams→engine, and teams→internet.
 
 ## Routed red
 
-Under bad-auto's `routed` mode (default), red01 sits on its own segment (`deploy.red_subnet`,
-default `10.200.0.0/24`) on a **private per-run bridge** (`vmbrR<run hex>`, created by the deploy;
-the engine gets an extra NIC there holding that segment's gateway). Red's source is preserved
-so blue can see and firewall the attacker. The private bridge is what keeps the segment's fixed
-`.1`/`.10` addresses unique: on the shared management bridge a second concurrent range's engine
-would answer red01's ARP for the gateway and red's team traffic would go to an engine with no
-route to those subnets. That covers engine-node
-teams only — satellite teams are reachable only through the jump, whose FORWARD policy is DROP
-by default, so red's source matches no rule there.
+Red has no masquerade mode: red01 keeps its source address end-to-end so blue can see and firewall
+the attacker, while scoring still sources from the team gateway. red01 sits on its own segment
+(`RED_SEGMENT_SUBNET`, `10.200.0.0/24`) on the run's **private per-run bridge** (`vmbrR<run hex>`,
+created by the deploy; the engine gets an extra NIC there holding the segment's gateway `.1`). The
+private bridge is what keeps the segment's fixed `.1`/`.10` addresses unique: on the shared
+management bridge a second concurrent range's engine would answer red01's ARP for the gateway and
+red's team traffic would go to an engine with no route to those subnets.
 
-Set `knobs.red_segment` (or `TEZ_RED_SEGMENT`) to the same CIDR as the comp's bad-auto
-`deploy.red_subnet`. Each jump then accepts red→its local teams, accepts replies, and SNATs red
-to `192.168.<id>.1` so the gateway-only SSH trust holds. Leave unset for single-node ranges and
-`masq`-mode red, which shares the team gateways and needs no path of its own.
+Satellite teams are reachable only through the jump, whose FORWARD policy is DROP by default, so
+each jump carries the red path for its local teams: it accepts red → its teams, accepts the replies,
+and SNATs red to `192.168.<id>.1` so the gateway-only SSH trust holds. The jump rules take the CIDR
+from `net/jump_rules.red_segment_from_env()`, which is the one `RED_SEGMENT_SUBNET` constant — the
+engine, the jumps and the verifier cannot disagree about the address red01 lives on.
 
 The deploy refuses to start an event when this is wrong: `run-agent-scrim` runs
 `verify-competition.py --red-identity --red-teams all` in `stage_red` before T0, failing the run
@@ -146,15 +146,17 @@ with identical planted content; hashes are slot-independent, so reuse/rebuild wo
 - **Phase 1**: the interrupted-clone reclaim scans every hosting node, filtered to this deploy's
   slots (each satellite's jump VM and slot-shifted goldens included; no engine there). Destruction
   of a leftover range is preflight's refusal on any node, reclaimed by `destroy-competition.py`.
-- **Phase 2**: the estate component's create step builds bridges on every host, the engine, and the
-  engine's satellite routes (persisted as a systemd oneshot so an engine reboot re-asserts them);
-  jump VMs clone and configure concurrently on a bounded pool of 4 (cloud-init static IPs,
-  iptables-restore ruleset; one that never comes up aborts the deploy), then `routing_ops`
-  fail-loud-gates engine→jump reachability before anything depends on it.
+- **Phase 2**: the estate component's create step builds bridges on every host (including the engine
+  node's private red bridge), the engine, and the engine's satellite routes (persisted as a systemd
+  oneshot so an engine reboot re-asserts them); jump VMs clone and configure concurrently on a
+  bounded pool of 4 (cloud-init static IPs, iptables-restore ruleset; one that never comes up aborts
+  the deploy), then `routing_ops` fail-loud-gates engine→jump reachability before anything depends
+  on it.
 - **Phase 4**: builds the golden set on the engine node as usual, then once per satellite
   (anchored on its first local team subnet, planted through the routed path); the box build then
   clones team boxes per slot from that slot's goldens.
-- **Phases 5–7** are unchanged — everything rides the engine and is routed.
+- **Phases 5–7** are unchanged — everything rides the engine and is routed; red01 lives on the
+  engine node and the jumps carry its segment to satellite teams.
 
 `--plan-only` previews placement decisions without touching infra.
 
@@ -187,7 +189,8 @@ root SSH gets a template by building it on that host, not by syncing it.
 ## Invariants
 
 - A competition's teams may span nodes, but the engine, engine template, and routing pivot are
-  singular and always co-located with slot 0.
+  singular and always co-located with slot 0. red01 is on the engine node; the jumps carry the red
+  segment to satellite teams.
 - vmids only need uniqueness per PVE instance; the slot stride keeps the scheme collision-safe
   even on a future single-cluster backend.
 - The recorded placement beats the ambient config, `nodes.json`, and CLI pins for every op against an

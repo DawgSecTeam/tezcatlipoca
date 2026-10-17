@@ -10,12 +10,9 @@ from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 
 
 def default_red_seg_ip(comp_dir=None):
-    """--red-seg-ip fallback: the competition's own bad-auto config, else the routed default."""
-    if comp_dir is not None:
-        from red import badauto_config_ops
-        deploy = badauto_config_ops.load_config(comp_dir).get("deploy") or {}
-        return deploy.get("red_seg_ip") or "10.200.0.10"
-    return "10.200.0.10"
+    """--red-seg-ip fallback: the one red segment every range uses."""
+    from common.constants import RED_SEGMENT_IP
+    return RED_SEGMENT_IP
 
 
 def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
@@ -77,8 +74,8 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
           f"peers while red01 held a connection open. Observed peers:\n"
           f"{observed.strip() or '    (none)'}\n"
           "        If the only peers are the team gateway (192.168.<tid>.1), red "
-          "is still masqueraded — bad-auto deployed in masq mode or the routed "
-          "FORWARD rules are shadowed.")
+          "is not preserving its source — the routed FORWARD rules are missing or "
+          "shadowed.")
     return gate_fail("red_identity", f"{seg_ip} never visible on {box_ip}")
 
 

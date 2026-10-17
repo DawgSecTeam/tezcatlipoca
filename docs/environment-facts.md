@@ -40,22 +40,28 @@ base image on which host: `infrastructure-status.md`.
   until `Set-NetFirewallProfile -All -Enabled True` (`bootstrap_windows_box` does this,
   plus enabling `RemoteDesktop-UserMode-In-TCP/UDP`, since the DC template ships that rule
   group disabled too). A Windows clone's guest agent takes ~8 min to appear.
+- **red01 is cloned from the fixed `base-ubuntu24.04-fix` template** (a qemu-guest-agent +
+  cloud-init Ubuntu image; `red/red01_ops.py` hardcodes the name). The clone is a linked clone,
+  then reconfigured — no per-competition red template.
 
 ## vmid occupancy
 
 - **Default team identifiers (101+) collide on shared hosts.** Pass
   `TEZ_TEAM_IDENTIFIERS` (or `--team-identifiers`) explicitly on any host that is not empty; the
   occupied blocks per host are in `infrastructure-status.md`.
-- **red01's slot is per-competition, never 999** (see [AGENTS.md § bad-auto
-  isolation](../AGENTS.md)): vmid from Compfile `red01_vmid` (or the comp's own bad-auto
-  config), else derived — one golden stride past the last band this placement uses
-  (`<scoring-vmid>+160+10*satellites`). The IP comes from Compfile `red01_ip`, else it is
-  SELECTED at deploy time from `10.0.0.240-10.0.0.249`: the lowest address nothing answers
-  and this placement does not already claim (the legacy `.196`-`.199` defaults are excluded).
-  The vmid is preflight-gated — an occupied slot is a refusal naming the owner; an operator's
-  address keeps the "unverifiable is not free" refusal, a selected one was proven free when
-  chosen. The positional arithmetic is enforced by `check_placement` and a slot-band property
-  test, so concurrent comps no longer need hand-spaced scoring vmids to keep red01 clear.
+- **red01's slot is reserved per competition, never a shared default** (see
+  [architecture.md § Network and isolation](architecture.md#network-and-isolation)): vmid from
+  Compfile `red01_vmid`, else the placement's recorded `red01.vmid` (multi-node), else derived — one
+  golden stride past the last band this placement uses
+  (`<scoring-vmid>+160+10*satellites`). The IP comes from Compfile `red01_ip`, else the placement's
+  recorded address, else it is SELECTED at deploy time from `10.0.0.240-10.0.0.249`: the lowest
+  address nothing answers and this placement does not already claim (the legacy `.196`-`.199`
+  defaults are excluded). The vmid is preflight-gated — an occupied slot is a refusal naming the
+  owner; an address a running guest already answers is refused, and an address no guest can confirm
+  is refused unless the plan already carries one (the Compfile, or a placement record) — a slot with
+  no IP yet is selected at deploy, after preflight. The positional arithmetic is enforced by
+  `check_placement` and a slot-band property test, so concurrent comps no longer need hand-spaced
+  scoring vmids to keep red01 clear.
 - **Engine management IPs are shared across concurrent deploys unless separated.**
   `clean_engine_for_template` SSHes to the *planned* mgmt IP, so a collision can land
   cleanup on a live foreign engine's `.env`/`event.conf`/host keys. Give each concurrent
@@ -105,7 +111,8 @@ the deploy env; host and credentials: `infrastructure-status.md`;
   mode `0600`.
 - **Docker re-syncs iptables on every container start/restart** (`FORWARD` → DROP, team
   rules wiped). `range-firewall.timer`/`range-healthcheck.timer` and
-  `ensure_nat_forwarding` cover this; see
+  `ensure_nat_forwarding` cover this; the red segment's rules have their own
+  `range-red-firewall.timer`. See
   [architecture.md](architecture.md#network-and-isolation).
 - **Quotient crash-loops without `event.conf`**, so it's pushed before nakon runs.
 - **New VirtIO NICs need a cold boot** — a guest-level reboot doesn't trigger the PCI scan.

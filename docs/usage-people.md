@@ -72,7 +72,8 @@ canonical `TEZ_*` names, so it is one more source for a key's value and it beats
 accepted env name is derived from `estate/config.py`'s `_SPEC` (`TEZ_` + the key upper-cased, dots as
 underscores); `NAKON_*`/`VULNDB_*` are vendored-tool config. Any other env var the code reads must
 be in `tests/test_secret_hygiene.py`'s `INTERNAL_ENV` with a reason; that test keeps this table
-honest.
+honest. The dashboard/portal handoff variables (`TEZ_DASHBOARD_*`, `TEZ_OPS_*`, `PORTAL_*`) are
+`INTERNAL_ENV`, not part of this operator surface.
 
 **Required** (the first five have no usable default; `node`/`datastore` default only to placeholders):
 
@@ -95,7 +96,7 @@ honest.
 | `headscale.url`, `.ssh_host`, `.ssh_user`, `.ssh_password`, `.infra_user`, `.key_ttl` | `TEZ_HEADSCALE_*` | Participant access: required unless the Compfile opts out with `remote_access 0`; `key_ttl` (`TEZ_HEADSCALE_KEY_TTL`) defaults `72h` ([remote-access.md](remote-access.md)) |
 | `portal.hostname`, `.tunnel_token`, `.open` | `TEZ_PORTAL_HOSTNAME`, `TEZ_PORTAL_TUNNEL_TOKEN`, `TEZ_PORTAL_OPEN` | Student portal. **Event profile only**: one carrying the tunnel pair claims the public name ([portal.md](portal.md)) |
 | `knobs.thin_headroom` | `TEZ_THIN_HEADROOM` | Fraction `(0, 1]` of provisioned disk the headroom preflight counts on thin pools. Unset = strict |
-| `knobs.red_segment` | `TEZ_RED_SEGMENT` | Routed-red segment matching bad-auto's `deploy.red_subnet` (default `10.200.0.0/24`). Set → satellite jump VMs accept red and SNAT to `192.168.<id>.1`; malformed is a hard error ([multi-node.md](multi-node.md#routed-red)) |
+| `knobs.gaia_path` | `TEZ_GAIA_PATH` | Gaia checkout on the engine host (default `~/gaia`); the Mythic C2 setup runs from it |
 | `knobs.cycle_timeout`, `knobs.python`, `knobs.competitions_root`, `knobs.artifacts_archive`, … | `TEZ_*` | The rest of the tuning knobs; the full key set is `estate/config.py`'s `_SPEC`, the common ones are commented in `tezcatlipoca.example.toml` |
 | `nodes.json` `token_env` | that host's own variable | Per-host API token referenced by name ([multi-node.md](multi-node.md)) |
 
@@ -163,6 +164,7 @@ python3 redeploy-competition.py --competition <id> --teams 3 --boxes web01 --mod
 
 | Symptom | Cause / fix |
 |---|---|
+| Phase 7 errors `team_beacons is not supported` | A v1 Compfile still sets `team_beacons`; remove the line — tlaloc v2 plants no beacons |
 | Clone lock errors | The component clones serially; a concurrent cloner on the same datastore (e.g. the workshop portal provisioner) is the usual cause |
 | Template not found | Not tagged `template`, or name mismatch |
 | Can't SSH a fresh clone | Broken cloud-init; verify on a scratch clone before tagging |

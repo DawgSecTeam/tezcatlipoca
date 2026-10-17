@@ -13,14 +13,14 @@ You are the independent tester for **tlaloc v2**, the rebuilt CCDC red-team agen
 
 Context you need, and should verify rather than assume:
 - v2 lives IN the range engine: it is the `tlaloc/` folder of the tezcatlipoca
-  checkout). The v1 agent it
-  replaces lives in a separate private repo and is
-  still the production red until v2 passes a scrim.
+  checkout. tlaloc is the only red engine: every competition stages it in phase 7,
+  with no engine selector and no fallback.
 - The design it must satisfy is this folder's `docs/` (architecture,
   decision-layer, roe, effects-authoring); the v1 audit that motivated the
   rebuild was an external review, not part of this tree.
-- The engine's v2 integration is `red/tlaloc_ops.py` (a competition selects it
-  with `red.engine tlaloc` in its Compfile; the default stays v1/badauto).
+- The engine's integration is `red/tlaloc_ops.py`: phase 7 of every deploy
+  provisions red01, installs the C2, pushes the config and seeds the agent. The
+  Compfile's `red.*` block is the ROE, not an engine selector.
 
 ## Rules of the test
 
@@ -53,13 +53,15 @@ down. If any of those is not answerable from the code, that is finding #1.
 
 ```bash
 cd tlaloc                                     # from the tezcatlipoca checkout root
-/usr/bin/python3 -m pytest tests/ -o addopts="" -q          # expect: green (count drifts)
-git clone . /tmp/v2-clone && cd /tmp/v2-clone && /usr/bin/python3 -m pytest tests/ -o addopts="" -q
+python3 -m pytest tests -q                   # expect: green (count drifts)
+C=$(mktemp -d)
+git clone "$(git rev-parse --show-toplevel)" "$C/tezcatlipoca"
+cd "$C/tezcatlipoca" && python3 -m pytest tlaloc/tests -q
 ```
 
 Both must be green, and the clone must collect the same number of tests — a repo
-that only works in its working copy is a failed repo. (Note: `pyproject.toml`
-already carries `-q`; `-o addopts=""` is what surfaces the summary line.)
+that only works in its working copy is a failed repo. (From the repo root the
+same suite is `python3 -m pytest tlaloc/tests -q`.)
 
 ## Step 3 — the invariant audit (10 min)
 
@@ -124,13 +126,13 @@ If `/tmp/tlaloc-smoke.yaml` or the comp dir are gone, rebuild them from
 
 ```bash
 cd ~/dev/dawgsec/tezcatlipoca
-/usr/bin/python3 -m pytest tests/test_tlaloc_ops.py -o addopts="" -q     # expect: green (count drifts)
+python3 -m pytest tests/test_tlaloc_ops.py -q     # expect: green (count drifts)
 ```
 
-Then answer from the code: how does a competition select v2 (and what is the
-default when it does not)? What does the deploy push to red01, and what happens if
-a field the deploy meant to set is missing from the pushed file? What does teardown
-do with the red VM? Two tests in the wider suite fail on this machine
+Then answer from the code: what does a competition's Compfile `red.*` block
+control (and what is not selectable)? What does the deploy push to red01, and what
+happens if a field the deploy meant to set is missing from the pushed file? What
+does teardown do with the red VM? Two tests in the wider suite fail on this machine
 (`test_local_python_spawns`, `test_scrim_defects`) — they fail identically at
 upstream `accd3ba`, so they are pre-existing; confirm that and do not "fix" them.
 
@@ -157,14 +159,16 @@ above, because it touches team boxes:
 
 1. **Pull the engine where it is deployed.** The dashboard cuts each run's engine
    worktree from a pinned origin ref (host and path: `infrastructure-status.md`),
-   so the pushed `tlaloc/` folder has to be in that ref before any Compfile can
-   select `red.engine tlaloc`.
-2. **Mythic, once.** Install/configure the club Mythic VM via Gaia, then run
-   `tlaloc c2-prep` for the competition and confirm `red/payloads/manifest.json` maps
-   frozen payloads to boxes.
+   so the pushed `tlaloc/` folder has to be in that ref before the deploy stages
+   it.
+2. **Mythic, once.** Install/configure the club's Mythic via Gaia (on red01 unless
+   `red.c2_ip` names another box), then run `tlaloc c2-prep` for the competition
+   and confirm `red/payloads/manifest.json` maps frozen payloads to boxes.
 3. **Smoke comp, `assume_breach: light`, LLM-free**: full
-   `plan → deploy → red-up → verdict → destroy` on the 1-box smoke comp with clef
-   stubbed, then again live.
-4. **First scrim, `assume_breach: full`, v1 standing by.** Exit gates from the plan:
-   pressure + adaptivity at least v1's, zero guardrail incidents, verdict and restore
-   table complete, and the DNAT re-assert survives a Docker restart.
+   `plan → deploy (red planted in phase 7) → run → destroy` on the 1-box smoke comp
+   with clef stubbed, then again live; teardown captures the report + verdict
+   before it removes the VM.
+4. **First scrim, `assume_breach: full`.** Exit gates: pressure + adaptivity (the
+   decision log's `source` mix and the impact ledger), zero guardrail incidents,
+   verdict and restore table complete, and the C2 DNAT re-assert survives a Docker
+   restart on the engine.

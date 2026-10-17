@@ -49,9 +49,8 @@ from estate import config
 
 VMID = int((config.active().knobs.vyos_vmid or 959))
 NAME = "vyos-provision"
-ISO_URL = os.environ.get(
-    "TEZ_VYOS_ISO_URL",
-    "https://community-downloads.vyos.dev/stream/2026.03/vyos-2026.03-generic-amd64.iso")
+ISO_URL = (config.active().knobs.vyos_iso_url
+           or "https://community-downloads.vyos.dev/stream/2026.03/vyos-2026.03-generic-amd64.iso")
 ISO_NAME = ISO_URL.rsplit("/", 1)[-1]
 ISO_STORAGE = config.active().knobs.vyos_iso_storage
 STORAGE = (config.active().knobs.vyos_storage or "hdd")

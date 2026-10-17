@@ -14,7 +14,7 @@ canonical prose lands in docs/automated-test-artifacts.md with step 7 of that pl
         evidence/{red,engine,blue,harness}/
 
 Why this is a module and not logic inside destroy-competition.py: **two callers must agree
-exactly.** The scrim harness collects before `badauto destroy` erases red01; teardown collects
+exactly.** The scrim harness collects before the teardown's red step erases red01; teardown collects
 when the harness never got there (crash, kill, session death). A second copy of the pull logic
 is how those two drift apart.
 

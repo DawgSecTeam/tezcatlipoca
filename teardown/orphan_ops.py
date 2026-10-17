@@ -1,17 +1,14 @@
 """Reclaim an orphaned run: the VMs a discarded comp dir left behind."""
 
 import os
-from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
 from infra.client import destroy_bridge_if_exists, node_bridges, proxmox_api
 from infra.ownership import (Ownership, Refusal, bridge_owned_by, destroy_vm_if_exists,
                              parse_vm_tags)
 
 TEMPLATE_ROLES = ("tezcatlipoca-golden", "engine-template")
-REPO_ROOT = Path(__file__).resolve().parents[1]
 RETIRE_PATH = "/api/ranges/retire"
 
 
@@ -35,8 +32,8 @@ def refuse_when_state_exists(comp, run_tag):
 
 def dashboard_handoff():
 # Dashboard address + bearer, inherited from the parent; a manual host has none and that must not fail the reclaim.
-    if not (os.environ.get("TEZ_DASHBOARD_HOST") and os.environ.get("TEZ_DASHBOARD_TOKENS")):
-        load_dotenv(REPO_ROOT / ".env")
+    # Deliberately NO .env fallback: a stray file would let a reclaim retire a range on
+    # whatever dashboard it names. The handoff exists only in the parent's environment.
     host = os.environ.get("TEZ_DASHBOARD_HOST", "")
     # The service BINDS 0.0.0.0, which is a wildcard, not a connect address.
     host = "127.0.0.1" if host in ("0.0.0.0", "::") else host

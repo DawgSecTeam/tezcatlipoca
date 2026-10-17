@@ -19,15 +19,20 @@ competitions/<comp>/.automated-tests/
   <key>/                     key = the deploy's run-<8hex>, else untagged-<deploy timestamp>
     test.json                identity, intent, phases, verdict, writeup status  (0600)
     collection.json          what was pulled, from where, sha256, per-target status
-    RED-TEAM.md              pulled from red01, or an honest stub saying why not
+    RED-TEAM.md              filed from red01's report.md, or an honest stub saying why not
     BLUE-TEAM.md             blue's authored report, sealed, or a stub
     REPORT.md                synthesis: incidents, run success, recommendations
     evidence/
-      red/                   events.jsonl, world.json, report-<ts>.md, report-secrets.md, journal
+      red/                   report.md, restore-table.json, report-secrets.md, world.json,
+                             events.jsonl, manifest.json, tlaloc-journal.log
       engine/                final scoreboard, injects, per-team services (captured at run end)
       blue/                  LOG.md, NOTEBOOK.md, feed.log, cycles/, sub*.md, submissions/
       harness/               run.json, T0.txt, monitors, INTERACTION.md, alerts, timings sidecar
 ```
+
+Red's files are root-owned 0600 on red01, so the collector first stages them to `/tmp/ba` with
+`sudo -n cp`, then scps the staged copies; it also captures `journalctl -u tlaloc --no-pager` as
+`evidence/red/tlaloc-journal.log`.
 
 **The key is the run id, and that is the point.** `run-<8hex>` is minted once per competition
 directory, persisted in the state document, stamped on every VM as an ownership tag, reused
@@ -48,7 +53,7 @@ artifact to git.
 
 | Writer | What it contributes |
 |---|---|
-| `run-agent-scrim.py` | Creates the folder at run start (identity, teams, boxes, phases), records red/blue identity and workdirs when they are known, and collects + generates the verdict **before** `badauto destroy` erases red01. |
+| `run-agent-scrim.py` | Creates the folder at run start (identity, teams, boxes, phases), records red/blue identity and workdirs when they are known, and collects + generates the verdict **before** the red step destroys red01. |
 | `destroy-competition.py` | The safety net, and the one step guaranteed to happen: it captures the engine's own final scoreboard when the harness never did, then collects right after the confirmation prompt and before its first destructive call. This is what saves a run whose harness died. Its `--team` mode is the exception: a mid-event team removal has no artifact step because no declared artifact lives on a team box (the plan reads red01, the run dir, blue workdirs, the comp dir and the engine capture) — the removal is recorded in the state document's `deleted_teams` and in `teams.json`. |
 | `scrim-report.py` | `INTERACTION.md` — the interaction score and the `rehearsal-gates.md` gate table. Its verdict is folded into `test.json` verbatim; nothing here recomputes it. |
 | A human or agent | `REPORT.md`'s judgement: the incident classification and both recommendations sections. |
@@ -74,7 +79,7 @@ folder honest — "no report" and "the pull failed" are different facts:
 | `failed` | the source was reachable and the transfer failed |
 | `unreachable` | the source could not be reached at all (VM stopped, agent down) |
 | `unrecoverable` | the source is gone for good (VM already destroyed) |
-| `skipped` | not applicable to this run (no red agent in a plain deploy), or not attempted after the target was found unreachable |
+| `skipped` | not applicable to this run (the manifest records no red/blue agent), or not attempted after the target was found unreachable |
 
 `failed`, `unreachable` and `unrecoverable` are the ones that produce a warning. A target is only
 probed for its first file once it proves unreachable, so a dead red01 costs one connection timeout
@@ -119,10 +124,11 @@ holding a skeleton. Archive before `git worktree remove`.
   `SubmissionFileName`, `SubmissionTime`, `Team`, `TeamID`, `Version`), per-team services and the
   final scoreboard, under `evidence/engine/`. The submitted *file* itself is not in that dump; it is
   captured only if the blue agent wrote it into its workdir (`sub*.md` → `evidence/blue/`).
-- **No deploy stdout by default.** A deploy log is written into the run dir only when the deploy
-  fails, so a successful run's phase timeline comes from `.deploy-timings.jsonl`, the harness phase
-  markers, and the operator's own `tee` if they made one. Capturing stdout always is a separate,
-  still-open upgrade ([e2e-testing.md](e2e-testing.md)).
+- **No bare-deploy stdout.** The harness writes `<run_dir>/deploy.log` for every deploy, success
+  included (stdout plus a `=== STDERR ===` section), and the collector takes it. A bare
+  `create-competition.py` leaves console scrollback only, so a run driven that way has its phase
+  timeline in `.deploy-timings.jsonl`, the harness phase markers, and the operator's own `tee` if
+  they made one ([e2e-testing.md](e2e-testing.md)).
 - **No opinion about the run.** Success is the interaction score and the gates in
   [rehearsal-gates.md](rehearsal-gates.md); the artifact folder reports them, it does not redefine
   them.

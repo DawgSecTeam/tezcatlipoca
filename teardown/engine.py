@@ -141,39 +141,32 @@ class TeardownEngine:
                              f"{v.get('name')} (vmid {v['vmid']}) on {node}")
 
         if not self.ctx.keep_red:
-            # vmid: what RedStep destroyed (journal), then bad-auto's config, then the deploy default
             done_vmid = (self._journal_done(plan).get("red01") or {}).get("vmid")
-            from red.red_plant_ops import red_vmid_candidates
-            vmid = None
-            for candidate in [done_vmid] + list(
-                    red_vmid_candidates(self.ctx.comp_dir, self.ctx.deployed_state)):
-                if candidate:
-                    vmid = candidate
-                    break
-            still = None
-            verdict = None
+            from red import red01_ops
+            recorded = (red01_ops.recorded_identity(self.ctx.comp_dir) or {}).get("vmid")
+            deployed = (self.ctx.deployed_state.get("red") or {}).get("vmid")
             red01_done = self._journal_done(plan).get("red01")
+            vmid = next((v for v in (done_vmid, recorded, deployed) if v), None)
             if vmid:
+                from infra import red01
                 try:
-                    from infra import red01
-                    verdict = red01.occupant_verdict(vmid, competition_name(self.ctx.comp_dir))
+                    verdict = red01.occupant_verdict(
+                        vmid, competition_name(self.ctx.comp_dir))
                 except Exception:            # noqa: BLE001 - unverifiable is not clean
                     verdict = None
-                still = verdict in ("ours", "unmarked")
-            if verdict == "ours":
-                problems.append("red01 is STILL PRESENT — it holds the LLM key and "
-                                "beacon tasking")
-            elif verdict == "foreign":
-                # marker names another competition: our red01 is gone and the vmid was recycled
-                notes.append(f"vmid {vmid} now holds another competition's red01 "
-                             f"({red01.occupant_label(vmid)}) — this range's red01 is gone")
-            elif verdict == "unmarked":
-                problems.append(f"a VM occupies red01's vmid {vmid} with no bad-auto marker "
-                                f"({red01.occupant_label(vmid)}) — its owner cannot be "
-                                f"attributed, so it is not proven gone")
-            elif still is None and (self.ctx.deployed_state.get("assume_breach")
-                                    or (red01_done and red01_done.get("status") != "skipped")):
-                problems.append("red01's vmid could not be verified gone — check by hand")
+                if verdict == "ours":
+                    problems.append("red01 is STILL PRESENT — it holds the agent's "
+                                    "state and its C2 credentials")
+                elif verdict == "foreign":
+                    notes.append(f"vmid {vmid} now holds another competition's VM "
+                                 f"({red01.occupant_label(vmid)}) — this range's red01 is gone")
+                elif verdict == "unmarked":
+                    problems.append(f"a VM occupies red01's vmid {vmid} with no ownership "
+                                    f"tags ({red01.occupant_label(vmid)}) — it is not "
+                                    f"proven gone")
+                elif verdict is None and (deployed
+                                          or (red01_done and red01_done.get("status") != "skipped")):
+                    problems.append("red01's vmid could not be verified gone — check by hand")
 
         done = self._journal_done(plan)
         if done and any(s.kind == "evidence" for s in plan.steps):

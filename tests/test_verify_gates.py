@@ -401,10 +401,10 @@ class Degradations(unittest.TestCase):
         tmp, comp_dir = _comp_dir()
         self.addCleanup(tmp.cleanup)
         _state(comp_dir, {"degradations": [
-            {"what": "assume_breach_deploy", "detail": "badauto deploy FAILED"}]})
+            {"what": "red_deploy", "detail": "red01 provision FAILED"}]})
         result, out = _run(v_state_gates.check_degradations, comp_dir)
         self.assertIs(result.status, v_model.Status.FAIL)
-        self.assertIn("assume_breach_deploy: badauto deploy FAILED", out)
+        self.assertIn("red_deploy: red01 provision FAILED", out)
         _, passed = v_verdict.gate_verdict([result])
         self.assertFalse(passed)
 

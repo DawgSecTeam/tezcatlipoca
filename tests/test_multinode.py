@@ -247,7 +247,7 @@ class RedAddressWriteBack(unittest.TestCase):
                 "red01": {"vmid": 1470, "ip": "", "node": "N1", "explicit_ip": False}}
 
     def test_the_selected_address_is_written_back_to_the_document(self):
-        from red.red_plant_ops import select_red_ip_for
+        from red.red01_ops import select_red_ip as select_red_ip_for
         placement = self._placement()
         with tempfile.TemporaryDirectory() as td:
             comp = Path(td)
@@ -323,7 +323,7 @@ class PlacementRecordTest(unittest.TestCase):
         stored = document.data["placement"]
         self.assertEqual((stored["version"], stored["red01"]["vmid"]), (2, 2222))
 
-    def test_a_v1_document_without_an_override_derives_engine_plus_170(self):
+    def test_a_v1_document_without_an_override_derives_the_golden_stride(self):
         placement = {"version": 1, "comp": "c", "engine_vmid": 2000, "engine_node": "n1",
                      "nodes": {"n1": _rec("n1").to_json()},
                      "slots": {"n1": 0}, "team_nodes": {"team1": "n1"},
@@ -333,7 +333,7 @@ class PlacementRecordTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             placement_record.write_placement(Path(td), placement)
             back = placement_record.read_placement(Path(td))
-        self.assertEqual(back["red01"], {"vmid": 2170, "ip": "10.0.0.198", "node": "N1",
+        self.assertEqual(back["red01"], {"vmid": 2160, "ip": "", "node": "N1",
                                          "explicit_ip": False})
 
     def test_record_identities_writes_the_whole_block_once(self):
@@ -589,28 +589,11 @@ class RedSegmentRulesTest(unittest.TestCase):
                           f"--tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu", rules)
 
 
-# TEZ_RED_SEGMENT parsing: empty is the safe default, a typo is a hard error
+# The satellite jumps route the one red segment (common.constants): no env knob.
 class RedSegmentFromEnvTest(unittest.TestCase):
 
-    def test_unset_and_blank_are_empty(self):
-        os.environ.pop("TEZ_RED_SEGMENT", None)
-        self.assertEqual(jump_ops.red_segment_from_env(), "")
-        with patch.dict("os.environ", {"TEZ_RED_SEGMENT": "   "}):
-            self.assertEqual(jump_ops.red_segment_from_env(), "")
-
-    def test_normalises_host_bits(self):
-        with patch.dict("os.environ", {"TEZ_RED_SEGMENT": "10.200.0.10/24"}):
-            self.assertEqual(jump_ops.red_segment_from_env(), "10.200.0.0/24")
-
-    def test_malformed_is_fatal_not_silent(self):
-        # A silently-dropped segment puts a live range back in the state that lost the
-        # soak's entire red coverage, so it must refuse to deploy instead. `10.200.0.0`
-        # parses as /32 — a plausible typo that would match only red01 itself.
-        with patch.dict("os.environ", {"TEZ_RED_SEGMENT": "10.200.0.0"}):
-            self.assertEqual(jump_ops.red_segment_from_env(), "10.200.0.0/32")
-        with patch.dict("os.environ", {"TEZ_RED_SEGMENT": "red-team"}):
-            with self.assertRaises(SystemExit):
-                jump_ops.red_segment_from_env()
+    def test_the_segment_is_the_constant(self):
+        self.assertEqual(jump_ops.red_segment_from_env(), "10.200.0.0/24")
 
 
 class ParseTeamNodeTest(unittest.TestCase):

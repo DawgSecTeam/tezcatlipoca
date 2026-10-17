@@ -49,10 +49,18 @@ Entries are strings or `{"name": ..., "vars": {...}}` (see `vendor/nakon/config-
 ```bash
 cd vendor/nakon
 python3 -m nakon catalog list --json
-python3 -m nakon catalog check --box-vulns /abs/path/competitions/<id>/box_vulns.json
+python3 -m nakon catalog check --pins /abs/path/competitions/<id>/box_vulns.json \
+                               /abs/path/competitions/<id>/box_services.json \
+                               --platforms /abs/path/competitions/<id>/box_platforms.json
 ```
 
-`catalog check` catches typos, building blocks requested instead of their wrapping misconfig, platform mismatches, and missing vars. The pinned submodule shows mechanism only; check the remote catalog before concluding something is unsupported.
+`box_platforms.json` is the per-box `{name: "linux"|"windows"}` map — write it once per
+competition (`{"win":"in template" → windows}`, same rule as everywhere else). `catalog check`
+catches typos, building blocks requested instead of their wrapping misconfig, platform
+mismatches, and missing vars (each row's declared `required_vars` — curated with
+`vulndb-cli update <name> --required-vars …`). `--pins` takes the vulns file first, the
+optional services file second. The pinned submodule shows mechanism only; check the remote
+catalog before concluding something is unsupported.
 
 ## `generate-packet.py`
 
@@ -75,9 +83,9 @@ Use `--admin-password=PW` (equals form) so a leading `-` isn't parsed as an opti
 | INJECTS | Engine inject count matches `injects/` |
 | `pins_registered` | Every pinned service's `<box>-<Display>` check exists in Quotient |
 | `plant_coverage` | Reads `plant_coverage_failed` from state; FAILs if never recorded. Golden plants record `{box}-golden` keys, which map onto every clone |
-| `degradations` | Reads the deploy's tolerated-failure ledger from state; FAILs if never recorded or if ANY entry is present (an assume-breach red that never landed, a box that never answered, a failed apt prep). The deploy continues past these; verify does not pass them |
+| `degradations` | Reads the deploy's tolerated-failure ledger from state; FAILs if never recorded or if ANY entry is present (a box that never answered, a failed apt prep, a failed snapshot). The deploy continues past these; verify does not pass them |
 | `domains` | AD promotion, joins, AD plants, cross-team DomainSID uniqueness; fail-closed on a malformed `domain_roles.json` |
-| `red_identity` | With `--red-identity`: red's routed source address survives to the boxes (`--red-ip`, `--red-seg-ip`, `--red-user`; defaults from `.badauto-config.yaml` (the address red01 was actually created at), else the legacy `10.0.0.198` fallback, `sysadmin`, `10.200.0.10`) |
+| `red_identity` | With `--red-identity`: red's red-segment source address survives to the boxes (`--red-ip`, `--red-seg-ip`, `--red-user`; `--red-ip` defaults to the competition's recorded red01 address, `--red-seg-ip` to `10.200.0.10`, `--red-user` to `sysadmin`). With `--red-teams all`: one box on every team is reachable from red01 — the scrim's pre-T0 reachability gate |
 | `packet_creds`, `packet_accounts` | With `--packet <profile>`: published credentials match `credentials.txt`; `out_of_scope` decoy accounts exist |
 | `round_loop` | Rounds are advancing and the latest is fresh |
 | `firewall_in_path` | Per team: engine routes `192.168.<id>.1` via `172.31.<id>.2`, the firewall answers on `:22`, the engine no longer holds `.1`. Non-gating SKIP without a firewall |
@@ -132,7 +140,7 @@ python3 destroy-competition.py --competition <id> --artifacts-timeout 20
 python3 destroy-competition.py --orphan-comp <id> --orphan-run run-<hex>   # comp dir gone
 ```
 
-Full teardown removes team boxes, engine, bridges, golden and engine templates (clones first; the state document's template records go too). **Exit 0 = estate verified clean** for this deploy's ownership set: the step plan completed, every hosting node was listable, nothing of ours is running or tagged, and red01 is gone — evidence archived before any of it. Frozen competitions refuse without `--end-of-competition`. `--teams-only` is for this competition's next run only; once the run's goal is met, run the full teardown, since goldens can't serve another competition (hash inputs and `comp-<id>` tags are per-competition) and otherwise squat on its golden vmids.
+Full teardown removes team boxes, engine, bridges, golden and engine templates (clones first; the state document's template records go too). **Exit 0 = estate verified clean** for this deploy's ownership set: the step plan completed, every hosting node was listable, nothing of ours is running or tagged, and red01 is gone — evidence archived before any of it. The `red01` step reads the run's recorded identity (placement/state), captures `tlaloc report` and pulls `/var/lib/tlaloc` into `<comp>/red/`, stops `tlaloc.service`, then destroys the VM through `destroy_vm_if_exists` with the run's tags; a vmid that survives fails the teardown. Frozen competitions refuse without `--end-of-competition`. `--teams-only` is for this competition's next run only; once the run's goal is met, run the full teardown, since goldens can't serve another competition (hash inputs and `comp-<id>` tags are per-competition) and otherwise squat on its golden vmids.
 
 Reuse keys on the `tezcatlipoca-m4 hash=` description on the template itself, so the next deploy adopts kept templates even from a **fresh worktree or dashboard workspace** — where the state document does not exist, because the dashboard's workspace seeder deliberately strips it. So `--teams-only` (or the harness's `--keep-templates`) followed by a deploy of the same competition gives the event the exact templates the practice run tested, provided the hash inputs are unchanged; a config change rebuilds, and a frozen competition still refuses config drift. The `--teams-only` teardown must run from the worktree that holds the deploy's state, but the reuse it enables does not.
 
@@ -183,7 +191,7 @@ run id; a foreign or uncommented bridge is reported and left alone.
 | `--fix-round-loop` | verify | Start/unpause POSTs when the round loop didn't resume after an engine reboot |
 | `--expect-no-vulns` | verify | Force misconfig gates to SKIP |
 
-Red's network mode (`routed`/`masq`) is owned by `../bad-auto`; see [architecture.md](architecture.md#network-and-isolation).
+Red01 and its red segment are deployed by phase 7 (`red/tlaloc_ops.py`, `red/red01_ops.py`); the scrim's pre-T0 gates are in [scrim-harness.md](scrim-harness.md#red).
 
 ## Central runs (the dashboard)
 
@@ -212,6 +220,6 @@ setsid nohup python3 -u create-competition.py \
     > logs/<id>-$(date +%Y%m%d-%H%M).log 2>&1 < /dev/null &
 ```
 
-Kill with `kill -TERM -<pid>` (process group). Never `pkill -f` a pattern that appears in the invoking command line. Kill, confirm gone, then relaunch.
+Kill with `kill -TERM -<pid>` (process group). Never `pkill -f` a pattern that appears in the invoking command line. A deploy that refuses on its lock names the holder with `pgrep -af create-competition`; kill that PID, confirm it is gone, then relaunch.
 
 Manual practice runs must use a new worktree: [AGENTS.md](../AGENTS.md#practice-runs-must-run-from-a-new-worktree).

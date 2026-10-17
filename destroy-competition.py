@@ -123,7 +123,7 @@ def main():
                              "teardown of the verified templates mid-event must be "
                              "impossible")
     parser.add_argument("--keep-red", action="store_true", dest="keep_red",
-                        help="do not destroy bad-auto's red01 (default: destroy it — it is "
+                        help="do not destroy the range's red01 (default: destroy it — it is "
                              "not estate-managed and survives the range otherwise)")
     parser.add_argument("--artifacts-timeout", type=int, default=45, metavar="SEC",
                         dest="artifacts_timeout",

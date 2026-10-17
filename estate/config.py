@@ -35,26 +35,12 @@ _SPEC = {
     "knobs.thin_headroom": 1.0,
     "knobs.cycle_timeout": 600,
     "knobs.python": "",
-    "knobs.red_segment": "",
-    "knobs.red_template": "",
     "knobs.competitions_root": "",
+    "knobs.gaia_path": "",
     "knobs.team_identifiers": "",
     "knobs.scoring_vmid": 0,
     "knobs.artifacts_archive": "",
     "knobs.pause_file": "",
-    "knobs.nakon_path": "",
-    "knobs.badauto_path": "",
-    "knobs.opencode_bin": "",
-    "knobs.ops_url": "",
-    "knobs.ops_token": "",
-    "knobs.dashboard_data": "",
-    "knobs.dashboard_host": "",
-    "knobs.dashboard_port": 0,
-    "knobs.dashboard_tokens": "",
-    "knobs.engine_env_file": "",
-    "knobs.engine_proxmox_file": "",
-    "knobs.engine_repo_url": "",
-    "knobs.competitions_repo_url": "",
     "knobs.scrim_web01_port": 0,
     "knobs.qga_bridge": "vmbr0",
     "knobs.qga_pkg_branch": "",
@@ -64,17 +50,10 @@ _SPEC = {
     "knobs.vyos_vmid": 0,
     "knobs.vyos_iso_url": "",
     "knobs.vyos_iso_storage": "local",
-    "knobs.vyos_iso_dir": "",
     "knobs.vyos_storage": "",
     "knobs.vyos_bridge": "vmbr0",
     "knobs.vyos_pw": "",
 }
-
-# Keys with no usable default: reading one raises rather than yielding "".
-_REQUIRED = frozenset((
-    "proxmox.endpoint", "proxmox.api_token", "proxmox.template_vm_id",
-    "ssh.public_key", "ssh.private_key_path",
-))
 
 _TRUE = ("1", "true", "yes", "on")
 

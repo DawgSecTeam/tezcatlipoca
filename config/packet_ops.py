@@ -716,7 +716,7 @@ def render_fidelity(p):
             "",
             f"- Packet weights: {scoring}. The engine scores flat 5 pts/check/round — "
             "uptime weight is what the engine measures; injects are graded by white team "
-            "over Quotient submissions; the red-team component is scored from bad-auto "
+            "over Quotient submissions; the red-team component is scored from the agent "
             "evidence, not the scoreboard.",
         ]
         if any(s.get("dual_credit") for s in p.get("services") or []):

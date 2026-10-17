@@ -45,7 +45,6 @@ from scrim import blue_agent, blue_prompt, compworld, core, endpoints, event_run
 from scrim_report import blue_side, host_labels, loaders, red_side, render, timefmt
 from quotient import event_capture as event_capture
 sched = _load("run_schedule_defects", "run-schedule.py")
-beacon = _load("beacon_ops_defects", "red/beacon_ops.py")
 
 
 def _pid_alive(pid):
@@ -633,48 +632,6 @@ class LineupDerivation(unittest.TestCase):
         self.assertIn("1:app01", out)
         self.assertNotIn("1:file01", out)
 
-    def test_beacon_plan_intervals_follow_the_roster_order(self):
-        plan = dict(beacon.beacon_plan(self._boxes(["web01", "app01", "db01"])))
-        self.assertEqual(plan, self.LEGACY_NAME_GATE)
-
-    def test_beacon_plan_covers_an_arbitrary_lineup(self):
-        boxes = self._boxes(
-            ["alpha", "bravo", "charlie", "delta"],
-            templates={"alpha": "base-windows-11-pro-fix", "bravo": "base-windows-server"})
-        old_gate = [b["name"] for b in boxes
-                    if not beacon._is_windows(b["template"])
-                    and b["name"] in self.LEGACY_NAME_GATE]   # the pre-fix gate
-        plan = beacon.beacon_plan(boxes)
-        self.assertEqual(old_gate, [], "fixture: the old name gate plants nothing here")
-        self.assertEqual([name for name, _interval in plan], ["charlie", "delta"])
-        self.assertEqual([i for _name, i in plan], [45, 60])
-
-    def test_beacon_plan_skips_windows_and_unmanaged_appliances(self):
-        # a pruned comp dir's lineup: two Windows
-        # boxes, an unmanaged pfSense appliance, two beaconable Linux boxes.
-        boxes = [
-            {"name": "dc01", "last_octet": 2, "template": "base-windows-server"},
-            {"name": "win01", "last_octet": 3, "template": "base-windows-server"},
-            {"name": "fw01", "last_octet": 4, "template": "base-pfsense-fix",
-             "unmanaged": True},
-            {"name": "web01", "last_octet": 5, "template": "base-ubuntu24.04-fix"},
-            {"name": "dns01", "last_octet": 6, "template": "base-debian13-lite-fix"},
-        ]
-        plan = dict(beacon.beacon_plan(boxes))
-        self.assertNotIn("dc01", plan)          # windows
-        self.assertNotIn("win01", plan)         # windows
-        self.assertNotIn("fw01", plan)          # unmanaged pfSense
-        self.assertIn("web01", plan)
-        self.assertIn("dns01", plan)
-
-    def test_an_uncovered_lineup_fails_loudly_instead_of_planting_zero(self):
-        boxes = [{"name": "dc01", "last_octet": 2, "template": "base-windows-server"}]
-        with self.assertRaises(RuntimeError) as ctx:
-            beacon.plant_team_beacons({"team1": {"identifier": "101"}}, boxes, {})
-        self.assertIn("no beaconable Linux box", str(ctx.exception))
-        self.assertIn("0/0", str(ctx.exception))  # names the silent-degradation sentence
-
-
 class PasswordHandling(unittest.TestCase):
     def test_box_sudo_keeps_the_password_out_of_argv(self):
         pw = "a'b;c$(d)"
@@ -845,16 +802,6 @@ class RedReachabilityGate(unittest.TestCase):
                         self._args(), comp,
                         {"ENGINE_IP": "10.0.0.248", "ADMIN_PW": "pw"})
 
-    def test_masq_mode_is_skipped(self):
-        calls = []
-        with mock.patch.object(procs, "run",
-                               side_effect=lambda *a, **k: calls.append(a)), \
-                mock.patch.object(compworld, "_verify_flags", return_value=[]):
-            red_stage.verify_red_reaches_teams(
-                self._args(mode="masq"), Path("/tmp/comp"),
-                {"ENGINE_IP": "10.0.0.248", "ADMIN_PW": "pw"})
-        self.assertEqual(calls, [], "masq red shares the gateways: nothing to prove")
-
     def test_default_mode_is_treated_as_routed(self):
         # bad-auto's default is routed, so an unset --red-mode must still be gated.
         calls = []
@@ -870,117 +817,8 @@ class RedReachabilityGate(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
-class RedTeardownAssertion(unittest.TestCase):
-# red01 must not survive teardown, and a failed destroy must not read as DONE.
-#
-#     a scale soak: a stray red01 outlived `badauto destroy` and had to be removed
-#     by hand. The stage ran with check=False and never looked at the result or at the
-#     cluster, so a destroy that removed nothing was indistinguishable from one that
-#     worked — the driver printed DONE while a red box holding the beacon controller and
-#     its LLM key stayed up on the range. `badauto destroy` follows config.yaml's
-#     deploy.red_vmid by design, so a stale config silently targets the wrong vmid.
-
-    # pull_red_state really ssh's to red01: unmocked it hangs whenever that host is routable
-    def setUp(self):
-        patcher = mock.patch.object(teardown_stage.red_link, "pull_red_state")
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def _args(self, red_vmid=998):
-        return SimpleNamespace(red_vmid=red_vmid, competition="c1")
-
-    def _run(self, rc=0, still=False, configured=998, red_vmid=998, rcs=None):
-        calls = []
-        # a plain rc fails EVERY attempt (the retry must not rescue a real failure);
-        # an explicit rcs list scripts attempt-by-attempt outcomes.
-        seq = list(rcs) if rcs is not None else None
-
-        def fake_run(cmd, **kw):
-            calls.append(cmd)
-            return SimpleNamespace(returncode=seq.pop(0) if seq else rc,
-                                   stdout="", stderr="")
-
-        # D14 is about a red01 that WAS deployed: the run records its vmid, which is what makes
-        # the destroy run at all (a run that staged no red is skipped outright).
-        with mock.patch.object(procs, "run", side_effect=fake_run), \
-                mock.patch.object(teardown_stage, "log"), \
-                mock.patch.object(teardown_stage, "_manifest_red_vmid", lambda *a, **k: red_vmid), \
-                mock.patch.object(teardown_stage, "_config_red_vmid", return_value=configured), \
-                mock.patch.object(teardown_stage, "_red_vm_still_exists",
-                                  return_value=(True if still else False)):
-            teardown_stage.teardown_red(self._args(red_vmid), {})
-        return calls
-
-    def test_destroy_is_invoked_for_this_competition(self):
-        calls = self._run()
-        self.assertIn("destroy", calls[0])
-        # the resolved competition path: bad-auto's destroy cross-checks it against
-        # config.yaml's competition_dir, and the bare name was the real cause of the
-        # "transient" teardown rc=1 on the early scrims
-        self.assertIn("competitions/c1", calls[0][-2])
-
-    def test_transient_destroy_failure_is_retried_once(self):
-        # caught live: attempt 1 rc=1 (transient Proxmox hiccup), the manual
-        # re-run succeeded in seconds — but the harness had already aborted the whole
-        # teardown, leaving the range up.
-        calls = self._run(rcs=[1, 0])
-        self.assertEqual(len(calls), 2, "exactly one retry")
-
-    def test_surviving_red01_raises(self):
-        # The soak's exact outcome: rc=0, VM still there.
-        with self.assertRaises(RuntimeError) as raised:
-            self._run(rc=0, still=True)
-        msg = str(raised.exception)
-        self.assertIn("STILL PRESENT", msg)
-        self.assertIn("998", msg)
-
-    def test_failed_destroy_raises_with_the_rc(self):
-        with self.assertRaises(RuntimeError) as raised:
-            self._run(rc=1)
-        msg = str(raised.exception)
-        self.assertIn("badauto destroy failed", msg)
-        self.assertIn("rc=1", msg)
-
-    def test_unverifiable_is_not_silently_a_pass(self):
-        # Not proof of failure (badauto may well have deleted it) but it must be said out
-        # loud rather than folded into a clean teardown.
-        lines = []
-        with mock.patch.object(procs, "run",
-                               side_effect=lambda *a, **k: SimpleNamespace(
-                                   returncode=0, stdout="", stderr="")), \
-                mock.patch.object(teardown_stage, "log", side_effect=lines.append), \
-                mock.patch.object(teardown_stage, "_config_red_vmid", return_value=None), \
-                mock.patch.object(teardown_stage, "_red_vm_still_exists", return_value=None):
-            teardown_stage.teardown_red(self._args(), {})
-        self.assertTrue(any("could not be verified gone" in l for l in lines), lines)
-
-    def test_stale_config_vmid_is_called_out(self):
-        # a comp config pointing at another run's vmid is what lost red01 in the first place.
-        lines = []
-        with mock.patch.object(procs, "run",
-                               side_effect=lambda *a, **k: SimpleNamespace(
-                                   returncode=0, stdout="", stderr="")), \
-                mock.patch.object(teardown_stage, "log", side_effect=lines.append), \
-                mock.patch.object(teardown_stage, "_config_red_vmid", return_value=999), \
-                mock.patch.object(teardown_stage, "_red_vm_still_exists", return_value=False):
-            teardown_stage.teardown_red(self._args(red_vmid=998), {})
-        self.assertTrue(any("follows its config" in l for l in lines), lines)
-
-    def test_the_assertion_uses_the_runs_own_vmid_when_config_is_silent(self):
-        seen = []
-        with mock.patch.object(procs, "run",
-                               side_effect=lambda *a, **k: SimpleNamespace(
-                                   returncode=0, stdout="", stderr="")), \
-                mock.patch.object(teardown_stage, "log"), \
-                mock.patch.object(teardown_stage, "_config_red_vmid", return_value=None), \
-                mock.patch.object(teardown_stage, "_red_vm_still_exists",
-                                  side_effect=lambda v: seen.append(v) or False):
-            teardown_stage.teardown_red(self._args(red_vmid=1234), {})
-        self.assertEqual(seen, [1234])
-
-
 class PyflakesClean(unittest.TestCase):
-    FILES = ("run-agent-scrim.py", "scrim", "scrim-report.py", "red/beacon_ops.py", "run-schedule.py")
+    FILES = ("run-agent-scrim.py", "scrim", "scrim-report.py", "run-schedule.py")
 
     def test_owned_files_are_pyflakes_clean(self):
         if importlib.util.find_spec("pyflakes") is None:

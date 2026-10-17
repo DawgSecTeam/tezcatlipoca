@@ -25,7 +25,7 @@ from estate import state as estate_state
 
 # the red artifacts are pulled from the sudo-staged copies (/tmp/ba): the originals
 # are 0600 root, and one unreadable file must not mark the whole target unreachable
-RED_REPORT = "/tmp/ba/report-*.md"
+RED_REPORT = "/tmp/ba/report.md"
 
 
 def make_comp(root, *, run_id="run-1a2b3c4d", comp="demo"):
@@ -217,7 +217,7 @@ class TestPlanTargets(unittest.TestCase):
                                                              comp_dir=comp)}
             red_want = by_name["red01"]["want"]
             self.assertIn(RED_REPORT, [w.get("remote") for w in red_want])
-            self.assertIn("journalctl -u bad-auto",
+            self.assertIn("journalctl -u tlaloc",
                           " ".join(w.get("cmd") or "" for w in red_want))
             self.assertEqual(by_name["red01"]["ssh"]["host"], "10.0.0.198")
             self.assertEqual(by_name["blue:blue-team1"]["to"], "evidence/blue/blue-team1/")
@@ -245,10 +245,9 @@ class TestCollect(unittest.TestCase):
                                                    comp_dir=self.comp)
                         if t["name"] == "red01"]
 
-    def test_newest_report_becomes_the_canonical_document(self):
+    def test_the_report_becomes_the_canonical_document(self):
         calls = []
-        files = {"/tmp/ba/report-20261003-0100.md": "old",
-                 "/tmp/ba/report-20261003-0200.md": "new",
+        files = {"/tmp/ba/report.md": "new",
                  "/tmp/ba/events.jsonl": '{"a":1}\n'}
         os.utime(self.path, None)
         collection = ao.collect(self.path, self.targets,
@@ -260,27 +259,6 @@ class TestCollect(unittest.TestCase):
         self.assertTrue(derived["sha256"])
         self.assertEqual(collection["targets"][0]["status"], ao.OK)
         self.assertIn(RED_REPORT, calls)
-
-    def test_same_mtime_tie_goes_to_the_newer_report_name(self):
-        """Two reports in one mtime tick must not hand the canonical document the older one.
-
-        This estate's filesystems report identical st_mtime for files written in the same tick
-        (ns-equal), so a plain `max(mtime)` picked whichever candidate came first — RED-TEAM.md
-        got the older report. Recency is broken on the name (`report-YYYYMMDD-HHMM.md`).
-        """
-        old = self.path / "report-20261003-0100.md"
-        new = self.path / "report-20261003-0200.md"
-        old.write_text("old")
-        new.write_text("new")
-        stamp = 1791000000.0
-        os.utime(old, (stamp, stamp))
-        os.utime(new, (stamp, stamp))
-        records = [{"local": old.name, "status": ao.OK}, {"local": new.name, "status": ao.OK}]
-        from artifacts_lib import collect
-        _, derived = collect.derive_canonical(self.path, {}, {"canonical": "RED-TEAM.md"},
-                                              records)
-        self.assertEqual((self.path / "RED-TEAM.md").read_text().strip(), "new")
-        self.assertEqual(derived["from"], new.name)
 
     def test_missing_source_file_is_absent_not_failed(self):
         collection = ao.collect(self.path, self.targets, transport=fake_transport({}))
@@ -299,7 +277,7 @@ class TestCollect(unittest.TestCase):
 
     def test_second_run_does_not_refetch_and_keeps_provenance(self):
         calls = []
-        files = {"/tmp/ba/report-20261003-0200.md": "new"}
+        files = {"/tmp/ba/report.md": "new"}
         first = ao.collect(self.path, self.targets, transport=fake_transport(files, calls))
         sha = first["derived"][0]["sha256"]
         calls.clear()
@@ -311,9 +289,9 @@ class TestCollect(unittest.TestCase):
         self.assertTrue(second["derived"][0]["reverified_at"])
 
     def test_tampered_artifact_is_recollected_rather_than_trusted(self):
-        files = {"/tmp/ba/report-20261003-0200.md": "new"}
+        files = {"/tmp/ba/report.md": "new"}
         ao.collect(self.path, self.targets, transport=fake_transport(files))
-        collected = self.path / "evidence" / "red" / "report-20261003-0200.md"
+        collected = self.path / "evidence" / "red" / "report.md"
         collected.write_text("tampered")
         calls = []
         second = ao.collect(self.path, self.targets, transport=fake_transport(files, calls))
@@ -322,12 +300,12 @@ class TestCollect(unittest.TestCase):
         self.assertTrue(second["derived"][0]["sha256"])
 
     def test_dry_run_touches_nothing(self):
-        files = {"/tmp/ba/report-20261003-0200.md": "new"}
+        files = {"/tmp/ba/report.md": "new"}
         collection = ao.collect(self.path, self.targets, transport=fake_transport(files),
                                 dry_run=True)
         self.assertTrue(all(i["status"] == ao.SKIPPED
                             for i in collection["targets"][0]["files"]))
-        self.assertEqual(list((self.path / "evidence" / "red").glob("report-*")), [])
+        self.assertEqual(list((self.path / "evidence" / "red").glob("report.md")), [])
         self.assertFalse((self.path / "RED-TEAM.md").exists())
 
     def test_local_files_are_sealed_0600(self):
@@ -353,11 +331,11 @@ class TestCollect(unittest.TestCase):
         collection = ao.collect(self.path, self.targets,
                                 transport=fake_transport(files, calls,
                                                          journal="unit bad-auto lines\n"))
-        journal = self.path / "evidence" / "red" / "bad-auto-journal.log"
+        journal = self.path / "evidence" / "red" / "tlaloc-journal.log"
         self.assertEqual(journal.read_text(), "unit bad-auto lines\n")
-        self.assertIn("journalctl -u bad-auto", " ".join(calls))
+        self.assertIn("journalctl -u tlaloc", " ".join(calls))
         statuses = {i["want"]: i["status"] for i in collection["targets"][0]["files"]}
-        self.assertEqual(statuses["sudo -n journalctl -u bad-auto --no-pager"], ao.OK)
+        self.assertEqual(statuses["sudo -n journalctl -u tlaloc --no-pager"], ao.OK)
 
     def test_unreachable_target_is_not_probed_for_every_remaining_file(self):
     # A dead red01 must not cost four more connection timeouts inside a teardown.
@@ -379,14 +357,14 @@ class TestCollect(unittest.TestCase):
             seen["cmd"] = cmd
             return Result()
 
-        dest = Path(self.tmp.name) / "out" / "bad-auto-journal.log"
+        dest = Path(self.tmp.name) / "out" / "tlaloc-journal.log"
         with patch.object(ao.subprocess, "run", fake_run):
             written = ao._ssh_capture({"host": "10.0.0.198", "user": "sysadmin",
-                                       "key": "/tmp/proxmox"}, "journalctl -u bad-auto", dest)
+                                       "key": "/tmp/proxmox"}, "journalctl -u tlaloc", dest)
         self.assertEqual(written, [dest])
         self.assertEqual(dest.read_text(), "journal line\n")
         self.assertIn("sysadmin@10.0.0.198", seen["cmd"])
-        self.assertIn("journalctl -u bad-auto", seen["cmd"])
+        self.assertIn("journalctl -u tlaloc", seen["cmd"])
 
     def test_ssh_capture_empty_output_is_absent_not_an_empty_file(self):
         class Result:
@@ -496,7 +474,7 @@ class TestWarningsAndStubs(unittest.TestCase):
                                                       "ssh": {"host": "10.0.0.198"}},
                                               "blue": {"present": False}})
         targets = ao.plan_targets(ao.load_manifest(self.path), comp_dir=self.comp)
-        files = {"/tmp/ba/report-20261003-0200.md": "the red report"}
+        files = {"/tmp/ba/report.md": "the red report"}
         collection = ao.collect(self.path, targets, transport=fake_transport(files))
         ao.finalize(self.path, manifest=ao.load_manifest(self.path))
         self.assertEqual(ao.warn_summary(collection, ao.load_manifest(self.path), self.path), [])

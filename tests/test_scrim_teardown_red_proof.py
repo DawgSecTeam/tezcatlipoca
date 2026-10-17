@@ -28,7 +28,7 @@ class RedVmidProof(unittest.TestCase):
 
 
 class Red01Attribution(unittest.TestCase):
-    def _verdict(self, description=None, comp_name=None, vms=None, boom=False):
+    def _verdict(self, tags="", comp_name=None, vms=None, boom=False):
         from infra import red01
 
         def api(method, path, **kw):
@@ -36,18 +36,17 @@ class Red01Attribution(unittest.TestCase):
                 raise RuntimeError("api down")
             if path == "/cluster/resources":
                 return {"data": vms if vms is not None else [
-                    {"vmid": 998, "node": "n", "name": "bad-auto-red01", "status": "running"}]}
-            return {"data": {"description": description}}
+                    {"vmid": 998, "node": "n", "name": "red01", "status": "running"}]}
+            return {"data": {"tags": tags}}
 
         with mock.patch("infra.red01.proxmox_api", side_effect=api):
             return red01.occupant_verdict(998, comp_name)
 
-    def test_a_bare_vmid_with_a_foreign_marker_is_attributed(self):
-        self.assertEqual(self._verdict("bad-auto red01 comp=other id=deadbeef", "mine"),
-                         "foreign")
+    def test_a_vmid_tagged_for_another_competition_is_attributed(self):
+        self.assertEqual(self._verdict("tezcatlipoca;comp-other;run-x", "mine"), "foreign")
 
-    def test_a_marker_naming_this_competition_is_ours(self):
-        self.assertEqual(self._verdict("bad-auto red01 comp=mine id=deadbeef", "mine"), "ours")
+    def test_a_vmid_tagged_for_this_competition_is_ours(self):
+        self.assertEqual(self._verdict("tezcatlipoca;comp-mine;run-x", "mine"), "ours")
 
     def test_an_unmarked_occupant_is_never_clean(self):
         self.assertEqual(self._verdict("", "mine"), "unmarked")

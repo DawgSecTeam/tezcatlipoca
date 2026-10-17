@@ -260,34 +260,32 @@ class VerifyClean(unittest.TestCase):
     def test_a_recycled_red01_vmid_is_attributed_and_not_this_ranges_leak(self):
         # The occupant's bad-auto marker names another competition, so OUR red01 is gone and
         # the vmid was recycled — a note, not a refusal.
-        (self.comp / ".badauto-config.yaml").write_text("deploy: {red_vmid: 3570}\n")
-        self.ctx.deployed_state = {"run_id": RUN, "assume_breach": {"vmid": 3570}}
+        self.ctx.deployed_state = {"run_id": RUN, "red": {"vmid": 3570}}
 
         def api(method, path, **kw):
             if path == "/cluster/resources":
-                return {"data": [{"vmid": 3570, "node": "n", "name": "bad-auto-red01",
+                return {"data": [{"vmid": 3570, "node": "n", "name": "red01",
                                   "status": "running"}]}
-            return {"data": {"description": "bad-auto red01 comp=other-range id=deadbeef"}}
+            return {"data": {"tags": "tezcatlipoca;comp-other-range;run-deadbeef"}}
 
         with patch("infra.red01.proxmox_api", side_effect=api):
             report = self._engine().verify_clean(self._plan())
         self.assertTrue(report.clean, report.problems)
-        self.assertTrue(any("another competition's red01" in n for n in report.notes))
+        self.assertTrue(any("another competition's VM" in n for n in report.notes))
 
     def test_an_unmarked_red01_occupant_is_fail_closed(self):
-        (self.comp / ".badauto-config.yaml").write_text("deploy: {red_vmid: 3570}\n")
-        self.ctx.deployed_state = {"run_id": RUN, "assume_breach": {"vmid": 3570}}
+        self.ctx.deployed_state = {"run_id": RUN, "red": {"vmid": 3570}}
 
         def api(method, path, **kw):
             if path == "/cluster/resources":
                 return {"data": [{"vmid": 3570, "node": "n", "name": "some-vm",
                                   "status": "running"}]}
-            return {"data": {"description": ""}}
+            return {"data": {}}
 
         with patch("infra.red01.proxmox_api", side_effect=api):
             report = self._engine().verify_clean(self._plan())
         self.assertFalse(report.clean)
-        self.assertTrue(any("no bad-auto marker" in p for p in report.problems))
+        self.assertTrue(any("no ownership tags" in p for p in report.problems))
 
     def test_unlistable_node_is_not_clean(self):
         self.fake.listing_fails.add("n")
@@ -439,22 +437,6 @@ class EngineCapture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class RedTargetVmid(unittest.TestCase):
-# RedStep records the vmid badauto's own target line names — not the
-#     shared config.yaml's (another session's deploy rewrites it mid-flight;
-#     caught live: verify_clean then verified the WRONG vmid).
-
-    def test_parses_the_target_line(self):
-        from teardown.steps import _red_target_vmid
-        proc = SimpleNamespace(stdout="destroy target: competition_dir=/x red01=10.0.0.199 "
-                                        "(vmid 999) engine=10.0.0.253\nmore", stderr="")
-        self.assertEqual(_red_target_vmid(proc), 999)
-
-    def test_no_target_line_is_none(self):
-        from teardown.steps import _red_target_vmid
-        self.assertIsNone(_red_target_vmid(SimpleNamespace(stdout="", stderr="")))
 
 
 class JournalLifecycle(unittest.TestCase):
