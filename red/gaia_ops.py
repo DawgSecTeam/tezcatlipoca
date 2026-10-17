@@ -153,9 +153,15 @@ def install_argv(path, server, user, key=None, port=22, updates=True, deps=True,
 
 
 def auth_argv(path, server, user=MYTHIC_ADMIN, port=MYTHIC_WEB_PORT):
-    """`-p` is a store_true prompt in Gaia: the password arrives on stdin."""
+    """`-p` is a store_true prompt in Gaia: the password arrives on stdin.
+
+    No `-k`: in this Gaia it maps to the client's `ssl=False`, i.e. http://, and Mythic
+    serves TLS on 7443 — the client already skips certificate verification on its https
+    path. Live 2026-10-17: `-k` sent an HTTP request to the HTTPS port, Mythic answered
+    400 + HTML, and the deploy refused a v2 comp with no C2.
+    """
     return gaia_argv(path, "auth", "-S", str(server), "-P", str(int(port)),
-                     "-u", str(user), "-p", "-k")
+                     "-u", str(user), "-p")
 
 
 def user_argv(path, names, stdout=True):

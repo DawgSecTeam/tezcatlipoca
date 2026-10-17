@@ -78,10 +78,13 @@ class CommandShapeTest(unittest.TestCase):
                             "-P", "22", "-i", "k.pem", "--install-updates",
                             "--install-deps", "--install-mythic"]
 
-    def test_auth_uses_the_prompt_flag_and_the_default_web_port(self):
+    def test_auth_uses_the_prompt_flag_and_https(self):
+        # No -k: Gaia maps it to ssl=False (http) and Mythic serves TLS on 7443; the
+        # deploy refused a v2 comp on a 400-HTML auth (live 2026-10-17).
         argv = g.auth_argv("/tmp/gaia", "10.0.0.198")
         assert argv[2:] == ["auth", "-S", "10.0.0.198", "-P", "7443",
-                            "-u", "mythic_admin", "-p", "-k"]
+                            "-u", "mythic_admin", "-p"]
+        assert "-k" not in argv
 
     def test_user_and_operation_commands(self):
         assert g.user_argv("/g", ["tlaloc"])[2:] == ["user", "create", "-u",
