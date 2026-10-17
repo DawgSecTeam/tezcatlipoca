@@ -32,6 +32,21 @@ def _wipe_targets(managed_targets):
             for t in managed_targets]
 
 
+def _publish_bad_auto_state(ctx):
+# bad-auto's nakon intel reads the box account from `<comp_dir>/.deploy_state.json`, its
+#     terraform-era contract; the modern pipeline never wrote it, so every seed sprayed
+#     `(box_user, None)`, paramiko failed with "no authentication methods", and cred_spray
+#     reported the whole seed as `unreachable over SSH` on every box (live 2026-10-16).
+#     The file rides to red01 with the other intel files. 0600: it holds the box password
+#     and the credlist.
+    path = ctx.comp_dir / ".deploy_state.json"
+    path.write_text(json.dumps({
+        "box_password": ctx.box_password,
+        "box_creds": ctx.box_creds or {},
+    }), encoding="utf-8")
+    path.chmod(0o600)
+
+
 def phase7_domains_and_final(ctx):
 # [7/8] AD domains, then the final disruption/boot-hostile pass and beacons.
 #
@@ -43,6 +58,7 @@ def phase7_domains_and_final(ctx):
     if ctx.from_phase > 7:
         print("[7/8] Skipped (resume).")
         return
+    _publish_bad_auto_state(ctx)
     print("[7/8] Configuring Windows AD domains (if any), then the final "
           "disruption/boot-hostile pass and beacons...")
     with timed(ctx.comp_dir, 7, "domains"):

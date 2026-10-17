@@ -120,6 +120,18 @@ class Tail(unittest.TestCase):
             self._p7([])
         self.assertIn("[7/8] Configuring Windows AD domains", buf.getvalue())
 
+    def test_phase7_publishes_bad_autos_intel_state(self):
+        # bad-auto's nakon intel reads the box account from <comp>/.deploy_state.json; the
+        # modern pipeline never wrote it, so every seed sprayed (user, None) and paramiko's
+        # "no authentication methods" was reported as "unreachable over SSH" on every box
+        # (live 2026-10-16). It must exist before the assume-breach step reads the intel.
+        self._p7([])
+        path = self.comp / ".deploy_state.json"
+        data = json.loads(path.read_text())
+        self.assertEqual(data["box_password"], "bp")
+        self.assertEqual(data["box_creds"], {"a": "b"})
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_phase7_skipped_on_resume(self):
         (self.comp / "final.json").write_text('{"machines": []}')
         ctx = _ctx(self.comp, from_phase=8)
