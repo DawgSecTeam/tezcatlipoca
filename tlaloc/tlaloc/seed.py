@@ -69,6 +69,11 @@ def seed_range(ctx, *, depth=None, teams=None, dry_run=False, max_steps=None,
         ctx.world.ensure_event_start()
 
     plan = plan_for(cfg, ctx.world, ctx.intel, depth=depth, teams=teams)
+    # A previous run that ended with work outstanding must not make this one a no-op:
+    # seed_done used to be set even when every stage failed, and the loop below breaks on
+    # it (live: the deploy's planted-box guard kept failing a range whose re-seed never ran).
+    if not dry_run and ctx.world.seed_done() and any(e["todo"] for e in plan):
+        ctx.world.set_seed_done(False)
     steps = 0
     results = {}
     for entry in plan:

@@ -162,6 +162,10 @@ class _FakeEffect(Effect):
 
 
 def _fake_effects():
+    # Load the real catalogue first: make_ctx() reloads it, and an import-order-dependent
+    # overwrite would replace these fakes with the real effects mid-test.
+    from tlaloc.effects import reload_registry
+    reload_registry()
     made = {}
     for effect_id in ("spray_access", "escalate", "persist"):
         effect = _FakeEffect()
@@ -220,6 +224,28 @@ def test_seed_is_resumable_and_respects_light(tmp_path):
         light = seed_mod.seed_range(light_ctx, depth=3, teams=["Blue1"])
         assert "persist" not in json.dumps(light["boxes"]), \
             "assume_breach light stops at the channel"
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                REGISTRY.pop(key, None)
+            else:
+                REGISTRY[key] = value
+
+
+def test_a_stale_seed_done_marker_does_not_skip_outstanding_stages(tmp_path):
+    """The old seed set seed_done even when every stage failed; a re-seed then did
+    nothing and the deploy's planted-box guard saw an empty manifest forever."""
+    fakes = _fake_effects()
+    saved = {k: REGISTRY.get(k) for k in fakes}
+    REGISTRY.update(fakes)
+    try:
+        ctx, policy, decider = live_ctx(tmp_path, c2=FakeC2({}), breach="full")
+        _manifest(tmp_path)
+        ctx.world.set_seed_done(True)          # as the broken run left it
+        outcome = seed_mod.seed_range(ctx, depth=1, teams=["Blue1"],
+                                      manifest_dir=tmp_path / "red")
+        assert outcome["steps"] > 0, "outstanding stages must be retried"
+        assert ctx.world.seed_done() is True
     finally:
         for key, value in saved.items():
             if value is None:
