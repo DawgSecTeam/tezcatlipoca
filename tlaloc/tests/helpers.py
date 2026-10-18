@@ -166,6 +166,8 @@ def make_intel(comp_dir=None, blind=False):
 def base_cfg(**over):
     """A validated config with no file layer (never reads the repo's config.yaml)."""
     cfg = copy.deepcopy(config_mod.DEFAULTS)
+    # Hermetic tests must never wait out a real C2 check-in window.
+    cfg["c2"]["callback_wait_sec"] = 0
     for key, value in over.items():
         if isinstance(value, dict) and isinstance(cfg.get(key), dict):
             cfg[key] = config_mod._deep_merge(cfg[key], value)

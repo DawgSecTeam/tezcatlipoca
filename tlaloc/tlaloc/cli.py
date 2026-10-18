@@ -29,6 +29,7 @@ from .errors import ConfigError, TlalocError
 CONFIG_CONTRACT = (
     "c2.base_url",
     "c2.callback_host",
+    "c2.callback_wait_sec",
     "c2.callback_max_age_sec",
     "c2.callback_port",
     "c2.enabled",
