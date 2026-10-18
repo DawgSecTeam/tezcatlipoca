@@ -354,6 +354,23 @@ def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600):
                       input=source.read_bytes(), text=False, timeout=timeout)
         if proc.returncode != 0:
             raise RuntimeError(f"pushing {name} failed: {_tail(proc)}")
+    # The FROZEN payloads travel too: the planter reads them from
+    # <intel>/red/payloads/manifest.json, and a channel with no local payload cannot
+    # plant anything (live: every implant failed with "no manifest entry").
+    payloads = comp_dir / "red" / "payloads"
+    if (payloads / "manifest.json").exists():
+        archive = subprocess.run(["tar", "-czf", "-", "-C", str(payloads.parent), "payloads"],
+                                 capture_output=True)
+        if archive.returncode != 0:
+            raise RuntimeError("tar of the frozen payloads failed")
+        remote = (f"sudo -n mkdir -p {INTEL_DIR}/red && "
+                  f"sudo -n tee /tmp/tlaloc-payloads.tgz >/dev/null && "
+                  f"sudo -n tar -xzf /tmp/tlaloc-payloads.tgz -C {INTEL_DIR}/red && "
+                  f"sudo -n rm -f /tmp/tlaloc-payloads.tgz")
+        proc = runner(ssh_argv(ssh_key, red_ip, remote), input=archive.stdout,
+                      text=False, timeout=timeout)
+        if proc.returncode != 0:
+            raise RuntimeError(f"staging the frozen payloads failed: {_tail(proc)}")
     return {"ok": True}
 
 
