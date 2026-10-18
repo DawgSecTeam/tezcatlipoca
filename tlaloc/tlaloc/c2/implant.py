@@ -46,8 +46,22 @@ def load_manifest(comp_dir):
         raise C2Error(f"{path} is not valid JSON: {exc}") from exc
 
 
-def manifest_entry(manifest, box_id):
-    return ((manifest or {}).get("boxes") or {}).get(box_id)
+def manifest_entry(manifest, box_id, transport=None):
+    """The box's frozen payload.
+
+    comp-prep keys the manifest `<box>:<transport>` (a box may carry one payload per
+    transport); the caller knows only the box, so fall back to its first entry.
+    """
+    boxes = (manifest or {}).get("boxes") or {}
+    if box_id in boxes:
+        return boxes[box_id]
+    wanted = f"{box_id}:{transport}" if transport else None
+    if wanted and wanted in boxes:
+        return boxes[wanted]
+    for key, entry in boxes.items():
+        if key.split(":", 1)[0] == box_id:
+            return entry
+    return None
 
 
 def payload_file(comp_dir, entry):
@@ -71,7 +85,7 @@ class Planter:
     def plant(self, ip, box_id, os_name=None, *, transport=None, wait_sec=45):
         """Install the frozen payload for `box_id` and report both facts."""
         os_name = os_name or self.ctx.os_of(ip)
-        entry = manifest_entry(self.manifest, box_id)
+        entry = manifest_entry(self.manifest, box_id, transport)
         if entry is None:
             return {"ok": False, "callback_seen": False, "box": box_id,
                     "detail": f"no manifest entry for {box_id} "

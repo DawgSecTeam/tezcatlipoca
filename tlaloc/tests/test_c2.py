@@ -396,3 +396,14 @@ def test_an_empty_download_is_a_failure_not_an_artifact(tmp_path):
     client = MythicClient(c2_cfg(), graphql=graphql, http=http, now=lambda: 0.0)
     with pytest.raises(C2Error, match="0 bytes"):
         client.download_payload("u1", tmp_path / "p.bin")
+
+
+def test_a_composite_manifest_key_is_found_by_box():
+    from tlaloc.c2.implant import manifest_entry
+    entry = {"uuid": "u-1", "file": "web01-1.bin", "transport": "http"}
+    manifest = {"boxes": {"web01-1:http": entry, "web01-1:webhook": dict(entry, uuid="u-2")}}
+    assert manifest_entry(manifest, "web01-1")["uuid"] == "u-1"
+    assert manifest_entry(manifest, "web01-1", "http")["uuid"] == "u-1"
+    assert manifest_entry(manifest, "web01-1", "webhook")["uuid"] == "u-2"
+    assert manifest_entry(manifest, "web01-1", "smb")["uuid"] == "u-1"
+    assert manifest_entry(manifest, "db01-1") is None
