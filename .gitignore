@@ -48,3 +48,7 @@ competitions/
 
 # vim swap files (a twin session's live editor buffer must never be commit-swallowed)
 *.swp
+
+# nakon is delivered as an install (bundle clone + .env), not a gitlink:
+# a submodule checkout here is host state, never tracked.
+/vendor/
