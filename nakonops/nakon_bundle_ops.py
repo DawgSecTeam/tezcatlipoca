@@ -32,8 +32,7 @@ def build_nakon_bundle(config_path):
         )
 
     info = json.loads(result.stdout.strip().splitlines()[-1])
-    state = "cached" if info["cached"] else "fresh"
-    print(f"  Nakon bundle {info['bundle_id'][:12]} ({state}, {info['plans']} plan(s), "
+    print(f"  Nakon bundle {info['bundle_id'][:12]} ({info['plans']} plan(s), "
           f"{info['machines']} machine(s))")
     bundle_path = NAKON_DIR / info["path"]
     return bundle_path

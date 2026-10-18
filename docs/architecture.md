@@ -99,7 +99,7 @@ Compfile + boxes.json
       .nakon-late.json       every team machine, account-file mode pins  pass 4, lenient, phase 7
       .nakon-postclone.json  pre-domain ∪ final; replayed by redeploy rollback/reconfigure
                              (the last pass is replayed separately, after redeploy's hardening)
-  → content-addressed bundles (vendor/nakon/bundles/, cached by config hash)
+  → content-addressed bundles (vendor/nakon/bundles/)
   → engine /opt/nakon/<run-tag>/  (`nakon deploy --bundle --config [--only] [--strict] [--jobs N]` over SSH)
 ```
 
@@ -181,7 +181,7 @@ Disk-only (`vmstate 0`, fsfreeze via guest agent); constants `SNAP_BASE`/`SNAP_R
 Nakon is consumed as a CLI with `cwd = vendor/nakon` (reads `vendor/nakon/.env`). No `import nakon`, no direct MySQL, no vulndb-cli. Catalog access is build-time only; bundles carry no credentials.
 
 - `nakon randomize --platform <linux|windows> --services N --vulns N --exclude <slow> --source auto --json` → `{services, vulns}`. Budgets: `ceil(difficulty/3)` services, `difficulty` vulns, excluding `splunk`/`roundcube`.
-- `nakon build --config <abs> --out bundles --json` → `{bundle_id, path, cached, plans, machines}`; content-addressed, shared across competitions; operator-side builds serialize on a lock.
+- `nakon build --config <abs> --out bundles --json` → `{bundle_id, path, plans, machines}`; content-addressed, shared across competitions; operator-side builds serialize on a lock.
 - `nakon deploy --bundle … --config … [--only] [--strict] [--jobs N]` runs on the engine after `scp` to a per-run `/tmp/nakon-<tag>` → `/opt/nakon/<tag>/`. `--jobs` parallelizes across machines; per-machine step order is preserved. Staging dirs are removed only by the run that created them. The engine must already have paramiko (`python3-paramiko`, baked into the engine template) — the deploy probes and refuses by name rather than installing into the engine's python.
 
 `vendor/nakon` is pinned to a release tag. Bump with `cd vendor/nakon && git checkout vX.Y.Z` and commit the pointer; develop nakon in its own repo.
@@ -237,7 +237,7 @@ sweep; `run-agent-scrim.py` skips it), `.nakon-domain-<team>-*.json` (AD chain p
 - Golden sets are per-competition; tear them down when the run's goal is met. Teams-only teardown is a mid-run mode.
 - Never point a competition's state document at another host or engine vmid: its recorded VMs are not there, so nothing here could own or reclaim them. `gates.check_stale_estate_state` refuses.
 - The competitor packet omits `box_vulns.json` (it would spoil the exercise).
-- Pinned `box_services.json`/`box_vulns.json` make reruns deterministic and enable bundle cache hits.
+- Pinned `box_services.json`/`box_vulns.json` make reruns deterministic.
 - `wait_for_*` helpers poll with timeouts; a phase aborts only when every target is unreachable (systemic), not when one box is slow.
 
 ## Timeouts and parameters
