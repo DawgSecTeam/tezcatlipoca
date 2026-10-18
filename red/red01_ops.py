@@ -24,7 +24,10 @@ NAME = "tlaloc-red01"
 DEFAULT_TEMPLATE = "base-ubuntu24.04-fix"
 # What the agent needs on the box: its config reader and the recon scan. Mythic's own
 # dependencies are Gaia's job.
-DEPS = "python3-yaml cloud-guest-utils lvm2 nmap"
+# python3-paramiko: tlaloc's SSH transport is paramiko (spray_access, the seed, the
+# implant); without it every box action fails with "No module named 'paramiko'" and the
+# day-0 seed plants nothing while exiting 0.
+DEPS = "python3-yaml python3-paramiko cloud-guest-utils lvm2 nmap"
 ROUTE_NOTE = "192.168.0.0/16"
 
 
