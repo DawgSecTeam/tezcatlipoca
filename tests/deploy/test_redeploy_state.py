@@ -1,0 +1,187 @@
+"""The state document's atomic writer and the Linux hardening order in redeploy.
+
+Two incidents drive this file:
+
+* The state document holds the only copy of the box
+  passwords. Three of the four writers (two in redeploy-competition.py, plus the one at
+  the END of engine-recovery, which runs after the scoring DB was already wiped) used a
+  plain `write_text` + `chmod`. A torn write there leaves a live engine with unreadable
+  resume state and no second chance. Every redeploy persistence now goes through the
+  document's atomic writer.
+
+* D3 — docs/architecture.md pins the invariant that the NOPASSWD sudoers grant lands
+  BEFORE the DNS fix, whose `sudo` calls soft-fail until the grant exists. redeploy had
+  them inverted; it "worked" only via fix_dns_on_boxes' root guest-agent fallback, after
+  burning an 8x15s retry ladder per box.
+
+Offline; no Proxmox, no SSH."""
+
+import json
+import os
+import stat
+import sys
+import tempfile
+import unittest
+from contextlib import nullcontext
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO))
+
+from config import config_ops  # noqa: E402  (the one atomic writer; also the torn-write test's patch target)
+import pipeline_api  # noqa: E402
+from estate import state as estate_state  # noqa: E402
+from redeploy import redeploy_engine_ops  # noqa: E402
+from redeploy import redeploy_light_ops  # noqa: E402
+from redeploy import redeploy_plant_ops  # noqa: E402
+from redeploy import redeploy_rebuild_ops  # noqa: E402
+from redeploy.redeploy_context import RedeployContext  # noqa: E402
+
+
+def _rctx(ctx, comp_dir, state=None, state_path=None, node="pve"):
+    return RedeployContext(comp_dir=comp_dir, name="x", comp_name="x", node=node,
+                           teams=None, boxes=None, difficulty=None,
+                           state={} if state is None else state,
+                           state_path=state_path, ctx=ctx)
+
+LINUX_BOX = {"name": "web01", "template": "ubuntu-2204-web", "cpu": 2, "memory_mb": 2048}
+WIN_BOX = {"name": "win01", "template": "windows-server-2022", "cpu": 2, "memory_mb": 4096}
+
+
+def _target(box, vmid):
+    return {
+        "box": box,
+        "box_name": box["name"],
+        "machine": f"{box['name']}-team1",
+        "team_key": "team1",
+        "identifier": 104,
+        "ip": f"192.168.104.{vmid % 250}",
+        "vmid": vmid,
+        "vm_name": f"{box['name']}-team1",
+    }
+
+
+LINUX = _target(LINUX_BOX, 2104)
+WIN = _target(WIN_BOX, 2105)
+
+ORIGINAL_STATE = {"box_password": "old-secret", "engine_template_vmid": 9100}
+NEW_STATE = {"box_password": "new-secret", "teams": {"team1": {"password": "t1"}}}
+
+
+# The state file is swapped in whole, is 0600 from the instant it exists, and a
+# failed write can never damage the copy already on disk.
+class AtomicStateWriteTests(unittest.TestCase):
+    # One writer in the tree, not a local copy per call site: every redeploy persistence
+    # goes through the document's atomic writer.
+
+
+    # The torn-write proof: at the instant of the rename, the destination still
+    # holds the COMPLETE previous state and the temporary holds the COMPLETE new one.
+    # A reader therefore sees old-or-new, never a partial. The old write_text() code
+    # truncated the destination first, which is exactly the state this rules out.
+    def test_target_is_only_replaced_after_the_new_content_is_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "estate-state.json"
+            path.write_text(json.dumps(ORIGINAL_STATE))
+            os.chmod(path, 0o600)
+            original_bytes = path.read_bytes()
+
+            real_replace = os.replace
+            seen = {}
+
+            def spy(src, dst):
+                seen["target_at_swap"] = Path(dst).read_bytes()
+                seen["tmp_at_swap"] = json.loads(Path(src).read_text())
+                return real_replace(src, dst)
+
+            with patch("os.replace", side_effect=spy):
+                config_ops.write_state(path, NEW_STATE)
+
+            self.assertEqual(seen["target_at_swap"], original_bytes)
+            self.assertEqual(seen["tmp_at_swap"], NEW_STATE)
+            self.assertEqual(json.loads(path.read_text()), NEW_STATE)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    # Simulated crash right before the rename: the resume state a live range
+    # depends on must still be readable, byte for byte.
+
+
+
+class StateWriteCallSiteTests(unittest.TestCase):
+
+
+    # This is the D1 site: the write runs last, after the engine was re-cloned and
+    # the scoring DB wiped. It must also clear the stale phase-7 done-flags.
+    def test_engine_recovery_persists_via_helper_after_clearing_phase7_flags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp_dir = Path(tmp)
+            state = {
+                "engine_template_vmid": 9100,
+                "box_password": "pw",
+                "postgres_password": "pg",
+                "redis_password": "rd",
+                "admin_password": "ad",
+                "scoring_vm_id": 1000,
+                "seeded": True,
+                "engine_unpaused": True,
+                "injects_created": True,
+            }
+            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}), \
+                 patch.object(redeploy_engine_ops, "acquire_engine_lock"), \
+                 patch.object(redeploy_engine_ops, "stored_template_hash", return_value="abc"), \
+                 patch.object(redeploy_engine_ops, "args_yes_engine_recovery", return_value=True), \
+                 patch.object(redeploy_engine_ops, "timed", return_value=nullcontext()), \
+                 patch.object(redeploy_engine_ops, "_replace_engine"), \
+                 patch.object(redeploy_engine_ops, "_address_engine"), \
+                 patch.object(pipeline_api, "engine_ctx",
+                              return_value={"scoring_engine_ip": "10.0.0.9",
+                                            "ssh_key_path": "/k", "vm_username": "ops"}), \
+                 patch.object(redeploy_engine_ops, "forget_engine_host_key"), \
+                 patch.object(redeploy_engine_ops, "wait_for_ssh"), \
+                 patch.object(redeploy_engine_ops, "prepare_engine_from_template"), \
+                 patch.object(redeploy_engine_ops, "push_event_conf"), \
+                 patch.object(redeploy_engine_ops, "ensure_nat_forwarding"), \
+                 patch.object(redeploy_engine_ops.estate_state, "write_flat") as p_write:
+                self.assertTrue(redeploy_engine_ops.engine_recovery(
+                    "comp", comp_dir, {"team1": {}}, [LINUX], state, assume_yes=True))
+
+        p_write.assert_called_once_with(comp_dir, state)
+        for flag in ("seeded", "engine_unpaused", "injects_created"):
+            self.assertNotIn(flag, state)
+
+
+# D3: the sudoers grant must land before the DNS fix (docs/architecture.md).
+class HardeningOrderTests(unittest.TestCase):
+    def _run(self, targets):
+        ctx = {"ssh_key_path": "/tmp/id_ed25519", "scoring_engine_ip": "10.0.0.9"}
+        order = []
+        with tempfile.TemporaryDirectory() as tmp:
+            comp_dir = Path(tmp)
+            with patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
+                 patch.object(pipeline_api, "setup_ubuntu_auth") as p_auth, \
+                 patch.object(pipeline_api, "fix_dns_on_boxes") as p_dns, \
+                 patch.object(pipeline_api, "ensure_nat_forwarding"), \
+                 patch.object(pipeline_api, "run_nakon",
+                              return_value=MagicMock(failed=[])), \
+                 patch.object(pipeline_api, "fix_services_on_boxes"):
+                p_auth.side_effect = lambda *a, **k: order.append("auth")
+                p_dns.side_effect = lambda *a, **k: order.append("dns")
+                cfg = comp_dir / "nakon-config.json"
+                cfg.write_text(json.dumps(
+                    {"machines": [{"name": t["machine"]} for t in targets]}))
+                redeploy_plant_ops.run_nakon_and_harden(
+                    targets, _rctx(ctx, comp_dir), cfg, comp_dir / "bundle")
+        return order, p_auth, p_dns
+
+    def test_auth_grant_lands_before_the_dns_fix(self):
+        order, p_auth, p_dns = self._run([LINUX])
+        self.assertEqual(order, ["auth", "dns"])
+        # Same linux-scoped target list for both — the order is the only change.
+        self.assertEqual(p_auth.call_args.args[0], [LINUX])
+        self.assertEqual(p_dns.call_args.args[0], [LINUX])
+
+
+
+if __name__ == "__main__":
+    unittest.main()

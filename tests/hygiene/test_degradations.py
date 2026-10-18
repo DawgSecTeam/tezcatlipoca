@@ -1,0 +1,95 @@
+"""Tolerated-failure ledger.
+
+The deploy deliberately continues past some failed prerequisites — each site has its own
+reason. The problem was that the fact existed only as a WARNING line in a scrollback:
+"apt prep failed", "DNS fix failed", "box never settled". That is how a range comes up
+looking green with every service down, and why nakon's silent install failures had no
+named cause. Each one lands in the state document as `degradations`, gets one summary
+at the end of the deploy, and verify reads it back.
+
+Offline throughout.
+"""
+
+import contextlib
+import io
+import sys
+import tempfile
+import types
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO))
+from deploy_lib import failure as dl_failure  # noqa: E402
+from guests import apt_dns_ops  # noqa: E402
+from common import ssh_ops  # noqa: E402
+from common import utils  # noqa: E402
+
+
+class Ledger(unittest.TestCase):
+    def setUp(self):
+        utils.clear_degradations()
+        self.addCleanup(utils.clear_degradations)
+
+    def test_records_and_summarises_with_counts(self):
+        utils.record_degradation("apt prep failed", "192.168.1.5: rc=100")
+        utils.record_degradation("apt prep failed", "192.168.1.5: rc=100")
+        utils.record_degradation("DNS fix failed", "192.168.1.6: timeout")
+        summary = utils.degradation_summary()
+        by_what = {item["what"]: item for item in summary}
+        self.assertEqual(by_what["apt prep failed"]["count"], 2)
+        self.assertEqual(by_what["DNS fix failed"]["count"], 1)
+        self.assertEqual(len(utils.degradations()), 3)   # raw entries are not collapsed
+
+
+
+
+class DeployPersists(unittest.TestCase):
+    def setUp(self):
+        utils.clear_degradations()
+        self.addCleanup(utils.clear_degradations)
+
+    def _ctx(self, comp_dir):
+        return types.SimpleNamespace(state={}, comp_name="probe", comp_dir=comp_dir)
+
+    def test_a_clean_run_records_an_empty_ledger(self):
+    # Verify must be able to tell "clean" from "never ran". A live
+    #         run left the key absent and verify reported it as a pre-ledger state file.
+        with tempfile.TemporaryDirectory() as d:
+            ctx = self._ctx(Path(d))
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                dl_failure.record_degradations(ctx)
+        self.assertEqual(ctx.state["degradations"], [])
+        self.assertNotIn("tolerated", out.getvalue())   # nothing to print
+
+
+
+class TheSiteActuallyRecords(unittest.TestCase):
+# The wiring is the point: the ledger is worthless if no site feeds it.
+
+    def setUp(self):
+        utils.clear_degradations()
+        self.addCleanup(utils.clear_degradations)
+
+    def test_a_failed_apt_prep_records_a_degradation(self):
+        target = {"ip": "192.168.1.5", "vmid": 1150, "identifier": 210}
+        failed = types.SimpleNamespace(returncode=1, stdout="", stderr="E: lock held")
+        with patch.dict("os.environ", {"TEZ_PROXMOX_NODE": "pve"}), \
+                patch.object(ssh_ops.subprocess, "run", return_value=failed), \
+                patch.object(ssh_ops.time, "sleep"), \
+                patch.object(apt_dns_ops, "guest_agent_exec_root",
+                             return_value=(100, "", "no space left")), \
+                patch.object(ssh_ops, "gateway_proxy", return_value=None), \
+                patch.object(apt_dns_ops, "wait_for_guest_agent", return_value=False), \
+                patch.object(apt_dns_ops, "wait_boxes_settled", return_value=[]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            apt_dns_ops.prep_apt_on_boxes([target], {"ssh_key_path": "/k"})
+        whats = [entry["what"] for entry in utils.degradations()]
+        self.assertIn("apt prep failed", whats)
+        detail = " ".join(entry["detail"] for entry in utils.degradations())
+        self.assertIn("192.168.1.5", detail)
+
+
+if __name__ == "__main__":
+    unittest.main()

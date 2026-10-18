@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Every cross-process lock the pipeline takes (engine, scrim, storage queue) lives under
 # Path.home()/.tezcatlipoca/locks. A test that exercises a locked path would otherwise contend

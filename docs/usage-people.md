@@ -71,7 +71,7 @@ entrypoints (python-dotenv: `deploy.py`, `destroy-competition.py`, `redeploy-com
 canonical `TEZ_*` names, so it is one more source for a key's value and it beats the profile. Every
 accepted env name is derived from `estate/config.py`'s `_SPEC` (`TEZ_` + the key upper-cased, dots as
 underscores); `NAKON_*`/`VULNDB_*` are vendored-tool config. Any other env var the code reads must
-be in `tests/test_secret_hygiene.py`'s `INTERNAL_ENV` with a reason; that test keeps this table
+be in `tests/hygiene/test_secret_hygiene.py`'s `INTERNAL_ENV` with a reason; that test keeps this table
 honest. The dashboard/portal handoff variables (`TEZ_DASHBOARD_*`, `TEZ_OPS_*`, `PORTAL_*`) are
 `INTERNAL_ENV`, not part of this operator surface.
 

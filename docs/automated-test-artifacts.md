@@ -45,7 +45,7 @@ does **not** create a second folder.
 The whole tree is **gitignored, with no publish path** (`.gitignore` +
 `test_no_test_artifact_is_tracked`). These files quote flags, credentials and inject answers by
 construction: the red report ships a separate 0600 credlist table, and a password quoted in prose is
-exactly what `tests/test_secret_hygiene.py`'s pattern net cannot catch. A recommendation leaves this
+exactly what `tests/hygiene/test_secret_hygiene.py`'s pattern net cannot catch. A recommendation leaves this
 folder by being written into [known-issues.md](known-issues.md) or a fixes plan, never by adding the
 artifact to git.
 

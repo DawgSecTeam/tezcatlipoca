@@ -84,7 +84,7 @@ enforced server-side:
 - The portal listens on `127.0.0.1` only; nothing is reachable from team subnets. cloudflared
   dials out.
 
-Pinned by `tests/test_portal_app.py`.
+Pinned by `tests/portal/test_portal_app.py`.
 
 ### The console token
 
@@ -183,7 +183,7 @@ picks up the new secret.
 `portal/frontend/` shares the management UI's stack (React 19, Vite, Tailwind 4) and design.
 `src/components/ui.jsx`/`kit.jsx` and `src/index.css` are verbatim copies of
 `tezcatlipoca-dashboard/web/src/components/` (the shared kit's original home; plus portal-only rules) rather than cross-tree imports, because
-the image builds on the engine from `portal/` alone. `tests/test_portal_frontend.py` pins the
+the image builds on the engine from `portal/` alone. `tests/portal/test_portal_frontend.py` pins the
 noVNC release tarball's integrity hash; it doesn't check the copies for drift.
 
 - **Views**: `/` is sign-in, then the team hub (VPN setup panel when remote access is on, the
@@ -205,4 +205,4 @@ noVNC release tarball's integrity hash; it doesn't check the copies for drift.
 `127.0.0.1` listener the way cloudflared reaches it: health; a team login sees exactly its own
 boxes; the gate (423 while closed); a cross-team console request refused (403); an admin login;
 per node, one console relayed far enough to read the `RFB 003.` greeting; that relay id refused on
-reuse. Offline coverage: `tests/test_portal_*.py`, `tests/test_pve_console_ops.py`.
+reuse. Offline coverage: `tests/portal/test_portal_*.py`, `tests/portal/test_pve_console_ops.py`.
