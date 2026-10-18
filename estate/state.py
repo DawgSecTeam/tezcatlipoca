@@ -132,6 +132,19 @@ class EstateState:
         return flat
 
 
+def clear_teardown_journal(comp_dir):
+    """Forget a previous range's teardown progress.
+
+    A redeploy reuses the competition's run id, so the journal's own run-id check cannot
+    tell the new range from the retired one — and its "done" entries would skip this
+    range's evidence collection and red verdict.
+    """
+    document = EstateState.load(comp_dir)
+    if document.data.get("teardown"):
+        document.data["teardown"] = {}
+        document.save()
+
+
 def load_all(comps_root):
     return [EstateState.load(path.parent)
             for path in sorted(Path(comps_root).glob(f"*/{STATE_NAME}"))]

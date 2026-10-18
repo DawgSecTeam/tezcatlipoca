@@ -140,3 +140,12 @@ class AnchoredPaths(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def test_a_redeploy_forgets_the_previous_ranges_teardown_journal(tmp_path):
+    from estate import state
+    state.clear_teardown_journal(tmp_path)          # nothing to clear: no document written
+    document = state.EstateState.load(tmp_path)
+    document.data["teardown"] = {"run_id": "run-1", "done": {"artifacts": {"detail": "x"}}}
+    document.save()
+    state.clear_teardown_journal(tmp_path)
+    assert state.EstateState.load(tmp_path).data["teardown"] == {}

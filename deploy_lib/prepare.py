@@ -65,6 +65,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
 #     already-deployed comp rotated state while the engine kept the originals). Resumes
 #     keep the gate where it was relative to their carried (not minted) credentials.
     ctx = DeployContext(comp_dir=comp_dir, from_phase=from_phase, assume_yes=assume_yes)
+    from estate import state as estate_state
+    estate_state.clear_teardown_journal(comp_dir)
     resolve_engine_vmid(ctx, comp_dir, from_phase, scoring_vmid)
     # (The engine lock itself is taken further down — multi-node placement must point
     # the env at the engine's host first, and that needs teams+boxes resolved.)
