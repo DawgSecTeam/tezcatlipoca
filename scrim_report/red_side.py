@@ -6,6 +6,23 @@ from scrim_report import timefmt
 
 HEALTH_CHECK = "health_check"
 
+# tlaloc v2 (the in-tree red engine) writes `effect` + `params` where v1 wrote
+# `tactic` + `data`: a v2 action is {"kind":"action","effect":"takedown",
+# "params":{"ip":…,"service":…,"mode":…}}. Reading only the v1 shape reports a
+# fully working red team as "takedowns 0, distinct tactics 1, targets none" —
+# live run-8240b93c: 16 real takedowns, one gate table reading zero.
+V2_IMPACT_EFFECTS = ("takedown", "block_port")
+V2_INITIAL_ACCESS_EFFECTS = ("spray_access", "reestablish")
+
+
+def action_effect(ev):
+    """The tactic name for either schema (v1 `tactic`, v2 `effect`)."""
+    return ev.get("tactic") or ev.get("effect") or "?"
+
+
+def action_target(ev):
+    return ev.get("target") or (ev.get("params") or {}).get("ip") or None
+
 
 STALL_SEC = 600
 
@@ -14,7 +31,7 @@ REAKILL_GAP_SEC = 900
 
 
 def takedown_fields(ev):
-    data = ev.get("data") or {}
+    data = ev.get("data") or ev.get("params") or {}
     detail = ev.get("detail", "")
     ip = data.get("ip") or ev.get("target")
     svc = data.get("unit") or data.get("service")
@@ -25,7 +42,7 @@ def takedown_fields(ev):
     if not ip:
         m = re.search(r"(\d+\.\d+\.\d+\.\d+)", detail)
         ip = m.group(1) if m else None
-    return ip, svc, mode or ("firewall" if ev.get("tactic") == "impact_firewall" else "stop")
+    return ip, svc, mode or ("firewall" if action_effect(ev) == "impact_firewall" else "stop")
 
 
 def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
@@ -37,13 +54,28 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
     prev_evicted = 0
     for ev in events:
         if ev.get("kind") != "action":
-            if ev.get("kind") == "blue_restore":
-                m["blue_restore_events"] += 1
-                m["blue_restore_list"].append(
-                    (timefmt.t_plus(timefmt.parse_ts(ev.get("ts", "1970")), t0), ev.get("team") or "?",
-                     ev.get("target") or "", ev.get("detail", "")))
+            if ev.get("kind") in ("blue_restore", "blue_restores"):
+                # v1 writes one row per restore (target/detail); v2 batches them
+                # under "restores": [{"team","service"}] with service "<box>-<pin>".
+                # Recognising only the v1 spelling reads every v2 restore as absent
+                # — the interaction gate then scores 0 restorations for a blue team
+                # that logged five.
+                entries = ev.get("restores")
+                if isinstance(entries, list) and entries:
+                    for item in entries:
+                        m["blue_restore_events"] += 1
+                        m["blue_restore_list"].append(
+                            (timefmt.t_plus(timefmt.parse_ts(ev.get("ts", "1970")), t0),
+                             (item or {}).get("team") or "?",
+                             (item or {}).get("target") or "",
+                             (item or {}).get("service") or (item or {}).get("detail") or ""))
+                else:
+                    m["blue_restore_events"] += 1
+                    m["blue_restore_list"].append(
+                        (timefmt.t_plus(timefmt.parse_ts(ev.get("ts", "1970")), t0), ev.get("team") or "?",
+                         ev.get("target") or "", ev.get("detail", "")))
             continue
-        tactic = ev.get("tactic", "?")
+        tactic = action_effect(ev)
         ok = bool(ev.get("ok"))
         m["actions_ok" if ok else "actions_failed"] += 1
         # health_check's detail carries the agent's own eviction tally ("N footholds
@@ -55,16 +87,17 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
                 if cur > prev_evicted:
                     m["evictions"] += cur - prev_evicted
                 prev_evicted = cur
-        ip = ev.get("target")
+        ip = action_target(ev)
         tp = timefmt.t_plus(timefmt.parse_ts(ev.get("ts", "1970")), t0)
         if ok and tactic != HEALTH_CHECK:
             m["distinct_tactics"].add(tactic)
             if ip:
                 m["targets"].add(ip)
-            if tactic in ("cred_spray", "foothold_ssh"):
+            if tactic in ("cred_spray", "foothold_ssh", *V2_INITIAL_ACCESS_EFFECTS):
                 m["initial_access"].add((tactic, ip))
             ok_stamps.append(tp)
-        if ok and tactic in ("impact_service", "impact_firewall"):
+        if ok and (tactic in ("impact_service", "impact_firewall")
+                   or ev.get("effect") in V2_IMPACT_EFFECTS):
             dip, svc, mode = takedown_fields(ev)
             dip = dip or ip
             m["takedowns"] += 1
