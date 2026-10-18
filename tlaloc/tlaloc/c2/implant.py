@@ -115,10 +115,18 @@ class Planter:
         names_drawn = names.linux_names(self.ctx.world, rng=self.ctx.rng,
                                        mode=names.mode_from_cfg(self.ctx.cfg))
         unit = names_drawn["unit"]
+        stage = f"/tmp/{names_drawn['stem']}"
         remote = f"/usr/local/lib/{names_drawn['stem']}/{box_id}"
+        rc, _out, err = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
+                                         f"mkdir -p {stage}", timeout=60,
+                                         key_path=fh.get("key_path"))
+        if rc != 0:
+            return {"ok": False, "detail": f"payload staging dir on {ip} failed: "
+                            f"{(err or _out).strip()[:200]}", "paths": [remote]}
         try:
             self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
-                                  remote, mode=0o755, key_path=fh.get("key_path"))
+                                  f"{stage}/{box_id}", mode=0o755,
+                                  key_path=fh.get("key_path"))
         except Exception as exc:                       # transport blowups are data
             return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
                     "paths": [remote]}
@@ -130,10 +138,15 @@ class Planter:
             f"ExecStart={remote}\n"
             "Restart=always\nRestartSec=15\n\n"
             "[Install]\nWantedBy=multi-user.target\n")
+        # /usr/local/lib and /etc/systemd are root-owned: stage as the user, install
+        # with the box's NOPASSWD sudo.
         script = ("set -e\n"
-                  f"cat > /etc/systemd/system/{unit} <<'EOF'\n{unit_text}EOF\n"
-                  "systemctl daemon-reload\n"
-                  f"systemctl enable --now {unit}\n"
+                  f"sudo -n mkdir -p /usr/local/lib/{names_drawn['stem']}\n"
+                  f"sudo -n mv {stage}/{box_id} {remote}\n"
+                  f"sudo -n chmod 755 {remote}\n"
+                  f"sudo -n tee /etc/systemd/system/{unit} >/dev/null <<'EOF'\n{unit_text}EOF\n"
+                  "sudo -n systemctl daemon-reload\n"
+                  f"sudo -n systemctl enable --now {unit}\n"
                   f"systemctl is-active {unit}\n")
         rc, out, err = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
                                        script, timeout=120,
