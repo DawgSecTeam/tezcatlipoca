@@ -175,6 +175,26 @@ def operation_argv(path, name):
     return gaia_argv(path, "operation", "create", "-n", str(name))
 
 
+def assign_argv(path, operation, users):
+    return gaia_argv(path, "operation", "assign", "-o", str(operation),
+                     "-u", *[str(u) for u in users])
+
+
+def mythic_answering(box_ip, runner, timeout=8):
+    """Whether the C2 box already serves Mythic's health endpoint.
+
+    A resume must not re-run the installer: it rebuilds every agent/profile image
+    (15+ minutes) and, if it races another install, can wedge the stack.
+    """
+    try:
+        proc = runner(["curl", "-sk", "-m", str(timeout), "-o", "/dev/null",
+                       "-w", "%{http_code}", f"https://{box_ip}:7443/health"],
+                      timeout=timeout + 2)
+    except Exception:                                   # noqa: BLE001 - probe only
+        return False
+    return getattr(proc, "stdout", "").strip() == "200"
+
+
 def clone_argv(path, ref=GAIA_REF, repo=GAIA_REPO):
     return ["git", "clone", "--depth", "1", "--branch", str(ref), str(repo),
             str(Path(path))]
@@ -440,13 +460,17 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
         return result
 
     cwd = str(path)
-    proc = runner(install_argv(path, box_ip, ssh_user, key=ssh_key),
-                  cwd=cwd, timeout=INSTALL_TIMEOUT)
-    result["reached"].append("install")
-    result["gaia_output"]["install"] = _tail(proc, 2000)
-    if getattr(proc, "returncode", 1) != 0:
-        result["degradations"].append(f"gaia install: {_tail(proc)}")
-        return result
+    if mythic_answering(box_ip, runner):
+        result["reached"].append("install (already running)")
+        result["gaia_output"]["install"] = "skipped: Mythic answered /health"
+    else:
+        proc = runner(install_argv(path, box_ip, ssh_user, key=ssh_key),
+                      cwd=cwd, timeout=INSTALL_TIMEOUT)
+        result["reached"].append("install")
+        result["gaia_output"]["install"] = _tail(proc, 2000)
+        if getattr(proc, "returncode", 1) != 0:
+            result["degradations"].append(f"gaia install: {_tail(proc)}")
+            return result
 
     creds = path / "mythic_admin_creds.txt"
     try:
@@ -519,6 +543,14 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
     result["gaia_output"]["operation"] = _tail(proc, 300)
     if getattr(proc, "returncode", 1) != 0:
         result["degradations"].append(f"gaia operation create: {_tail(proc)}")
+
+    # An operator outside the operation sees a Hasura schema without the actions (no
+    # createPayload), which surfaced only as "field not found in mutation_root".
+    proc = runner(assign_argv(path, name, [agent_user]), cwd=cwd, timeout=SHORT_TIMEOUT)
+    result["reached"].append("assign")
+    result["gaia_output"]["assign"] = _tail(proc, 300)
+    if getattr(proc, "returncode", 1) != 0:
+        result["degradations"].append(f"gaia operation assign: {_tail(proc)}")
 
     result["api_key"] = parse_env_value(
         _read(path / ".env"), "MYTHIC_API_KEY")

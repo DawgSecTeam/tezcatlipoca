@@ -7,7 +7,7 @@ This module is deliberately thin and injectable (`http=` for auth/download,
 `graphql=` for the data calls) so the whole C2 path is testable offline:
 
     POST /auth                                  -> {access_token, ...}
-    POST /graphql  callback(...)                -> [callback rows]
+    POST /graphql/ callback(...)                -> [callback rows]
     POST /graphql  createTask(...)              -> {id: <task id>}
     POST /graphql  task(...) + response(...)    -> task row (status, output)
     POST /graphql  createPayload(definition)    -> {uuid: ...}
@@ -32,6 +32,9 @@ from ..errors import C2Error
 
 DEFAULT_TRANSPORTS = ("http", "webhook")
 AGENT_BY_OS = {"linux": "poseidon", "windows": "apollo"}
+# Mythic matches `selected_os` against the payload type's supported_os strings, which are
+# capitalised ("Linux", "Windows", "macOS") — "linux" is rejected as unsupported.
+OS_NAME = {"linux": "Linux", "windows": "Windows", "macos": "macOS"}
 
 # Task statuses that mean the task is finished. Mythic reports `submitted`
 # while a task is only QUEUED, so treating it as terminal reported an empty
@@ -122,14 +125,16 @@ class MythicClient:
         if not self._token:
             self.login()
         import requests                                     # lazy
+        # nginx exposes the Hasura schema at /graphql/ (no slash is a 301, and a POST
+        # that follows it loses its body), so the trailing slash is load-bearing.
         response = requests.post(
-            f"{self.base_url}/graphql",
+            f"{self.base_url}/graphql/",
             json={"query": query, "variables": variables or {}},
             headers={"Authorization": f"Bearer {self._token}",
                      "Content-Type": "application/json"},
             timeout=self.timeout, verify=self.verify_tls)
         if response.status_code >= 400:
-            raise C2Error(f"POST /graphql -> HTTP {response.status_code}: "
+            raise C2Error(f"POST /graphql/ -> HTTP {response.status_code}: "
                           f"{response.text[:200]}")
         body = response.json()
         if body.get("errors"):
@@ -314,7 +319,8 @@ query Payload($uuid: String!) {
         params = self.profile_parameters(extra)
         if params:
             profile["c2_profile_parameters"] = params
-        definition = {"selected_os": os_name, "filename": f"{box_id}-{transport}.bin",
+        definition = {"selected_os": OS_NAME.get(os_name.lower(), os_name),
+                      "filename": f"{box_id}-{transport}.bin",
                       "description": box_id, "payload_type": agent,
                       "commands": [], "c2_profiles": [profile],
                       "build_parameters": []}
@@ -343,19 +349,35 @@ query Payload($uuid: String!) {
         """What a built payload was told to dial (recorded in the manifest)."""
         return {"host": self.callback_host, "port": self.callback_port}
 
+    def wait_for_payload(self, uuid, timeout=600, poll_interval=3.0):
+        """Poll until the payload's build finishes; a build is asynchronous."""
+        deadline = self._now() + timeout
+        last = {}
+        while self._now() < deadline:
+            last = self.payload_status(uuid)
+            phase = str(last.get("build_phase") or "").lower()
+            if phase == "built":
+                return last
+            if phase in ("error", "failed"):
+                raise C2Error(f"payload {uuid} build {phase}: "
+                              f"{(last.get('build_message') or '')[:300]}")
+            time.sleep(poll_interval)
+        raise C2Error(f"payload {uuid} still {last.get('build_phase')!r} after {timeout}s")
+
     def payload_status(self, uuid):
         data = self._graphql_call(self.PAYLOAD_QUERY, {"uuid": uuid})
         rows = data.get("payload") or []
         return rows[0] if rows and isinstance(rows[0], dict) else {}
 
-    def download_payload(self, uuid, path):
-        status = self.payload_status(uuid)
+    def download_payload(self, uuid, path, timeout=600):
+        status = self.wait_for_payload(uuid, timeout=timeout)
         file_id = (status.get("filemetum") or {}).get("agent_file_id")
         if not file_id:
-            raise C2Error(f"payload {uuid} has no built file yet "
-                          f"(build phase {status.get('build_phase')}: "
-                          f"{status.get('build_message') or 'building'})")
+            raise C2Error(f"payload {uuid} built without a file id")
         blob = self._request("GET", f"/direct/download/{file_id}", raw=True)
+        if not blob:
+            raise C2Error(f"payload {uuid} downloaded 0 bytes from "
+                          f"/direct/download/{file_id}")
         with open(path, "wb") as fh:
             fh.write(blob)
         return path

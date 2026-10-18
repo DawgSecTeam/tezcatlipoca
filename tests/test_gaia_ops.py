@@ -239,7 +239,7 @@ class PrepareTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result, runner = self._prepared(tmp)
             assert result["ok"] is True, result["degradations"]
-            assert result["reached"] == ["install", "auth", "user", "operation"]
+            assert result["reached"] == ["install", "auth", "user", "operation", "assign"]
             assert result["api_key"] == "api-key-123"
             assert result["c2"]["base_url"] == "https://10.0.0.198:7443"
             assert result["c2"]["operation"] == Path(tmp).name
@@ -344,3 +344,27 @@ class PrepareTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ResumedInstall(unittest.TestCase):
+    def test_a_healthy_c2_skips_the_installer(self):
+        class HealthyRunner(Runner):
+            def __call__(self, argv, **kwargs):
+                if str(argv[0]) == "curl":
+                    self.calls.append({"argv": [str(a) for a in argv], "kwargs": kwargs})
+                    return Completed(0, "200")
+                return super().__call__(argv, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = comp_dir(tmp, "firewall_dnat 4470->10.0.0.198\n")
+            gaia = Path(tmp) / "gaia"
+            gaia.mkdir()
+            (gaia / "gaia.py").write_text("")
+            (gaia / "requirements.txt").write_text("mythic==0.2.11\n")
+            runner = HealthyRunner(gaia)
+            result = g.prepare_mythic(comp, box_ip="10.0.0.198", ssh_user="sysadmin",
+                                      ssh_key="/keys/deploy", runner=runner, gaia=gaia,
+                                      callback_host="http://172.31.2.1",
+                                      callback_port=4470, log=None)
+        self.assertIn("install (already running)", result["reached"])
+        self.assertFalse(any(len(c["argv"]) > 2 and c["argv"][1].endswith("gaia.py")
+                             and "install" in c["argv"] for c in runner.calls))

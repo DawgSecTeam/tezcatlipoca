@@ -338,7 +338,7 @@ def test_build_payload_carries_the_callback_address():
     assert entry["uuid"] == "uuid-1" and entry["callback"] == {"host": "http://172.31.2.1",
                                                                "port": 8000}
     assert definition["build_parameters"] == []
-    assert definition["selected_os"] == "linux" and definition["commands"] == []
+    assert definition["selected_os"] == "Linux" and definition["commands"] == []
 
 
 def test_build_payload_without_a_callback_keeps_the_profile_default():
@@ -352,4 +352,36 @@ def test_build_payload_without_a_callback_keeps_the_profile_default():
     profile = definition["c2_profiles"][0]
     assert "c2_profile_parameters" not in profile
     assert definition["payload_type"] == "apollo"
-    assert definition["selected_os"] == "windows"
+    assert definition["selected_os"] == "Windows"
+
+
+def test_download_waits_for_the_build_and_writes_the_file(tmp_path):
+    graphql = StubGQL({"payload(where": Seq([
+        {"payload": [{"uuid": "u1", "build_phase": "building",
+                      "filemetum": {"agent_file_id": "f1"}}]},
+        {"payload": [{"uuid": "u1", "build_phase": "built",
+                      "filemetum": {"agent_file_id": "f1"}}]},
+    ])})
+    http = StubHTTP({("GET", "/direct/download/f1"): b"\x7fELF"})
+    client = MythicClient(c2_cfg(), graphql=graphql, http=http, now=lambda: 0.0)
+    path = tmp_path / "payload.bin"
+    client.download_payload("u1", path, timeout=30)
+    assert path.read_bytes() == b"\x7fELF"
+
+
+def test_a_failed_build_is_not_a_download(tmp_path):
+    graphql = StubGQL({"payload(where": {"payload": [
+        {"uuid": "u1", "build_phase": "error", "build_message": "apt broke"}]}})
+    client = MythicClient(c2_cfg(), graphql=graphql, now=lambda: 0.0)
+    with pytest.raises(C2Error, match="apt broke"):
+        client.download_payload("u1", tmp_path / "p.bin")
+
+
+def test_an_empty_download_is_a_failure_not_an_artifact(tmp_path):
+    graphql = StubGQL({"payload(where": {"payload": [
+        {"uuid": "u1", "build_phase": "built",
+         "filemetum": {"agent_file_id": "f1"}}]}})
+    http = StubHTTP({("GET", "/direct/download/f1"): b""})
+    client = MythicClient(c2_cfg(), graphql=graphql, http=http, now=lambda: 0.0)
+    with pytest.raises(C2Error, match="0 bytes"):
+        client.download_payload("u1", tmp_path / "p.bin")
