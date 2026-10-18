@@ -35,7 +35,6 @@ CONFIG_CONTRACT = (
     "c2.enabled",
     "c2.operation",
     "c2.password_env",
-    "c2.plant_wait_sec",
     "c2.task_timeout_sec",
     "c2.username",
     "c2.verify_tls",

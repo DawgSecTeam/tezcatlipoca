@@ -116,7 +116,6 @@ DEFAULTS = {
         "callback_port": 0,
         # implant_channel waits this long for a fresh callback after a plant;
         # task_channel bounds one task's polling with task_timeout_sec.
-        "plant_wait_sec": 45,
         "task_timeout_sec": 120,
     },
     "sensors": {

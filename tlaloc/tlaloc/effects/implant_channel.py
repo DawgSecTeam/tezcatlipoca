@@ -58,7 +58,10 @@ class ImplantChannel(Effect):
         planter = Planter(ctx, comp_dir=ctx.cfg["run"].get("comp_dir"),
                           manifest=getattr(ctx, "payload_manifest", None))
         info = planter.plant(ip, box_id, transport=params.get("transport"))
-        wait = int(ctx.cfg["c2"].get("plant_wait_sec", 45))
+        # One window for every implant path: a freshly installed Mythic takes
+        # MINUTES for the first check-in, and the old 45s default reported
+        # "no callback" on boxes that were live two minutes later.
+        wait = int(ctx.cfg["c2"].get("callback_wait_sec", 120))
         detail = info.get("detail", "")
         channel = ("callback observed" if info.get("callback_seen")
                    else f"no callback within {wait}s")
@@ -72,11 +75,23 @@ class ImplantChannel(Effect):
                                  "detail": outcome,
                                  "check_cmd": info.get("check_cmd"),
                                  "paths": info.get("paths") or []}]
-            result.restore = {
-                "recipe": [f"systemctl disable --now {info.get('unit')}" if not
-                           ctx.is_windows(ip) else
-                           f"Stop-Service '{info.get('unit')}'; "
-                           f"Remove-Service -Name '{info.get('unit')}'",
-                           f"rm -f {' '.join(info.get('paths') or ['<payload>'])}"],
-                "secrets": None}
+            if ctx.is_windows(ip):
+                # A task, not a service: undo is end+delete the task, remove the
+                # binary, and put back the Defender exclusions the plant added.
+                task = info.get("unit")
+                defender = info.get("defender") or {}
+                recipe = [f'schtasks /End /TN "{task}"',
+                          f'schtasks /Delete /TN "{task}" /F',
+                          f"Remove-Item -Path '{defender.get('path', '<dir>')}' "
+                          f"-Recurse -Force"]
+                if defender.get("path"):
+                    recipe.append(f"Remove-MpPreference -ExclusionPath "
+                                  f"'{defender['path']}'")
+                if defender.get("process"):
+                    recipe.append(f"Remove-MpPreference -ExclusionProcess "
+                                  f"'{defender['process']}'")
+            else:
+                recipe = [f"systemctl disable --now {info.get('unit')}",
+                          f"rm -f {' '.join(info.get('paths') or ['<payload>'])}"]
+            result.restore = {"recipe": recipe, "secrets": None}
         return result

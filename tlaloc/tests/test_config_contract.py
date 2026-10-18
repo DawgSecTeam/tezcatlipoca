@@ -21,7 +21,7 @@ from tlaloc.effects import MODULES
 # keeps the inventory honest rather than the reader's memory).
 EFFECT_CONFIG_KEYS = {
     "c2.callback_max_age_sec": {"implant_channel", "lockout", "reestablish", "task_channel"},
-    "c2.plant_wait_sec": {"implant_channel"},
+    "c2.callback_wait_sec": {"implant_channel"},
     "c2.task_timeout_sec": {"task_channel"},
     "effects.allow_ssh_takedown": {"takedown"},
     "effects.decoy": {"persist_linux"},

