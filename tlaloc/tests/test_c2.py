@@ -369,6 +369,17 @@ def test_download_waits_for_the_build_and_writes_the_file(tmp_path):
     assert path.read_bytes() == b"\x7fELF"
 
 
+def test_a_success_phase_is_a_finished_build(tmp_path):
+    graphql = StubGQL({"payload(where": {"payload": [
+        {"uuid": "u1", "build_phase": "success",
+         "filemetum": {"agent_file_id": "f1"}}]}})
+    http = StubHTTP({("GET", "/direct/download/f1"): b"\x7fELF"})
+    client = MythicClient(c2_cfg(), graphql=graphql, http=http, now=lambda: 0.0)
+    path = tmp_path / "p.bin"
+    client.download_payload("u1", path)
+    assert path.read_bytes() == b"\x7fELF"
+
+
 def test_a_failed_build_is_not_a_download(tmp_path):
     graphql = StubGQL({"payload(where": {"payload": [
         {"uuid": "u1", "build_phase": "error", "build_message": "apt broke"}]}})

@@ -356,7 +356,9 @@ query Payload($uuid: String!) {
         while self._now() < deadline:
             last = self.payload_status(uuid)
             phase = str(last.get("build_phase") or "").lower()
-            if phase == "built":
+            # Mythic 4 reports a finished build as "success"; the older REST shape was
+            # "built". Both mean the file exists.
+            if phase in ("built", "success", "completed"):
                 return last
             if phase in ("error", "failed"):
                 raise C2Error(f"payload {uuid} build {phase}: "
