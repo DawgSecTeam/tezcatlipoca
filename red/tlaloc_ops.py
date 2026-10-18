@@ -18,6 +18,7 @@ Every failure here is a deploy failure. A range with no red team is not a range.
 import io
 import json
 import os
+import secrets
 import subprocess
 import tarfile
 from pathlib import Path
@@ -287,28 +288,6 @@ def _env_pairs(body):
     return pairs
 
 
-def _operator_env(comp_dir, mythic_result):
-    """The Mythic operator credentials c2-prep authenticates with.
-
-    Gaia mints the operator password and prints it once. The first real mint is
-    kept 0600 under ~/.tezcatlipoca (outside every repo) so a resume, or a manual
-    c2-prep after a crash, can still log in.
-    """
-    body = (mythic_result or {}).get("env") or ""
-    fresh = _env_pairs(body)
-    admin = (mythic_result or {}).get("admin_password")
-    password = fresh.get("TLALOC_MYTHIC_PASSWORD")
-    store = Path.home() / ".tezcatlipoca" / "c2" / f"{Path(comp_dir).name}.env"
-    if password and password != admin:
-        store.parent.mkdir(parents=True, exist_ok=True)
-        store.write_text(body.strip() + "\n", encoding="utf-8")
-        store.chmod(0o600)
-        return fresh
-    if store.exists():
-        return _env_pairs(store.read_text(encoding="utf-8"))
-    return fresh
-
-
 def comp_prep_command(comp_dir, transports=("http", "webhook")):
     comp_dir = Path(comp_dir).resolve()
     # --state-dir: c2-prep runs on the OPERATOR, where the config's VM path
@@ -535,21 +514,24 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                 "the competition has no C2 callback port (`firewall_dnat <port>-><ip>` "
                 "or `red.c2_callback_port` in its Compfile) — the frozen payloads would "
                 "dial nothing and the channel could never check in")
+        # A fresh operator per deploy: Gaia's `user create` on a name that already
+        # exists prints a password that does not authenticate, so a resume against the
+        # same account would freeze payloads as nobody (caught live: 403 from /auth).
+        agent_user = f"tlaloc-{secrets.token_hex(3)}"
         mythic_result = gaia_ops.prepare_mythic(
             comp_dir, box_ip=plan["box"], ssh_user=RED_USER, ssh_key=ssh_key,
             runner=mythic_runner or runner, operation=plan["operation"],
             callback_host=plan["callback_host"],
-            callback_port=plan["callback_port"])
+            callback_port=plan["callback_port"], agent_user=agent_user)
         if not mythic_result.get("ok"):
             detail = "; ".join(mythic_result.get("degradations") or [])[:500]
             raise RuntimeError(f"the Mythic step failed — no C2 on red01 ({detail})")
         if mythic_result.get("c2"):
             gaia_ops.apply_c2_to_config(cfg_path, mythic_result["c2"])
-        # c2-prep runs on the operator and must authenticate as the competition's
-        # Mythic operator; Gaia prints that password once and never again, so a
-        # resume has to read the copy kept from the run that minted it.
+        # c2-prep runs on the operator and authenticates as the operator this deploy
+        # just minted; the password never leaves this process.
         env = dict(os.environ)
-        env.update(_operator_env(comp_dir, mythic_result))
+        env.update(_env_pairs((mythic_result or {}).get("env") or ""))
         prep = (runner or _default_runner)(comp_prep_command(comp_dir),
                                            cwd=str(TLALOC_REPO), timeout=1800,
                                            env=env)

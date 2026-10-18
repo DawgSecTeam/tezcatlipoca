@@ -302,6 +302,23 @@ class PlantTests(unittest.TestCase):
         self.assertEqual(calls, ["mythic", "apply", "prep"])
         red01_ops.install_engine_rules.assert_called_once()
 
+    def test_each_deploy_mints_its_own_mythic_operator(self):
+        self._patch()
+        plan = {"box": "10.0.0.241", "callback_host": "192.168.101.1",
+                "callback_port": 80, "operation": "demo"}
+        seen = []
+        c2 = {"ok": True, "c2": {"enabled": True, "callback_port": 80},
+              "env": "TLALOC_MYTHIC_PASSWORD=x\nMYTHIC_USER=tlaloc-abc\n"}
+        with mock.patch.object(gaia_ops, "mythic_enabled", return_value=True), \
+                mock.patch.object(gaia_ops, "c2_plan", return_value=plan), \
+                mock.patch.object(gaia_ops, "prepare_mythic",
+                                  side_effect=lambda *a, **k: seen.append(k.get("agent_user")) or c2), \
+                mock.patch.object(gaia_ops, "apply_c2_to_config"), \
+                mock.patch.object(gaia_ops, "push_env", return_value={"ok": True}), \
+                mock.patch.object(to, "comp_prep_command", return_value=["x"]):
+            to.plant_assume_breach(self.ctx, ssh_key="/k", runner=self.runner)
+        self.assertTrue(seen and seen[0].startswith("tlaloc-"), seen)
+
     def test_a_missing_callback_port_fails_before_the_install(self):
         self._patch()
         plan = {"box": "10.0.0.241", "callback_host": "192.168.101.1",
@@ -361,25 +378,3 @@ class StatusTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class OperatorCredentials(unittest.TestCase):
-    def test_the_operator_password_is_kept_for_a_resume(self):
-        import os
-        import stat
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
-            comp = Path(tmp) / "comp"
-            fresh = {"env": "TLALOC_MYTHIC_PASSWORD=opw\nMYTHIC_HOST=10.0.0.195\n",
-                     "admin_password": "adminpw"}
-            with mock.patch.object(Path, "home", return_value=home):
-                self.assertEqual(
-                    to._operator_env(comp, fresh)["TLALOC_MYTHIC_PASSWORD"], "opw")
-                # a resume whose Gaia re-run only offered the admin fallback still
-                # authenticates as the operator that was minted first
-                stale = {"env": "TLALOC_MYTHIC_PASSWORD=adminpw\n",
-                         "admin_password": "adminpw"}
-                self.assertEqual(
-                    to._operator_env(comp, stale)["TLALOC_MYTHIC_PASSWORD"], "opw")
-                store = home / ".tezcatlipoca" / "c2" / "comp.env"
-                self.assertEqual(stat.S_IMODE(os.stat(store).st_mode), 0o600)
