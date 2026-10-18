@@ -382,3 +382,25 @@ class StatusTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OperatorCredentials(unittest.TestCase):
+    def test_the_operator_password_is_kept_for_a_resume(self):
+        import os
+        import stat
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            comp = Path(tmp) / "comp"
+            fresh = {"env": "TLALOC_MYTHIC_PASSWORD=opw\nMYTHIC_HOST=10.0.0.195\n",
+                     "admin_password": "adminpw"}
+            with mock.patch.object(Path, "home", return_value=home):
+                self.assertEqual(
+                    to._operator_env(comp, fresh)["TLALOC_MYTHIC_PASSWORD"], "opw")
+                # a resume whose Gaia re-run only offered the admin fallback still
+                # authenticates as the operator that was minted first
+                stale = {"env": "TLALOC_MYTHIC_PASSWORD=adminpw\n",
+                         "admin_password": "adminpw"}
+                self.assertEqual(
+                    to._operator_env(comp, stale)["TLALOC_MYTHIC_PASSWORD"], "opw")
+                store = home / ".tezcatlipoca" / "c2" / "comp.env"
+                self.assertEqual(stat.S_IMODE(os.stat(store).st_mode), 0o600)

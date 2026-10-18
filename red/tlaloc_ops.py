@@ -276,6 +276,39 @@ def unit_install_command(local_unit=None):
             f"sudo -n systemctl enable --now {UNIT}")
 
 
+def _env_pairs(body):
+    pairs = {}
+    for line in (body or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        pairs[key.strip()] = value
+    return pairs
+
+
+def _operator_env(comp_dir, mythic_result):
+    """The Mythic operator credentials c2-prep authenticates with.
+
+    Gaia mints the operator password and prints it once. The first real mint is
+    kept 0600 under ~/.tezcatlipoca (outside every repo) so a resume, or a manual
+    c2-prep after a crash, can still log in.
+    """
+    body = (mythic_result or {}).get("env") or ""
+    fresh = _env_pairs(body)
+    admin = (mythic_result or {}).get("admin_password")
+    password = fresh.get("TLALOC_MYTHIC_PASSWORD")
+    store = Path.home() / ".tezcatlipoca" / "c2" / f"{Path(comp_dir).name}.env"
+    if password and password != admin:
+        store.parent.mkdir(parents=True, exist_ok=True)
+        store.write_text(body.strip() + "\n", encoding="utf-8")
+        store.chmod(0o600)
+        return fresh
+    if store.exists():
+        return _env_pairs(store.read_text(encoding="utf-8"))
+    return fresh
+
+
 def comp_prep_command(comp_dir, transports=("http", "webhook")):
     comp_dir = Path(comp_dir).resolve()
     # --state-dir: c2-prep runs on the OPERATOR, where the config's VM path
@@ -512,8 +545,14 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
             raise RuntimeError(f"the Mythic step failed — no C2 on red01 ({detail})")
         if mythic_result.get("c2"):
             gaia_ops.apply_c2_to_config(cfg_path, mythic_result["c2"])
+        # c2-prep runs on the operator and must authenticate as the competition's
+        # Mythic operator; Gaia prints that password once and never again, so a
+        # resume has to read the copy kept from the run that minted it.
+        env = dict(os.environ)
+        env.update(_operator_env(comp_dir, mythic_result))
         prep = (runner or _default_runner)(comp_prep_command(comp_dir),
-                                           cwd=str(TLALOC_REPO), timeout=1800)
+                                           cwd=str(TLALOC_REPO), timeout=1800,
+                                           env=env)
         if getattr(prep, "returncode", 1) != 0:
             raise RuntimeError(f"c2-prep (payload freeze) failed: {_tail(prep)}")
 

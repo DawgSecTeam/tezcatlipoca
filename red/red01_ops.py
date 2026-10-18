@@ -249,6 +249,9 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     if red_bridge:
         data["net1"] = f"virtio,bridge={red_bridge}"
     _config(node, vmid, data)
+    # Record before any guest work: a range that dies on the next step must still leave a
+    # red01 the teardown can claim (the VM is this run's from the tag PUT onward).
+    record_identity(comp_dir, placement, vmid=vmid, ip=ip, node=node)
     start_vm(node, vmid)
     if not wait_for_guest_agent(node, vmid, timeout=420):
         raise RuntimeError(f"red01 vmid {vmid} started but its guest agent never answered")
@@ -284,7 +287,8 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
 
     # 3. The agent's apt dependencies (Mythic's are installed by Gaia).
     _exec(node, vmid, "export DEBIAN_FRONTEND=noninteractive; "
-                      "apt-get update -qq && apt-get install -y -qq " + DEPS, 900)
+                      "apt-get -o DPkg::Lock::Timeout=600 update -qq && "
+                      "apt-get -o DPkg::Lock::Timeout=600 install -y -qq " + DEPS, 900)
     return {"ok": True, "vmid": vmid, "ip": ip, "node": node,
             "segment_ip": RED_SEGMENT_IP, "segment_subnet": RED_SEGMENT_SUBNET}
 
