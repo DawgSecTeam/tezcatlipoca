@@ -76,20 +76,16 @@ class ImplantChannel(Effect):
                                  "check_cmd": info.get("check_cmd"),
                                  "paths": info.get("paths") or []}]
             if ctx.is_windows(ip):
-                # A task, not a service: undo is end+delete the task, remove the
-                # binary, and put back the Defender exclusions the plant added.
+                # A task, not a service: undo is end+delete the task and remove
+                # the binary. Defender is not excluded — it is REMOVED from every
+                # Windows template, so there is nothing to restore there.
                 task = info.get("unit")
-                defender = info.get("defender") or {}
+                paths = info.get("paths") or []
+                exe = next((p for p in paths if not str(p).startswith("task:")), None)
                 recipe = [f'schtasks /End /TN "{task}"',
-                          f'schtasks /Delete /TN "{task}" /F',
-                          f"Remove-Item -Path '{defender.get('path', '<dir>')}' "
-                          f"-Recurse -Force"]
-                if defender.get("path"):
-                    recipe.append(f"Remove-MpPreference -ExclusionPath "
-                                  f"'{defender['path']}'")
-                if defender.get("process"):
-                    recipe.append(f"Remove-MpPreference -ExclusionProcess "
-                                  f"'{defender['process']}'")
+                          f'schtasks /Delete /TN "{task}" /F']
+                if exe:
+                    recipe.append(f"Remove-Item -Path '{exe}' -Force")
             else:
                 recipe = [f"systemctl disable --now {info.get('unit')}",
                           f"rm -f {' '.join(info.get('paths') or ['<payload>'])}"]

@@ -82,6 +82,20 @@ if ($LASTEXITCODE -ne 0) {{ throw "net user (admin password) failed, rc=$LASTEXI
 
 Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service -Name sshd -ErrorAction SilentlyContinue
+# Defender is REMOVED on every Windows box (competition standard, owner
+# directive 2026-10-18). It quarantines the red team's payloads on sight: live
+# dc01 deleted the apollo agent AND its scheduled task within seconds of every
+# plant (ThreatID 2147958560) while the same payload ran on win02. Every
+# competition image ships Defender removed for exactly this reason.
+try {{ Uninstall-WindowsFeature -Name Windows-Defender -ErrorAction SilentlyContinue | Out-Null }} catch {{}}
+Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
+Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
+sc.exe config WinDefend start= disabled | Out-Null
+sc.exe stop WinDefend | Out-Null
+New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender' -Force -ErrorAction SilentlyContinue | Out-Null
+Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender' -Name DisableAntiSpyware -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender' -Name DisableAntiVirus -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
 Set-Service -Name QEMU-GA -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service -Name QEMU-GA -ErrorAction SilentlyContinue
 # The template ships all three firewall profiles disabled, so every rule below
