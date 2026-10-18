@@ -51,6 +51,13 @@ class ImplantChannel(Effect):
         if ctx.c2 is None and not load_manifest(ctx.cfg["run"].get("comp_dir") or "."):
             raise PolicyError("no C2 configured and no frozen payload manifest "
                               "(c2.enabled / red/payloads/manifest.json)")
+        # A plant that keeps failing on the same box (a quarantining AV, a locked
+        # profile) must not eat every cycle: the loop starved on dc01 for ten
+        # cycles in a row on the 2026-10-18 range. Two failures and the box yields
+        # to the rest of the board until the cause is gone.
+        if ctx.world.failure_count(self.id, ip) >= 2:
+            raise PolicyError(f"implant_channel already failed twice on {ip} — switch "
+                              f"target (the box is refusing the payload)")
 
     def run(self, ctx, params):
         ip = params["ip"]
