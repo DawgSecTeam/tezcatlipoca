@@ -121,8 +121,9 @@ def test_a_suid_binary_that_does_not_return_root_is_not_a_label(tmp_path):
 
 
 def test_one_shot_only_escape_is_reported_but_never_labelled(tmp_path):
-    """v1 recorded escape:find; the router appends the command, so find cannot
-    round-trip. The box is rooted and the ledger says so — without a lie."""
+    """The earlier agent recorded escape:find; the router appends the command, so
+    find cannot round-trip. The box is rooted and the ledger says so — without a
+    lie."""
     ssh = FakeSSH()
     ssh.on("find / -xdev -perm -4000", out="/usr/bin/find\n")
     ssh.on("-exec /bin/sh -p -c", out=ROOT_ID)
@@ -311,7 +312,8 @@ def test_escalate_stops_re_probing_a_box_with_no_root_path(tmp_path):
 # --- the vocabulary itself -----------------------------------------------------
 
 def test_emitted_labels_stay_inside_the_shared_routing_vocabulary():
-    """The label vocabulary is v1's, and `can_root`/`root_cmd` must route it.
+    """The label vocabulary is the earlier agent's, and `can_root`/`root_cmd` must
+    route it.
 
     `system` is the one exception by design: on Windows the routing is the
     admin-equivalent SESSION (as in takedown.windows_admin), not a wrapper.

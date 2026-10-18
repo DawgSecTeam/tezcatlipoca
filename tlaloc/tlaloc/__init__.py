@@ -1,4 +1,4 @@
-"""tlaloc v2 — the assume-breach CCDC red teamer of the tezcatlipoca range.
+"""tlaloc — the assume-breach CCDC red teamer of the tezcatlipoca range.
 
 Design principles (the migration plan, condensed to what the code enforces):
 

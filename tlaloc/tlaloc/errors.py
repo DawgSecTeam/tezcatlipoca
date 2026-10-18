@@ -2,8 +2,9 @@
 
 GuardrailError vs PolicyError is load-bearing: a guardrail breach HALTS the run
 (something tried to touch what it must never touch), a policy breach rejects one
-candidate and the loop continues. v1 collapsed the distinction in places and
-sweeps crashed on an unimported PolicyError; the hierarchy is the contract.
+candidate and the loop continues. The earlier agent collapsed the distinction in
+places and sweeps crashed on an unimported PolicyError; the hierarchy is the
+contract.
 """
 
 

@@ -28,8 +28,8 @@ its netmap routes filtered correctly, but headscale never expands tag sources in
 packet filters — every tag-sourced dial black-holes at the router while group/user-sourced dials
 pass. So participant devices enroll UNTAGGED (identity is the person's user) and each team's
 grant names its people with `@`-suffixed usernames (bare usernames parse as host references in
-the v2 policy). Port granularity needs the `grants` form: one line for the /24 (`ip: ["*"]`), one
-for the scoreboard (`ip: ["80"]`).
+the version-2 policy). Port granularity needs the `grants` form: one line for the /24
+(`ip: ["*"]`), one for the scoreboard (`ip: ["80"]`).
 
 ## Traffic path
 

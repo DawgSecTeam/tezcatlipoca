@@ -31,7 +31,7 @@ execute → record → log (bundle, answer, probabilities, theta, source, chosen
 
 ## The questions (the whole catalogue)
 
-| id | type | when | replaces (v1) |
+| id | type | when | replaces (the earlier agent) |
 |---|---|---|---|
 | `next_effect` | choice (top ≤8 + `hold`) | every cycle | 3 override gates + the fallback ladder's picks |
 | `pressure_count` | score 0–3 | every cycle | `press_impacts_per_cycle` + cap heuristics |
@@ -80,7 +80,7 @@ per window rather than a timeout every question.
 
 The whole request (state + questions) must fit the model's physical batch.
 **That batch is 16384 tokens** (was 512 at `--ubatch-size 512`
-when v2 was designed), and the endpoint states it in its own words when it
+when tlaloc was designed), and the endpoint states it in its own words when it
 refuses: `input (17783 tokens) is too large to process. increase the physical
 batch size (current batch size: 16384)`. Verified from red01's side of the wire:
 a realistic 24-box digest (5370 chars) reports 1826 input tokens and answers
@@ -139,6 +139,6 @@ recorded a deterministic pick does not.
 3. write the after-action narrative.
 
 `llm.chat()` returns `content` only — a reasoning model's `reasoning_content` is
-kept on the side (`self.last_reasoning`) and never becomes prose (v1 put raw
-chain-of-thought into an engagement report's executive summary that way). A read
-timeout is terminal; the identical request is never retried.
+kept on the side (`self.last_reasoning`) and never becomes prose (the earlier
+agent put raw chain-of-thought into an engagement report's executive summary that
+way). A read timeout is terminal; the identical request is never retried.

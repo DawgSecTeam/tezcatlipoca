@@ -1,8 +1,9 @@
 """Core invariants: the gate, config loading, world state, digest truncation.
 
-These four are the ones v1 got wrong in ways that cost real events, so they are
-tested as behaviour, not as source text (no `inspect.getsource` — the plan bans
-it, and v1's source-text tests passed while the feature was broken).
+These four are the ones the earlier agent got wrong in ways that cost real
+events, so they are tested as behaviour, not as source text (no
+`inspect.getsource` — the plan bans it, and the earlier agent's source-text tests
+passed while the feature was broken).
 """
 
 import json
@@ -48,7 +49,8 @@ def test_blue_ips_extend_scope_explicitly(tmp_path):
 
 
 def test_lint_uses_the_target_os_pattern_set():
-    # v1's POSIX-only lint let every one of these through in front of cmd.exe
+    # the earlier agent's POSIX-only lint let every one of these through in front
+    # of cmd.exe
     for cmd in ("del /f /s /q C:\\Users\\*", "format C:",
                 "Remove-Item -Recurse -Force C:\\inetpub",
                 "Stop-Computer -Force", "diskpart /s clean.txt",

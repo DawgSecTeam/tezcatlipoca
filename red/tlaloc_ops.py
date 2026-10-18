@@ -1,4 +1,4 @@
-"""tlaloc v2 as the range's red team — deploy, seed, verdict, destroy (phase 7).
+"""tlaloc as the range's red team — deploy, seed, verdict, destroy (phase 7).
 
 What this module owns:
 
@@ -440,7 +440,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                         mythic_runner=None, llm=None, llm_key=None):
     """[7/8] Deploy red01, install the C2, seed the agent, prove the config.
 
-    Every step raises on failure. A v2 competition with no working red team is a
+    Every step raises on failure. A competition with no working red team is a
     failed deploy, not a degraded range.
     """
     from infra.ownership import Ownership

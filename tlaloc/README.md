@@ -1,13 +1,13 @@
-# tlaloc v2
+# tlaloc
 
 The red-team component of the tezcatlipoca scoring range: an **assume-breach**
 CCDC red teamer that holds pre-planted access, applies escalating downtime
 pressure on scored services, and adapts to blue's response — with the club
 owning the whole lifecycle.
 
-This is a rebuild of an earlier private v1 agent, not a refactor; the findings of
-the v1 audit are what every module here is shaped by. Where this README states
-behaviour, the code in `tlaloc/` is the authority — this file is the map.
+This is a rebuild of an earlier private agent, not a refactor; the findings of
+the rebuild's audit are what every module here is shaped by. Where this README
+states behaviour, the code in `tlaloc/` is the authority — this file is the map.
 
 This folder lives INSIDE the range engine: it is part of the
 [tezcatlipoca](../README.md) tree, whose phase 7 provisions red01, stages this
@@ -70,7 +70,7 @@ tlaloc/
   errors.py          GuardrailError (halt) vs PolicyError (reject one candidate)
   events.py          the append-only JSONL audit log (masked)
   config.py          DEFAULTS < config.yaml < env allow-map; Compfile red.* block
-  state/             World v2 (schema+comp stamped), digest (sized for the model batch)
+  state/             World (schema+comp stamped), digest (sized for the model batch)
   exec/              ssh.py (one transport), gate.py (the choke point), winexec.py
   effects/           one module per effect + the registry + the shared execute() template
   intel/             nakon facts (the sanctioned cheat) with a blind fallback
@@ -89,8 +89,8 @@ tests/               pytest only; fixtures/comp-min + fixtures/decisions-recorde
    *judgment between bounded options* from clef; *generation* from the LLM.
 2. **One code path per concern.** One exec, one gate, one registry, one loop, one
    state file. If two components can disagree about "can I do this?", that is a
-   design bug (v1 shipped six Windows exec idioms, three takedown routers, three
-   unrecoverable-mode lists and four copies of its doctrine).
+   design bug (the earlier agent shipped six Windows exec idioms, three takedown
+   routers, three unrecoverable-mode lists and four copies of its doctrine).
 3. **Infrastructure belongs to tezcatlipoca.** red01 provisioning, the red
    segment, the engine's red rules and C2 DNAT, teardown/verdicts are range
    components; tlaloc owns decisions + effects.
@@ -105,12 +105,12 @@ tests/               pytest only; fixtures/comp-min + fixtures/decisions-recorde
 
 Implemented and tested offline (see `docs/testing.md` for how each is verified):
 
-- state v2 (schema + comp stamped, refuse cross-event state), events, digest with
-  the fixed truncation cascade, one SSH transport with bounded waits/keepalive/
-  close-on-replace, the gate (POSIX **and** Windows pattern sets), the effect
-  registry + `execute()` template, the loop with circuit breakers and host guard,
-  the decision layer (clef client, question catalog, confidence gate, LLM
-  arbiter, replay tests), the C2 layer (Mythic REST client, payload planter,
+- the state document (schema + comp stamped, refuse cross-event state), events,
+  digest with the fixed truncation cascade, one SSH transport with bounded
+  waits/keepalive/close-on-replace, the gate (POSIX **and** Windows pattern sets),
+  the effect registry + `execute()` template, the loop with circuit breakers and
+  host guard, the decision layer (clef client, question catalog, confidence gate,
+  LLM arbiter, replay tests), the C2 layer (Mythic REST client, payload planter,
   callback-freshness liveness), assume-breach seeding, the report + restore-table
   artifacts, the CLI.
 

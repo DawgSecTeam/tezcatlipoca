@@ -1,9 +1,9 @@
 # ROE: bounds as data
 
 Every bound is a config/Compfile value. Nothing about the rules of engagement is
-hardcoded in a module — v1 shipped a 420-minute clock inside `escalation.py` that
-misfired on every shorter event, and three separate lists of "unrecoverable"
-modes that drifted apart.
+hardcoded in a module — the earlier agent shipped a 420-minute clock inside
+`escalation.py` that misfired on every shorter event, and three separate lists of
+"unrecoverable" modes that drifted apart.
 
 ## Where the values come from
 
@@ -83,8 +83,8 @@ red:
 
 ## The final window is not a separate component
 
-v1 had a coverage pass, an `endgame` sweeper and a burndown module that each
-re-implemented takedown routing and had already diverged. Here the final window
-is a policy block: the SAME loop, registry, gate and router run full-board
+The earlier agent had a coverage pass, an `endgame` sweeper and a burndown module
+that each re-implemented takedown routing and had already diverged. Here the final
+window is a policy block: the SAME loop, registry, gate and router run full-board
 takedowns at `run.endgame_cycle_min` cadence, and the engine's `red-verdict`
 proves the damage afterwards.

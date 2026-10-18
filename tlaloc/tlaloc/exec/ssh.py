@@ -1,6 +1,7 @@
 """One SSH transport for both OSes (paramiko, pooled, imported lazily).
 
-Every hard-won fix from v1's transport is carried here verbatim in spirit:
+Every hard-won fix from the earlier agent's transport is carried here verbatim in
+spirit:
 
 * TCP keepalive on every connection (15 s) — a half-dead link (session gone,
   no RST, NAT/conntrack drop) otherwise stays ESTAB forever and wedges the
@@ -16,8 +17,8 @@ Every hard-won fix from v1's transport is carried here verbatim in spirit:
   deadlock once output exceeds the channel window).
 * Reentry key fallback: password auth failing retries with the planted red
   key and remembers (ip,user) — the pairing with the persistence sshkey.
-* sftp_put supports key_path (v1's asymmetry: sftp_get had it, put didn't,
-  so every staging path died on a key-only foothold).
+* sftp_put supports key_path (the earlier agent's asymmetry: sftp_get had it,
+  put didn't, so every staging path died on a key-only foothold).
 """
 
 import subprocess

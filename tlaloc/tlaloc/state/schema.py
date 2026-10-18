@@ -1,8 +1,8 @@
 """State primitives: timestamps, atomic writes, the schema version.
 
 world.json is written 0600 (it holds credentials by design), atomically
-(mkstemp + chmod + replace) and behind an flock. v1 lesson: the
-director's stale in-memory copy clobbered an operator re-seed's artifact
+(mkstemp + chmod + replace) and behind an flock. A lesson from the earlier agent:
+the director's stale in-memory copy clobbered an operator re-seed's artifact
 records — a bare atomic write is not enough with two writers; the flock +
 reload-then-mutate-then-save contract is the whole concurrency story, there is
 deliberately NO merge.
@@ -14,8 +14,8 @@ import tempfile
 import time
 
 # Bump ONLY with a deliberate schema change; an existing world.json with a
-# different version is refused (fresh state dir per comp — v1's --reset-event
-# cross-event leak has no place to happen).
+# different version is refused (fresh state dir per comp — the earlier agent's
+# --reset-event cross-event leak has no place to happen).
 SCHEMA = 2
 
 

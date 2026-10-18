@@ -16,9 +16,9 @@ artifacts that matter. This module consumes the manifest:
 unit on Linux, service + at-logon task on Windows — whichever the payload
 supports), verifies the install ON THE BOX, and then asks the operation whether a
 callback appeared. The RECORD is written from the install and always; the
-callback is evidence about it. That ordering is deliberate — v1 gated the
-artifact write on the channel proof and a slow check-in turned a live plant into
-a silent absence in both blue's and the organizer's lists.
+callback is evidence about it. That ordering is deliberate — the earlier agent
+gated the artifact write on the channel proof and a slow check-in turned a live
+plant into a silent absence in both blue's and the organizer's lists.
 """
 
 import json

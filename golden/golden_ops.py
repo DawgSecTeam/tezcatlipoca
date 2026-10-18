@@ -12,7 +12,9 @@ from nakonops.nakon_run_ops import run_nakon
 from infra.ownership import full_clone_data
 from infra.client import proxmox_api, storage_queue_lock, wait_for_proxmox_task
 from infra.lifecycle import (delete_snapshot, list_snapshots, rollback_snapshot, start_vm, stop_vm, take_snapshot,)
-from infra.ownership import (clone_marker, destroy_vm_if_exists, gc_orphan_volumes, retag_ownership,)
+from infra.ownership import (MARKER, MISSING, OWNED, clone_marker, comp_name_from_tags,
+                             destroy_vm_if_exists, gc_orphan_volumes, retag_ownership,
+                             vm_occupancy,)
 from multinode.placement_record import golden_vmid_for_slot
 from common.ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
 from engine.template_freeze import (
@@ -260,16 +262,16 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     # A golden that already passed its plant on an unchanged hash does not need it redone. The
     # checkpoint is only trusted while SNAP_BASE still exists, so a re-cloned golden is never
     # mistaken for a done one.
-    checkpoint_record = golden_plant_checkpoints(comp_dir) if golden_hashes else {}
+    checkpoint_record = golden_plant_checkpoints(comp_dir, run_id) if golden_hashes else {}
     checkpointed = set()
     for t in planted:
         wanted = (golden_hashes or {}).get(t["box"]["name"])
-        if (wanted and checkpoint_record.get(t["box"]["name"]) == wanted
+        rec = checkpoint_record.get(t["box"]["name"]) or {}
+        if (wanted and rec.get("hash") == wanted
                 and SNAP_BASE in list_snapshots(node, t["vmid"])):
             checkpointed.add(t["box"]["name"])
-    if checkpointed:
-        print(f"  Golden checkpoint: {', '.join(sorted(checkpointed))} already planted and "
-              f"planted on this hash — skipping their rollback and plant")
+            print(f"  Golden checkpoint: {t['box']['name']} already planted on this hash "
+                  f"by run {rec.get('run') or '?'} — skipping its rollback and plant")
     work = [t for t in targets if t["box"]["name"] not in checkpointed]
 
     if missing:
@@ -398,28 +400,48 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     if golden_hashes:
         for t in work:
             save_template_hashes(comp_dir, golden_planted={
-                t["box"]["name"]: golden_hashes[t["box"]["name"]]})
+                t["box"]["name"]: {"hash": golden_hashes[t["box"]["name"]],
+                                   "run": run_id or ""}})
 
     _convert_goldens(node, targets, ownership_tag_str, golden_hashes)
 
     return {t["box"]["name"]: t["vmid"] for t in targets_all}
 
 
-# Destroy AFTER the linked clones, which depend on the template's base disk. A slot held by a
-# FOREIGN VM is skipped with a warning so one squatted vmid does not strand the whole teardown.
+# Destroy AFTER the linked clones, which depend on the template's base disk.
+OTHER_RUN = "another run of this competition"
+
+
+def _destroy_template(node, vmid, expect_tags):
+    """Destroy a template this run owns; classify anything else.
+
+    A VM carrying THIS competition's tag but another run's id is never touched (a parallel
+    session owns it) — the caller reports it as blocking, not as a foreign skip.
+    """
+    verdict, tags, vm = vm_occupancy(node, vmid, expect_tags)
+    if verdict == "absent":
+        return None
+    if verdict == "unknown":
+        return f"vmid {vmid} could not be classified (unreadable) — check by hand"
+    if verdict in (OWNED, MARKER):
+        destroy_vm_if_exists(node, vmid, expect_tags=expect_tags)
+        return None
+    comp = comp_name_from_tags(expect_tags or ())
+    if verdict == MISSING and comp and f"comp-{comp}" in tags:
+        return (f"{OTHER_RUN} holds vmid {vmid} "
+                f"({vm.get('name') or '?'}, tags: {';'.join(sorted(tags))}) — not touched")
+    return (f"vmid {vmid} is occupied by a foreign VM ({vm.get('name') or '?'}, "
+            f"tags: {';'.join(sorted(tags)) or 'none'}) — skipped")
+
+
 def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=0):
     skipped = []
     for box_idx in range(num_box_types):
-        try:
-            destroy_vm_if_exists(node, golden_vmid_for_slot(engine_vmid, slot, box_idx),
-                                 expect_tags=expect_tags)
-        except RuntimeError as e:
-            skipped.append(str(e))
-            print(f"    WARNING: golden slot {box_idx} is FOREIGN — skipping it and "
-                  f"continuing: {e}")
-    if skipped:
-        print(f"  {len(skipped)} golden slot(s) skipped as foreign — they belong to "
-              f"another deployment; inspect them manually.")
+        message = _destroy_template(node, golden_vmid_for_slot(engine_vmid, slot, box_idx),
+                                    expect_tags)
+        if message:
+            skipped.append(message)
+            print(f"    WARNING: golden slot {box_idx}: {message}")
     return skipped
 
 

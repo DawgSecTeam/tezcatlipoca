@@ -1,9 +1,10 @@
 """persist_linux — one test per family, at the exact-command-string level.
 
-The point of this module is the command text: the v1 mechanism per family, with
-every literal replaced by a drawn name. So each family test asserts the whole
-script the handler sends (the standing guard, the v1 command, the branch
-structure and the outcome marker), not merely "something was sent".
+The point of this module is the command text: the mechanism per family carried
+over from the earlier agent, with every literal replaced by a drawn name. So each
+family test asserts the whole script the handler sends (the standing guard, the
+earlier agent's command, the branch structure and the outcome marker), not merely
+"something was sent".
 
 `NAMES` is a hand-built full name set, so the expected strings are deterministic
 and do not depend on the random draw (the draw itself is pinned in
@@ -158,7 +159,7 @@ def test_persist_check_rejects_an_unknown_family_and_a_missing_foothold(tmp_path
 
 # --- one test per family ------------------------------------------------------
 
-def test_systemd_unit_plants_the_v1_sleeper_unit(tmp_path):
+def test_systemd_unit_plants_the_sleeper_unit(tmp_path):
     ssh = FakeSSH().on(pl.MARKER, out=f"TLALOC_PLANT family=systemd_unit {CREATE}")
     result, ctx = _plant(tmp_path, "systemd_unit", ssh)
     unit = NAMES["unit"]
@@ -209,7 +210,7 @@ def test_sshd_dropin_adds_a_red_controlled_key_file(tmp_path):
     assert result.ok and result.artifacts[0]["paths"] == [dropin, keydir]
 
 
-def test_cron_plants_the_v1_marker_beacon(tmp_path):
+def test_cron_plants_the_marker_beacon(tmp_path):
     ssh = FakeSSH().on(pl.MARKER, out=f"TLALOC_PLANT family=cron {CREATE}")
     result, ctx = _plant(tmp_path, "cron", ssh)
     path, marker = NAMES["cron"], NAMES["cron_marker"]
@@ -341,12 +342,14 @@ def test_preload_hides_reds_artifacts_behind_a_load_tested_hider(tmp_path):
         f"if grep -qF {hider} /etc/ld.so.preload 2>/dev/null && [ -f {hider} ]; "
         f'then echo "TLALOC_PROBE state=present"; '
         f'else echo "TLALOC_PROBE state=absent"; fi')
-    # 2: the upload to v1's /tmp/.<name>-upload staging path, then the install
+    # 2: the upload to the earlier agent's /tmp/.<name>-upload staging path, then
+    # the install
     assert ssh.calls[1]["kind"] == "sftp_put"
     assert ssh.calls[1]["cmd"] == "sftp put -> /tmp/.collector-upload"
     script = _cmd(ssh, 2)
     assert script.startswith("sudo -n set -u\n")
-    # the conf is the hide list (red's own artifact names), base64'd like v1's
+    # the conf is the hide list (red's own artifact names), base64'd like the
+    # earlier agent's
     assert f"echo {_b64('name renew\n')} | base64 -d > {conf}" in script
     # the load test gates the preload line: the box-breaking invariant
     assert f"LD_PRELOAD={hider} /bin/true >/dev/null 2>&1" in script
@@ -472,7 +475,8 @@ def test_decoy_plants_the_procfilter_hunt_bait_behind_the_load_test(tmp_path):
     assert f"LD_PRELOAD={lib} /bin/true >/dev/null 2>&1" in script
     assert (f"grep -qF {lib} /etc/ld.so.preload || echo {lib} >> "
             "/etc/ld.so.preload") in script
-    # the decoy sleeper, argv smeared to a kernel-thread name (v1 proc_hide)
+    # the decoy sleeper, argv smeared to a kernel-thread name (the earlier
+    # agent's proc_hide)
     kthreads = [k for k in pl.KTHREADS if f'exec -a "{k}"' in script]
     assert len(kthreads) == 1
     assert (f"setsid /bin/sh -c 'echo $$ > {NAMES['bait_pid']}; "

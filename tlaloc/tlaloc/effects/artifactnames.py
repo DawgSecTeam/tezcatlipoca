@@ -247,9 +247,9 @@ def windows_names(world, rng=None, mode=MODE_FULL):
 
 
 # -- the port-block name class (block_port) -----------------------------------
-# A block that wears a fixed name is an IOC list for the rest of the event: v1
-# wore one literal Windows rule and one literal nft table, so blue grepped the
-# name once and cleared every block red
+# A block that wears a fixed name is an IOC list for the rest of the event: the
+# earlier agent wore one literal Windows rule and one literal nft table, so blue
+# grepped the name once and cleared every block red
 # had ever placed. Here each activation draws its own names — which is also what
 # makes the undo exact: the recipe names THIS activation's table/rule, so a
 # second block on the same box cannot collide with (or inherit) the first.

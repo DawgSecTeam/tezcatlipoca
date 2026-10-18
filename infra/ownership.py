@@ -110,6 +110,21 @@ def bridge_owned_by(comment, comp_name, run_id):
                ("tezcatlipoca", f"comp-{comp_name}", run_id))
 
 
+def vm_occupancy(node, vmid, expect_tags):
+    """(verdict, tags, vm) for a live VM; 'absent' leaves tags empty and vm None."""
+    try:
+        vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
+        vm = next((v for v in vms if int(v["vmid"]) == int(vmid)), None)
+        if vm is None:
+            return "absent", set(), None
+        cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+    except Exception:                                   # noqa: BLE001 - reported by the caller
+        return "unknown", set(), None
+    tags = parse_vm_tags(cfg.get("tags"))
+    verdict, _missing = ownership_verdict(node, vmid, tags, expect_tags)
+    return verdict, tags, vm
+
+
 def ownership_verdict(node, vmid, raw_tags, expect_tags):
     """Classify one VM against a full ownership set -> (verdict, missing_tags). `raw_tags` is the
     tag string; the clone-marker lookup is a Proxmox read and only happens for a tagless VM."""

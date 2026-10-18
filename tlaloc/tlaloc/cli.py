@@ -5,7 +5,7 @@ same registry, so nothing here can do something the loop could not. Commands tha
 touch a live range refuse to guess: `--dry-run` is explicit, a competition dir is
 required for a real event, and `verify-config` exists because the config the red
 VM actually reads is the one the deploy pipeline pushed — not the one in the repo
-(the v1 lesson that cost a whole event's C2 channel).
+(the lesson that cost a whole event's C2 channel).
 """
 
 import argparse
@@ -21,8 +21,8 @@ from .errors import ConfigError, TlalocError
 
 # The fields the red VM reads — one entry per leaf of config.DEFAULTS. Anything
 # the deploy pipeline pushes to /etc/tlaloc/config.yaml MUST carry all of these or
-# the feature is dead on the VM while every local test stays green (v1 shipped a
-# whole feature that way). The engine imports this list from here (`tlaloc
+# the feature is dead on the VM while every local test stays green (the earlier
+# agent shipped a whole feature that way). The engine imports this list from here (`tlaloc
 # verify-config --print-contract`) so there is exactly one definition, and
 # tests/test_config_contract.py fails if a DEFAULTS leaf is not listed — the list
 # is generated from DEFAULTS and kept honest by that test, not by memory.
@@ -124,10 +124,10 @@ def verify_config(cfg, *, pushed=None):
     so a field absent from it is NOT a defect by itself. The defect is a field
     whose effective value on the VM would differ from the effective value here:
     that is a feature silently running on the wrong knob (or dead) on red01 while
-    every local test stays green, which is the v1 lesson this check exists for.
+    every local test stays green, which is the lesson this check exists for.
 
-    Returns a list of {field, problem} — a per-field diff, not a boolean (v1's
-    deploy failed opaquely).
+    Returns a list of {field, problem} — a per-field diff, not a boolean (the
+    earlier agent's deploy failed opaquely).
     """
     problems = []
     for field in CONFIG_CONTRACT:

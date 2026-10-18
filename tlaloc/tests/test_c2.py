@@ -282,7 +282,7 @@ def test_task_channel_undo_names_the_service_it_took_down(tmp_path):
 
 def test_a_task_that_ran_but_failed_still_records_its_undo(tmp_path):
     """ok=False with the box touched is exactly the case a record gated on a
-    proof would lose (v1's implant did)."""
+    proof would lose (the earlier agent's implant did)."""
     class FailingC2(FakeMythic):
         def task(self, box_id, command, timeout=120):
             return {"ok": False, "detail": "task error", "output": "",

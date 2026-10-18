@@ -7,9 +7,9 @@ source (clef / llm_arbiter / deterministic), and what was executed. The
 after-action verdict and threshold recalibration read this file; the replay
 harness replays the recorded bundles against a stubbed clef (tests/test_decide.py).
 
-Secrets are masked on write (password values under known key names). v1 note:
-masking is key-name based, so free-text must never interpolate a password —
-effects record credential SOURCES, not values.
+Secrets are masked on write (password values under known key names). A note from
+the earlier agent: masking is key-name based, so free-text must never interpolate
+a password — effects record credential SOURCES, not values.
 """
 
 import json
@@ -57,7 +57,7 @@ class EventLog:
                   source=source, duration_s=round(duration_s, 2))
 
     def error(self, where, exc):
-        # v1 defect M7: the catch-all logged only "type: message" — a
+        # Earlier defect M7: the catch-all logged only "type: message" — a
         # deterministic cycle bug looped silently for the whole event. Full
         # traceback lands here so the loop's consecutive-error breaker has
         # something a human can read.
@@ -66,7 +66,8 @@ class EventLog:
 
     def read(self, last_n=None):
         """Parse the log; last_n returns the trailing records without
-        re-parsing the whole file (v1 read() was quadratic over an event)."""
+        re-parsing the whole file (the earlier agent's read() was quadratic over
+        an event)."""
         if not self.path.exists():
             return []
         if last_n is None:

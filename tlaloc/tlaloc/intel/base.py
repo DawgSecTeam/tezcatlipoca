@@ -5,9 +5,10 @@ every consumer reads targets through boxes() — a box the competition marks
 `unmanaged` (the in-path pfSense carrying all scoring traffic) is
 infrastructure, out of ROE, in exactly one place.
 
-v2 fixes over v1: the addressing scheme is data (a teams.json `subnet` field
-with the historic 192.168.<identifier>.0/24 default), and there is ONE
-windows predicate (box["windows"]) instead of two reading different fields.
+tlaloc's fixes over the earlier agent: the addressing scheme is data (a
+teams.json `subnet` field with the historic 192.168.<identifier>.0/24 default),
+and there is ONE windows predicate (box["windows"]) instead of two reading
+different fields.
 """
 
 import json

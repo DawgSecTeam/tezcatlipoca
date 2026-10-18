@@ -86,7 +86,7 @@ the deploy env; host and credentials: `infrastructure-status.md`;
   `tezcatlipoca-remote-access.json` beside it. Pre-existing nodes are untagged and keep
   access via `group:full-access`.
 - **v0.29 CLI**: no `routes` command (approvals ride the policy's `autoApprovers`; list
-  with `nodes list-routes`); policy v2 group/grant sources need `@`-suffixed usernames (a
+  with `nodes list-routes`); version-2 policy group/grant sources need `@`-suffixed usernames (a
   bare name parses as a host reference); `policy check` wants `--file`;
   `users destroy -n <name> --force` refuses while the user owns nodes.
 - **Tag-sourced grants do not reach routers' packet filters** — a tag-sourced dial

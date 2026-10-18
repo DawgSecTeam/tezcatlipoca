@@ -1,4 +1,4 @@
-# tlaloc v2 — ignore what must never be committed
+# tlaloc — ignore what must never be committed
 .venv/
 __pycache__/
 *.pyc

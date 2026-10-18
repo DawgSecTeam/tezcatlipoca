@@ -212,7 +212,7 @@ A box with `"unmanaged": true, "in_path": true` is the team gateway (`utils.is_i
 - **Phase 4**: after the golden set and the team-box clone pass: Windows bootstrap for all teams, concurrent waits, `setup_ubuntu_auth`, DNS fix, apt prep, `tz-base`. Clones boot with working DNS/apt because the golden disk carries no disruptive configs.
 - **Phase 5**: print-and-return without an `in_path` box (keeps phase indexes stable). Order is load-bearing: the engine owns bridge addressing while configs are pushed, and phases 6–7 mustn't run before cutover. Records `state["firewalls_bootstrapped"]`; resume re-pushes (unchanged config isn't reapplied). Firewall `tz-base` is taken after cutover.
 - **Phase 6**: `.nakon-predomain.json`, lenient (`strict=False`: one flaky plant mustn't kill a sweep that's 98% landed), `--jobs N`, gated by `.postclone-swept`. `fix_services_on_boxes` runs after it (the ssh-\* configs restart sshd and can trip start-limit).
-- **Phase 7**: domains run concurrently per team; then the final pass; then **red** (`red/tlaloc_ops.plant_assume_breach`) — red01, the C2, the payload freeze and the day-0 seed — before `tz-ready`, so the restore points carry a compromised range. Every red step raises; a range with no working red team is a failed deploy. The account-file mode pass runs last — after phase 6's credlist `useradd` and after the red seed — then the trail wipe, then the snapshot. A Compfile that still sets `team_beacons` is a hard error (v1 feature). `nakon_failed_steps` is merged across passes (deduped, capped at 40).
+- **Phase 7**: domains run concurrently per team; then the final pass; then **red** (`red/tlaloc_ops.plant_assume_breach`) — red01, the C2, the payload freeze and the day-0 seed — before `tz-ready`, so the restore points carry a compromised range. Every red step raises; a range with no working red team is a failed deploy. The account-file mode pass runs last — after phase 6's credlist `useradd` and after the red seed — then the trail wipe, then the snapshot. A Compfile that still sets `team_beacons` is a hard error (the earlier agent's beacon option). `nakon_failed_steps` is merged across passes (deduped, capped at 40).
 - **Phase 8**: Quotient is polled (`/api/login`). Sub-steps are flag-gated because `unpause_engine` isn't idempotent; in the crash window between POST and flag-save it asks the engine first (`engine_paused`) and re-POSTs only if still paused.
 - **Failure handler**: names the resume phase. An "already exists" error at phase ≥2 means something a prior attempt created still occupies a slot: a leftover range is a preflight refusal now, so reclaim it with `destroy-competition.py` and deploy fresh (a `--from-phase 1` re-run refuses the same leftovers), or resume the run that owns it.
 - `credentials.txt` (0600) is the authoritative record of generated secrets (incl. `box-login`, `box-credlist-*`). `--plan-only` exists because nothing otherwise confirms between the box picker and a real deploy. `--competition` skips straight to `deploy()` but boxes are still interactive.
@@ -305,8 +305,8 @@ Local-files → Markdown. The packet is the same for every team (real credential
 
 ## red/ and tlaloc/
 
-One red engine, owned by this tree. There is no sibling checkout and no `red.engine` switch: tlaloc
-v2 is the only engine, and the range side of red is a component like the engine and the team boxes.
+One red engine, owned by this tree. There is no sibling checkout and no `red.engine` switch: tlaloc is
+the only engine, and the range side of red is a component like the engine and the team boxes.
 Three modules: `red/red01_ops.py` owns red01 and its engine-side rules, `red/tlaloc_ops.py` is
 deploy phase 7, `red/gaia_ops.py` installs Mythic. The agent itself lives IN this tree at `tlaloc/`
 (package, tests, docs, systemd unit); its own map is `tlaloc/README.md` and `tlaloc/AGENTS.md`, and

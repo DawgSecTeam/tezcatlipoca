@@ -12,7 +12,7 @@ Mythic upgrade is one mapping table, not a rewrite:
     GET  /api/v1.4/payload/{uuid}/              -> build status + file_id
     GET  /api/v1.4/payload/download/{file_id}   -> the binary
 
-Two behaviours worth stating because v1 got them wrong:
+Two behaviours worth stating because the earlier agent got them wrong:
 
 * **liveness is a callback row with a fresh timestamp, never a process.** The
   tavern lesson: a row survives the agent's death, so `callbacks()` reports

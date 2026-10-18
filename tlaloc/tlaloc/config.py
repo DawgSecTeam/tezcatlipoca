@@ -1,20 +1,20 @@
 """Config: DEFAULTS < config.yaml < env allow-map. PURE — nothing aliases DEFAULTS.
 
-v1 defect (verified empirically in the audit): ``cfg = DEFAULTS`` plus a
-shallow merge left every non-overridden sub-dict aliased into the module-level
-DEFAULTS, so one load_config() call leaked its env overrides into every later
-call in the process. v2 deep-copies and documents: config is frozen once the
-context is built — anything that needs to change mid-run lives in the Compfile
-or world state, not in cfg mutation.
+The earlier agent's defect (verified empirically in the audit): ``cfg = DEFAULTS``
+plus a shallow merge left every non-overridden sub-dict aliased into the
+module-level DEFAULTS, so one load_config() call leaked its env overrides into
+every later call in the process. tlaloc deep-copies and documents: config is
+frozen once the context is built — anything that needs to change mid-run lives in
+the Compfile or world state, not in cfg mutation.
 
-An explicit --config path that does not exist is a HARD error (v1 silently fell
-back to DEFAULTS — the v1 wrong-red_vmid incident). API keys never enter
-cfg: only the NAME of the env var to read them from.
+An explicit --config path that does not exist is a HARD error (the earlier agent
+silently fell back to DEFAULTS — the wrong-red_vmid incident). API keys never
+enter cfg: only the NAME of the env var to read them from.
 
 ROE lives in data: the ``red:`` block (ladder, caps, windows) mirrors the
-Compfile's ``red.*`` keys and is validated at load — v1's 420-minute clock
-hardcoded in escalation.py misfired on shorter events; here every time is
-either an explicit minute value or a fraction of ``red.duration_min``.
+Compfile's ``red.*`` keys and is validated at load — the earlier agent's
+420-minute clock hardcoded in escalation.py misfired on shorter events; here
+every time is either an explicit minute value or a fraction of ``red.duration_min``.
 """
 
 import copy
@@ -132,7 +132,7 @@ DEFAULTS = {
         "command_max_len": 200,    # free-form commands (task/improvise)
         "cred_spray_max": 40,
         # spray_access: per-login probe deadline and the human-mimic gap between
-        # logins (v1's pacing; 0 in tests).
+        # logins (the earlier agent's pacing; 0 in tests).
         "spray_probe_timeout": 20,
         "spray_delay_sec": 0.4,
         "nmap_top_ports": 200,
@@ -154,7 +154,8 @@ DEFAULTS = {
     },
     # Optional flavour ASSETS. Empty by default: the effects draw their own
     # locations from effects/artifactnames.py, and these only point at a vendored
-    # asset (v1's preload .so / procfilter tree). They are read defensively — which
+    # asset (the earlier agent's preload .so / procfilter tree). They are read
+    # defensively — which
     # is exactly why they must be declared: an undeclared key is a feature that is
     # silently dead on red01, because the pushed config drops it.
     "evasion": {
@@ -166,7 +167,8 @@ DEFAULTS = {
 }
 
 # env var -> dotted config path. Deliberately short: anything bigger belongs in
-# the config file (v1's sprawl lesson: three tracked configs, all divergent).
+# the config file (the earlier agent's sprawl lesson: three tracked configs, all
+# divergent).
 ENV_MAP = {
     "TLALOC_STATE_DIR": "run.state_dir",
     "TLALOC_COMP": "run.comp",
@@ -241,7 +243,7 @@ def load_config(path=None):
     if path:
         if not Path(path).exists():
             raise ConfigError(f"config file {path} does not exist (refusing to "
-                              "silently run on defaults — v1 incident)")
+                              "silently run on defaults — earlier incident)")
     else:
         path = os.environ.get(ENV_PREFIX + "CONFIG") or None
         if path is None:
@@ -268,7 +270,7 @@ def load_config(path=None):
 
 # -- Compfile integration -----------------------------------------------------
 # The tezcatlipoca Compfile is `key value` lines (see the engine's
-# common/utils.py compfile_flag/compfile_value), NOT yaml. v2's contract:
+# common/utils.py compfile_flag/compfile_value), NOT yaml. The contract:
 #   red.assume_breach full            dotted scalar keys
 #   red.caps.max_down 4
 #   red_yaml red.yaml                 pointer to a nested block (ladder etc.),
@@ -346,7 +348,7 @@ def validate_config(cfg):
         for i, tier in enumerate(tiers):
             name = tier.get("name") or f"tier{i}"
             if "at_min" in tier:
-                # v1 defect: at_min was divided by a hardcoded 420-min packet
+                # earlier defect: at_min was divided by a hardcoded 420-min packet
                 # clock, so a 60-min scrim silently rescaled every tier.
                 # Conversion happens here, against THIS event's duration, and is
                 # written back into the list — a conversion nobody can observe

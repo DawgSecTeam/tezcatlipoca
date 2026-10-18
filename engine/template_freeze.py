@@ -20,11 +20,26 @@ def load_template_hashes(comp_dir):
             if templates.get(key)}
 
 
-def golden_plant_checkpoints(comp_dir):
-# box name -> golden hash, for goldens already planted and smoke-passed; separate from `golden`
-# so a re-entry does not roll back and re-plant the whole set. Delete the key to force a replant.
+def golden_plant_checkpoints(comp_dir, run_id=None):
+    """box name -> {"hash", "run"} for goldens this run already planted.
+
+    A checkpoint is trusted only for the run that wrote it: another run (a parallel session,
+    or a fresh deploy) always re-plants. Legacy string entries carry no run and are ignored.
+    """
     planted = load_template_hashes(comp_dir).get("golden_planted")
-    return planted if isinstance(planted, dict) else {}
+    if not isinstance(planted, dict):
+        return {}
+    wanted_run = run_id or ""
+    return {box: rec for box, rec in planted.items()
+            if isinstance(rec, dict) and rec.get("run") == wanted_run}
+
+
+def clear_golden_plant_checkpoints(comp_dir):
+    """--replant-goldens: forget the per-box checkpoints so the next build re-plants."""
+    from estate import state
+    document = state.EstateState.load(comp_dir)
+    document.section("templates").pop("golden_planted", None)
+    document.save()
 
 
 def save_template_hashes(comp_dir, **entries):

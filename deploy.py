@@ -5,13 +5,15 @@ import-time `.env` load every config read depends on and re-exports the three na
 use: `main` (create-competition.py), `deploy` and `prepare`/`DeployContext`.
 """
 
+import os
 from pathlib import Path
 
 import urllib3
 from dotenv import load_dotenv
 
-ENV_PATH = Path(".env")
-load_dotenv(ENV_PATH)
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+if not os.environ.get("TEZ_TEST_OFFLINE"):
+    load_dotenv(ENV_PATH)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from deploy_lib.cli import main  # noqa: E402

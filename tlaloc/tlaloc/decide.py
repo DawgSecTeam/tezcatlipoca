@@ -36,7 +36,8 @@ from .errors import ClefError, LLMError, PolicyError
 from .state import digest as digest_mod
 
 # The question catalog. Small on purpose — every question has to earn its place
-# by replacing a heuristic that was wrong in v1 (see the plan's table).
+# by replacing a heuristic that was wrong in the earlier agent (see the plan's
+# table).
 CATALOG = {
     "next_effect": {"type": "choice", "replaces": "3 override gates + fallback ladder"},
     "pressure_count": {"type": "score", "replaces": "press_impacts_per_cycle heuristics"},
@@ -580,8 +581,8 @@ class Decider:
 
         Deterministic keyword classification is the fallback *and* the sanity
         check: a `benign` classification from the model never turns an impacty
-        command into a benign one (v1's substring sniff both missed real impact
-        words and mis-attributed innocent ones).
+        command into a benign one (the earlier agent's substring sniff both missed
+        real impact words and mis-attributed innocent ones).
         """
         base = keyword_intent(command)
         digest = {"cmd": str(command)[:120], "os": os_name, "kw": base}
@@ -679,9 +680,9 @@ class Decider:
 # deterministic helpers (also the replay fixtures)
 # --------------------------------------------------------------------------- #
 
-# Word-boundary regexes, not substrings: v1's substring sniff matched "id" inside
-# "hidden" and missed real impact words in flags, and its mis-attribution went
-# straight into the ledger. The order is the conservative one: impact first.
+# Word-boundary regexes, not substrings: the earlier agent's substring sniff
+# matched "id" inside "hidden" and missed real impact words in flags, and its
+# mis-attribution went straight into the ledger. The order is the conservative one: impact first.
 IMPACT_RE = re.compile(
     r"\b(stop|disable|mask|kill|lock|flush|sabotage|drain|deny|block|down)\b"
     r"|systemctl\s+(stop|mask|disable)|/active:no|-Recurse\b", re.IGNORECASE)

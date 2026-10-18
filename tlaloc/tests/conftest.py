@@ -2,8 +2,8 @@
 
 The guard is the mechanical version of the plan's rule: "no test may spawn ssh
 or network". It fails loud rather than relying on reviewers, because a test that
-silently dials a range address is how v1's destroy tests looked green while they
-really talked to the club LAN.
+silently dials a range address is how the earlier agent's destroy tests looked
+green while they really talked to the club LAN.
 """
 
 import socket

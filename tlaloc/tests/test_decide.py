@@ -377,7 +377,7 @@ def test_a_batch_too_small_for_any_bundle_is_flagged_not_truncated(tmp_path):
     """Below the floor, the request is FLAGGED (`clef_bundle_over_budget`, and
     `_over_budget` on the digest) and the client refuses it, so the chain
     degrades deterministically. Silently sending a shortened question — or a
-    digest that lost the ROE — is the v1 failure mode this design bans.
+    digest that lost the ROE — is the failure mode this design bans.
     Measured floor on a 12-box board with fat candidate reasons: ~577 tokens."""
     from tlaloc.decide import tokens_needed
     ctx, policy, decider = decider_for(tmp_path, StubClef())

@@ -164,7 +164,7 @@ python3 redeploy-competition.py --competition <id> --teams 3 --boxes web01 --mod
 
 | Symptom | Cause / fix |
 |---|---|
-| Phase 7 errors `team_beacons is not supported` | A v1 Compfile still sets `team_beacons`; remove the line — tlaloc v2 plants no beacons |
+| Phase 7 errors `team_beacons is not supported` | An older Compfile still sets `team_beacons`; remove the line — tlaloc plants no team beacons |
 | Clone lock errors | The component clones serially; a concurrent cloner on the same datastore (e.g. the workshop portal provisioner) is the usual cause |
 | Template not found | Not tagged `template`, or name mismatch |
 | Can't SSH a fresh clone | Broken cloud-init; verify on a scratch clone before tagging |

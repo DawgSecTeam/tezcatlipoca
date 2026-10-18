@@ -1,21 +1,21 @@
-"""World v2: the agent's belief state, one schema-versioned JSON document.
+"""World: the agent's belief state, one schema-versioned JSON document.
 
-Changes from v1 (each kills an audited defect):
+Changes from the earlier agent (each kills an audited defect):
 
 * schema `v` field + comp stamp — a state file written for another competition
-  (or another schema) is REFUSED at load. v1's --reset-event leaked tallies,
-  burndown rows and seed_done across events; here the fresh-dir-per-comp
-  contract is enforced by the loader, not by operator memory.
+  (or another schema) is REFUSED at load. The earlier agent's --reset-event
+  leaked tallies, burndown rows and seed_done across events; here the
+  fresh-dir-per-comp contract is enforced by the loader, not by operator memory.
 * restore table (`restores`) is first-class: every recoverable effect appends
   its undo recipe here, and the verdict/organizer artifact is a projection of
-  it (principle 6). v1 scattered restore knowledge through notes and three
-  hardcoded unrecoverable-mode lists.
-* `ensure_event_start` saves ONLY when it creates the key (v1 write-amplified
-  every elapsed_min() call).
+  it (principle 6). The earlier agent scattered restore knowledge through notes
+  and three hardcoded unrecoverable-mode lists.
+* `ensure_event_start` saves ONLY when it creates the key (the earlier agent
+  write-amplified every elapsed_min() call).
 * c2 section: callback freshness per box (implant success is "the callback is
   in the operation", never process liveness).
 
-Concurrency contract is unchanged from v1 and deliberate: flock on
+Concurrency contract is unchanged from the earlier agent and deliberate: flock on
 world.json.lock (EX save / SH reload), reload-then-mutate-then-save, every
 mutator saves the whole file, no merge. The loop reloads at the top of every
 cycle — disk is truth.
@@ -87,7 +87,8 @@ class World:
         if self.comp and stored and stored != self.comp:
             raise StateError(
                 f"{self.path} belongs to comp {stored!r}, not {self.comp!r} — "
-                "cross-event state is the leak v1 shipped; fresh dir per comp")
+                "cross-event state is the leak the earlier agent shipped; fresh "
+                "dir per comp")
         self._d = data
         return True
 
@@ -108,7 +109,7 @@ class World:
     def ensure_event_start(self):
         if "event_start" not in self.meta:
             self.meta["event_start"] = time.time()
-            self.save()          # only on create (v1 saved on every read)
+            self.save()          # only on create (the earlier agent saved on every read)
         return self.meta["event_start"]
 
     # -- targets ---------------------------------------------------------------
@@ -180,7 +181,8 @@ class World:
                      key_path=None, escalation=None):
         """One foothold per IP (update in place). Escalation survives only for
         the SAME user — a re-drop with different creds lands a user foothold
-        with escalation=None (v1 silently kept the stale root label)."""
+        with escalation=None (the earlier agent silently kept the stale root
+        label)."""
         existing = self.foothold(ip)
         if existing and existing["user"] != user:
             escalation = None

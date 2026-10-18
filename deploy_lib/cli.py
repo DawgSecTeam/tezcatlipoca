@@ -77,6 +77,11 @@ def build_parser():
                              "node, datastore, engine_base_vmid, token_env, …). Replaces the "
                              "ambient ./nodes.json; the node endpoints/tokens/datastore come from "
                              "this list, not from .env. Passed per run by the dashboard.")
+    parser.add_argument("--replant-goldens", action="store_true", dest="replant_goldens",
+                        help="ignore (and clear) the per-box golden plant checkpoints so "
+                             "every golden is rolled back and re-planted. A checkpoint is "
+                             "only trusted for the run that wrote it; a fresh run re-plants "
+                             "anyway.")
     parser.add_argument("--hold-start", action="store_true", dest="hold_start",
                         help="Deploy everything but do NOT start the competition: teams are "
                              "seeded, the engine stays paused, and injects are deferred to the "
@@ -220,4 +225,4 @@ def main():
            scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
            force_from_phase=args.force_from_phase, nodes_path=args.nodes,
            team_identifiers=args.team_identifiers, engine_mgmt_ip=args.engine_mgmt_ip,
-           hold_start=args.hold_start)
+           hold_start=args.hold_start, replant_goldens=args.replant_goldens)

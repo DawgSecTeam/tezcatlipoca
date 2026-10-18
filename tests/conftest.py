@@ -31,8 +31,13 @@ Path.home = classmethod(lambda cls: Path(_HOME))
 
 # Captured before any test module is imported: driver scripts call load_dotenv() at module
 # level, so importing one for a CLI test writes the real identity into os.environ during
-# collection — before any fixture runs and too early to be seen as non-ambient.
+# collection — before any fixture runs and too early to be seen as non-ambient. The marker
+# makes those loaders skip .env entirely for this process, and the ambient TEZ_* set is
+# removed so the FIRST test cannot inherit a live estate either.
 _AMBIENT = {k: v for k, v in os.environ.items() if k.startswith("TEZ_")}
+os.environ["TEZ_TEST_OFFLINE"] = "1"
+for _key in [k for k in os.environ if k.startswith("TEZ_")]:
+    del os.environ[_key]
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +45,7 @@ def _isolated_config():
     from estate import config
     config.reset()
     yield
-    for key in [k for k in os.environ if k.startswith("TEZ_") and k not in _AMBIENT]:
+    for key in [k for k in os.environ
+                if k.startswith("TEZ_") and k != "TEZ_TEST_OFFLINE"]:
         del os.environ[key]
-    os.environ.update(_AMBIENT)
     config.reset()

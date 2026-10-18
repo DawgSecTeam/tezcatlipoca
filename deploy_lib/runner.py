@@ -9,7 +9,8 @@ from deploy_lib.prepare import prepare
 
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
            team_node=None, engine_node=None, force_from_phase=False, nodes_path=None,
-           team_identifiers=None, engine_mgmt_ip=None, hold_start=False):
+           team_identifiers=None, engine_mgmt_ip=None, hold_start=False,
+           replant_goldens=False):
 # Run the eight-phase deploy for one competition; from_phase > 1 resumes from the state document.
 #
 #     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
@@ -24,6 +25,10 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 #     and the engine stays paused — competition-ops.py start begins it. A resume of a held
 #     deploy stays held (the flag lives in the state file; the argument is only the mint).
     acquire_deploy_lock(comp_dir)
+    if replant_goldens:
+        from engine.template_freeze import clear_golden_plant_checkpoints
+        clear_golden_plant_checkpoints(comp_dir)
+        print("  --replant-goldens: golden plant checkpoints cleared")
 
     ctx = prepare(comp_dir, num_teams=num_teams, assume_yes=assume_yes, from_phase=from_phase,
                   scoring_vmid=scoring_vmid, team_node=team_node, engine_node=engine_node,

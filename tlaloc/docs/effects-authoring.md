@@ -39,7 +39,7 @@ class MyEffect(Effect):
 
 1. **`run()` never touches the gate.** The template runs the kill switch,
    `ensure_target`, free-form lint and `check()` before `run()`. An effect that
-   re-implements a gate is the v1 defect this design exists to remove. (You may
+   re-implements a gate is the defect this design exists to remove. (You may
    call `ctx.gate.ensure_retries` — it is a per-target anti-grind counter, not a
    safety gate.)
 2. **`ok=True` means the objective was met.** Every give-up path returns
@@ -106,4 +106,4 @@ python3 -m pytest tests/ -q
 ```
 
 `unittest discover` is NOT a runner here (it silently skips pytest-only files —
-the v1 defect this repo's CI is built to prevent).
+the earlier agent's defect this repo's CI is built to prevent).

@@ -1,13 +1,13 @@
 """spray_access — try the credentials intel already knows, over SSH, until one lands.
 
-The mechanic, restated on the v2 contract:
+The mechanic, restated on tlaloc's contract:
 
 * **candidates come from intel, never a hand-maintained table.** For each box
   `ctx.intel.candidate_pairs(ip)` gives the per-box ground truth first (the box
   password, the credlist accounts, nakon's machine account, and — where nakon
   planted a `pam_permit` stack — any password at all), and the generic
-  user x password pool follows as v1's bounded guesses. v1's order is kept
-  because it is the cheap half: the exact artifact pairs are tried before
+  user x password pool follows as the earlier agent's bounded guesses. Its order
+  is kept because it is the cheap half: the exact artifact pairs are tried before
   guessing, and the attempt cap bounds the rest.
 * **SSH is the channel.** Every box on the range ships sshd, Windows included
   (Administrator authenticates through the same transport), so one credential
@@ -15,13 +15,13 @@ The mechanic, restated on the v2 contract:
 * **A login is not a mutation.** Nothing is planted on the box and nothing is
   changed: the outcome lives in world state (a credential plus a `user`
   foothold), so this effect records no artifact and has no undo recipe.
-* **A cap hit is a failure, not a success.** v1 returned `ok=True` when the
-  attempt cap ran out with no working pair, and the seed then recorded `access`
-  for boxes it had never entered (both Windows boxes, caught live, with no
-  foothold and no seeded persistence). Here that path returns `ok=False` and
+* **A cap hit is a failure, not a success.** The earlier agent returned
+  `ok=True` when the attempt cap ran out with no working pair, and the seed then
+  recorded `access` for boxes it had never entered (both Windows boxes, caught
+  live, with no foothold and no seeded persistence). Here that path returns `ok=False` and
   says so; `ok=True` means a credential answered on the wire.
 
-Two anti-grind rules, both from v1's audited dead code: the gate's
+Two anti-grind rules, both from the earlier agent's audited dead code: the gate's
 `ensure_retries` counter is consulted **per login** (a login at the cap is a
 dead end, skipped — not a safety breach, so it never halts the loop), and two
 consecutive transport failures end the pass, so a box that is simply gone costs
@@ -36,7 +36,8 @@ from .base import Effect, Result, register
 # Bound for the guesses; the per-box ground truth is never capped away first.
 DEFAULT_CAP = 40
 DEFAULT_PROBE_TIMEOUT = 20
-# v1 slept between attempts to look like a human rather than a hammer.
+# The earlier agent slept between attempts to look like a human rather than a
+# hammer.
 DEFAULT_DELAY_SEC = 0.4
 # Consecutive unanswered probes before the pass gives up on the box.
 UNREACHABLE_AFTER = 2
@@ -82,7 +83,7 @@ def candidate_pairs(ctx, ip):
 def auth_rejected(exc):
     """True when a transport error is the box refusing the credential.
 
-    The v2 transport is ONE wrapper (paramiko's exception types are flattened
+    The transport is ONE wrapper (paramiko's exception types are flattened
     into TransportError), so the message is the only signal left. Getting this
     wrong in either direction is expensive: treating a rejection as "unreachable"
     gives up on a box we could still log into, and treating an unreachable box as
@@ -183,7 +184,8 @@ def sweep_summary(label, ip, outcome):
 
 
 def limits_of(ctx):
-    """(cap, timeout, delay) from config, with the v1-derived defaults."""
+    """(cap, timeout, delay) from config, with the defaults carried over from the
+    earlier agent."""
     limits = ctx.cfg.get("limits") or {}
     return (int(limits.get("cred_spray_max", DEFAULT_CAP) or DEFAULT_CAP),
             int(limits.get("spray_probe_timeout", DEFAULT_PROBE_TIMEOUT)

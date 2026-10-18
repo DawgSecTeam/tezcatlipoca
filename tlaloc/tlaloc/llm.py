@@ -5,7 +5,7 @@ It is never the decider. `decide.py` calls it in exactly two places, both
 bounded: `choose()` may only return an id from the candidate list it was given,
 and `author_command()` may only return one line the gate will lint.
 
-The v1 lessons this module is built around:
+The lessons from the earlier agent this module is built around:
 
 * **a reasoning model's `reasoning_content` is never the reply.** `chat()`
   returns `content` only (empty is a legitimate answer) and keeps the thinking

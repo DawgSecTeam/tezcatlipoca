@@ -97,7 +97,7 @@ def phase7_domains_and_final(ctx):
     reensure_mysql_credlist_users(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx, ctx.box_creds)
 
     if compfile_flag(ctx.comp_dir / "Compfile", "team_beacons"):
-        print("  ERROR: `team_beacons` is a v1 feature and no longer exists — remove it "
+        print("  ERROR: `team_beacons` belonged to the earlier agent and no longer exists — remove it "
               "from the Compfile")
         raise RuntimeError("team_beacons is not supported")
 

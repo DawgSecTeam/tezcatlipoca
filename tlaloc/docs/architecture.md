@@ -44,7 +44,7 @@ engine.
 | `effects/` | one capability per module, its preconditions, its undo recipe | call gate primitives; return `ok=True` for a give-up |
 | `exec/` | the single transport, the single gate, the Windows idioms | decide anything; hold state |
 | `intel/` | facts (nakon) and the blind fallback | hand-maintain what nakon already knows |
-| `state/` | World v2 + the compact digest | merge concurrent writers (flock, reload-then-mutate) |
+| `state/` | World + the compact digest | merge concurrent writers (flock, reload-then-mutate) |
 | `c2/` | Mythic tasking + callback evidence + payload planting | build payloads mid-event |
 | `report.py` | report, organizer secrets file, restore table | re-derive the undo recipes (effects recorded them) |
 
@@ -70,7 +70,7 @@ At the end of the event (or on halt): `report.write_artifacts()` writes
 `restore-table.json` (machine-readable; the engine's `red-verdict` and destroy
 consume it).
 
-## Deleted from v1 (and why nothing replaces it)
+## Deleted from the earlier agent (and why nothing replaces it)
 
 - the C2 beacon stacks and their vendored C toolkits → Mythic (the only C2; the
   beacon trees are gone);

@@ -99,9 +99,9 @@ $psHistory = "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_h
 if (-not (Test-SkipPath $psHistory)) {
   Remove-Item -Force -Path $psHistory -ErrorAction SilentlyContinue
 }
-if ($env:SCRIM_CLEAR_WIN_EVENTLOGS -eq '1') {
-  wevtutil cl System; wevtutil cl Application; wevtutil cl Security
-}
+# Event logs are the richest deploy record on a Windows box (logon, service and
+# PowerShell events); clearing them is not optional for an event range.
+wevtutil cl System; wevtutil cl Application; wevtutil cl Security
 "TRAILS_WIN_OK"
 """
 

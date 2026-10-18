@@ -29,8 +29,9 @@ from common.utils import competition_name, load_compfile, pick_competition
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-ENV_PATH = Path(".env")
-load_dotenv(ENV_PATH)
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+if not os.environ.get("TEZ_TEST_OFFLINE"):
+    load_dotenv(ENV_PATH)
 
 
 def load_destroyable_competitions():

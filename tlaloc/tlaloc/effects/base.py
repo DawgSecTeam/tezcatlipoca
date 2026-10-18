@@ -1,13 +1,14 @@
 """The effect registry: ONE description of what an effect is, what it may do,
 where it runs, and how to undo it.
 
-Doctrine (v1 kept it in 4-5 places that drifted — prompt prose, tactic-id
-sets, a policy elif-chain, the fallback ladder):
+Doctrine (the earlier agent kept it in 4-5 places that drifted — prompt prose,
+tactic-id sets, a policy elif-chain, the fallback ladder):
 
 * ``tags``     capability + danger class, THE single source:
                access | c2 | pressure | persistence | endgame
                plus passive | impacty | unrecoverable.
-               ("unrecoverable" replaces v1's three hardcoded mode lists.)
+               ("unrecoverable" replaces the earlier agent's three hardcoded mode
+               lists.)
 * ``check()``  per-effect precondition (needs root, needs C2, ladder window).
                Raise PolicyError to reject a candidate; raise GuardrailError
                only if something unsafe was attempted.
@@ -17,7 +18,7 @@ sets, a policy elif-chain, the fallback ladder):
                bookkeeping. An effect cannot forget a gate.
 * Attribution is code-side: an effect that took a scored service down sets
   ``Result.impact``; the ledger never depends on a caller remembering a
-  ``service=`` parameter (v1's honor-system audited defect, twice).
+  ``service=`` parameter (the earlier agent's honor-system audited defect, twice).
 """
 
 from dataclasses import dataclass, field

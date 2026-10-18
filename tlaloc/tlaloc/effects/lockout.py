@@ -5,12 +5,12 @@ event red stops being subtle: every blue login account — the credlist accounts
 the engine authenticates with, and the box account engineers actually work from —
 is password-locked, so blue cannot log in to fix what is still standing.
 
-Ported from v1's burndown + `firewall_lockout` (mode=lockout):
+Ported from the earlier agent's burndown + `firewall_lockout` (mode=lockout):
 
 * Linux  ``usermod -L <user>`` per account  (undo: ``usermod -U <user>``)
 * Windows ``net user <user> /active:no``    (undo: ``net user <user> /active:yes``)
 
-Four things are deliberately NOT v1's shape:
+Four things are deliberately NOT the earlier agent's shape:
 
 * **the window is the only key.** A locked account's undo is organizer-facing, so
   `check()` refuses this effect unless `policy.window_open("lockout")` — outside
@@ -19,8 +19,8 @@ Four things are deliberately NOT v1's shape:
 * **red's own way in is never locked.** The foothold user, root, and every
   planted `svc-*` account are out. On Windows the SSH path *is* Administrator, so
   a lock list that would disable our own session is refused unless a live C2
-  channel covers the box — the channel built to outlive exactly that (v1's
-  `_live_beacon` rule);
+  channel covers the box — the channel built to outlive exactly that (the earlier
+  agent's `_live_beacon` rule);
 * **the lock is verified, not assumed.** The shadow hash of every account is read
   back (a leading ``!``/``*``) and Windows' `Enabled` flag is read back, so
   `ok=True` means the accounts are actually locked. Accounts that cannot be
@@ -58,7 +58,7 @@ def off_limits(user, fh, windows=False):
     keeps working through it. On Windows the box account IS the SSH path red uses,
     so it is NOT excluded here: the channel rule in `_plan` decides, because
     leaving Administrator enabled on a Windows box means blue was never locked out
-    at all (v1's `keep_foothold_user` case).
+    at all (the earlier agent's `keep_foothold_user` case).
     """
     user = (user or "").strip()
     if not user:
@@ -135,7 +135,7 @@ class Lockout(Effect):
 
     def _targets(self, ctx, ip, params, windows):
         """Blue's login accounts on this box: intel's credlist + the box account,
-        minus red's own (v1's `_blue_accounts`)."""
+        minus red's own (the earlier agent's `_blue_accounts`)."""
         requested = params.get("users") or []
         if isinstance(requested, str):
             requested = [requested]
@@ -168,7 +168,7 @@ class Lockout(Effect):
         Disabling the account our own SSH path uses would cut red off, so it is
         dropped from the list — unless a live C2 channel covers the box, which is
         the whole reason that channel exists. If nothing is left to lock, the box
-        is refused (v1 skipped it too).
+        is refused (the earlier agent skipped it too).
         """
         fh = ctx.world.foothold(ip)
         windows = bool(fh and fh.get("windows"))

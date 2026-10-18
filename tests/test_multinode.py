@@ -317,7 +317,7 @@ class PlacementRecordTest(unittest.TestCase):
             back = placement_record.read_placement(comp)
             document = estate_state.EstateState.load(comp)
         self.assertEqual(back["version"], 2)
-        self.assertEqual(back["red01"]["vmid"], 2222)          # Compfile wins, as v1 did
+        self.assertEqual(back["red01"]["vmid"], 2222)          # Compfile wins, as the legacy derivation did
         self.assertEqual(back["golden_vmids"], {"n1": list(range(2150, 2160))})
         self.assertEqual(back["engine_template_vmid"], 2140)
         stored = document.data["placement"]

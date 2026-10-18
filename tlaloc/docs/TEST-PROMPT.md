@@ -1,7 +1,7 @@
-# tlaloc v2 — independent test prompt
+# tlaloc — independent test prompt
 
 Paste the block below into an agent session with shell access on **bossagent**. It
-verifies the v2 rebuild and returns a verdict. The offline half takes ~15 minutes;
+verifies the rebuild and returns a verdict. The offline half takes ~15 minutes;
 the live half needs red01, clef and (optionally) a scrim window.
 
 Everything in the prompt is a check someone else can re-run — nothing asks the
@@ -9,14 +9,14 @@ agent to trust this repo's own documentation.
 
 ---
 
-You are the independent tester for **tlaloc v2**, the rebuilt CCDC red-team agent.
+You are the independent tester for **tlaloc**, the rebuilt CCDC red-team agent.
 
 Context you need, and should verify rather than assume:
-- v2 lives IN the range engine: it is the `tlaloc/` folder of the tezcatlipoca
+- tlaloc lives IN the range engine: it is the `tlaloc/` folder of the tezcatlipoca
   checkout. tlaloc is the only red engine: every competition stages it in phase 7,
   with no engine selector and no fallback.
 - The design it must satisfy is this folder's `docs/` (architecture,
-  decision-layer, roe, effects-authoring); the v1 audit that motivated the
+  decision-layer, roe, effects-authoring); the audit that motivated the
   rebuild was an external review, not part of this tree.
 - The engine's integration is `red/tlaloc_ops.py`: phase 7 of every deploy
   provisions red01, installs the C2, pushes the config and seeds the agent. The
@@ -91,9 +91,10 @@ where it does not. Grep-level evidence is fine, but the claim must be specific.
 8. **Hermetic tests.** No test opens a socket or spawns a process
    (`tests/conftest.py` enforces it). Try to prove it: pick two tests and show the
    guard firing if you add a `subprocess.run` call, then revert.
-9. **No v1 regressions were re-imported**: no `inspect.getsource` test, no
-   `unittest discover` runner, no hand-maintained facts table that nakon owns, no
-   literal artifact names outside `effects/artifactnames.py`.
+9. **No regressions from the earlier agent were re-imported**: no
+   `inspect.getsource` test, no `unittest discover` runner, no hand-maintained
+   facts table that nakon owns, no literal artifact names outside
+   `effects/artifactnames.py`.
 
 ## Step 4 — the decision chain against the live model (5 min)
 

@@ -13,7 +13,8 @@ re-rendered from memory:
 
 Principle 6 lives here: every effect recorded its own undo when it ran, so the
 restore table is a projection of the effect log — not something a report writer
-has to reconstruct (v1 kept restore knowledge in three places that drifted).
+has to reconstruct (the earlier agent kept restore knowledge in three places that
+drifted).
 """
 
 import json

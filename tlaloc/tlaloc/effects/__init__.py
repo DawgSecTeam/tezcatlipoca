@@ -1,7 +1,7 @@
 """The shared execute() template — the single path from decision to action.
 
-Order (and it is not negotiable, because every v1 bypass was an exception to
-this order): kill switch -> param shape -> ensure_target -> free-form lint ->
+Order (and it is not negotiable, because every bypass in the earlier agent was
+an exception to this order): kill switch -> param shape -> ensure_target -> free-form lint ->
 effect precondition -> dry-run short-circuit -> run -> bookkeeping -> audit.
 
 GuardrailError propagates (the loop stops; the design was violated).

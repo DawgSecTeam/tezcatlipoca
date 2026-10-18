@@ -7,8 +7,8 @@ contract it satisfies is `apply(ctx, ip, family, names) -> Result` plus a
 
 * draw nothing. Every path, unit, account and marker comes out of `names`
   (drawn by `artifactnames.linux_names`), `NEEDS` asserts the family has the
-  names it needs, and a handler that invents a literal path is the v1 IOC
-  factory this rewrite exists to remove.
+  names it needs, and a handler that invents a literal path is the IOC factory
+  this rewrite exists to remove.
 * one round trip per family (two when the plant needs a binary upload), and the
   script reports present / created / repaired / failed itself, so the outcome
   is read off the box instead of assumed from rc.
@@ -45,11 +45,12 @@ Families (the order `persist.auto_order` walks them):
   logwipe       journal vacuum + auth/syslog rotation on a cron
   decoy         the procfilter hunt-bait: a hidden sleeper unhide(1) can flag
 
-Three deliberate v2 deviations from the v1 mechanics, each one an audit finding:
+Three deliberate deviations from the earlier agent's mechanics, each one an
+audit finding:
 
 1. `logwipe` COPIES auth.log/syslog into a drawn backup directory before the
-   truncation (v1 truncated in place — a delete of evidence no restore table can
-   undo).
+   truncation (the earlier agent truncated in place — a delete of evidence no
+   restore table can undo).
 2. A preload that fails its `LD_PRELOAD=<so> /bin/true` load test parks the .so
    and its conf as `.tlaloc-bak` instead of removing them, and reports the plant
    as `ok=False, installed=True` so the box's footprint still reaches the
@@ -100,8 +101,8 @@ def _q(text):
 
 
 def _staging_for(path):
-    """`/usr/lib/.<label>/lib<label>.so` -> `/tmp/.<label>-upload` (v1's
-    `/tmp/.<name>-upload` staging idiom, derived from the drawn label)."""
+    """`/usr/lib/.<label>/lib<label>.so` -> `/tmp/.<label>-upload` (the earlier
+    agent's `/tmp/.<name>-upload` staging idiom, derived from the drawn label)."""
     label = os.path.basename(os.path.dirname(path)).lstrip(".")
     return f"/tmp/.{label or os.path.basename(path).lstrip('.')}-upload"
 
@@ -202,8 +203,8 @@ def _failed(family, state, ip):
 
 def artifact_paths(world, ip):
     """Absolute paths worth hiding/hardening, harvested from this box's
-    artifacts. v1 regexed the artifact detail; v2 also reads the recorded
-    `paths`, which is the record persist.py actually wrote."""
+    artifacts. The earlier agent regexed the artifact detail; tlaloc also reads
+    the recorded `paths`, which is the record persist.py actually wrote."""
     paths = set()
     for artifact in world.artifacts(ip):
         detail = artifact.get("detail") or ""
@@ -217,13 +218,14 @@ def artifact_paths(world, ip):
 
 
 def reentry_pubkey(ctx, comment):
-    """(key line, problem) — the re-entry key v1 kept at `<state_dir>/red_key`.
+    """(key line, problem) — the re-entry key the earlier agent kept at
+    `<state_dir>/red_key`.
 
     Generated once per install and reused: `exec/ssh.py` already falls back to
     this private key when a password path is closed, so the plant and the
     transport have to agree on one file. The comment is this family's drawn
     label — a fixed comment survives every clean, because blue greps it once and
-    has a list of every key we own (v1 audit).
+    has a list of every key we own (the rebuild's audit).
     """
     from pathlib import Path
 
@@ -265,9 +267,9 @@ def preload_install(ctx, ip, fh, so, conf=None, body="", staging=None,
 
     `LD_PRELOAD=<so> /bin/true` is a PRECONDITION of this function, not a
     postcheck: a bad line in /etc/ld.so.preload breaks every binary on the box,
-    and the cleanup script cannot even run to unfix itself (v1 shipped two
-    writers, one of which forgot this — audit finding #4). A refusal parks the
-    .so and conf as `.tlaloc-bak`; nothing is ever removed.
+    and the cleanup script cannot even run to unfix itself (the earlier agent
+    shipped two writers, one of which forgot this — audit finding #4). A refusal
+    parks the .so and conf as `.tlaloc-bak`; nothing is ever removed.
 
     `post_enabled` runs only on the enabled path (the harvester families use it
     for the work that must not happen behind a refused filter).
@@ -306,12 +308,13 @@ def preload_install(ctx, ip, fh, so, conf=None, body="", staging=None,
 
 
 # -- the families -------------------------------------------------------------
-# Each handler: (ctx, ip, fh, names) -> Result. The command text is v1's, with
-# every literal replaced by a drawn name and every write behind its own
-# idempotence guard.
+# Each handler: (ctx, ip, fh, names) -> Result. The command text is the earlier
+# agent's, with every literal replaced by a drawn name and every write behind its
+# own idempotence guard.
 
 def _systemd_unit(ctx, ip, fh, names):
-    """v1 `_systemd`: a sleeper unit, enabled --now, that survives a reboot.
+    """The earlier agent's `_systemd`: a sleeper unit, enabled --now, that
+    survives a reboot.
 
     Present = the unit file is there AND enabled (the artifact's own
     `check_cmd`), so a unit blue disabled or a file blue emptied is repaired by
@@ -351,9 +354,9 @@ def _systemd_unit(ctx, ip, fh, names):
 
 
 def _profile(ctx, ip, fh, names):
-    """v1 `_profiled`: an /etc/profile.d snippet that re-adds the re-entry key on
-    every interactive login, so a clean that misses the profile file silently
-    regrows access."""
+    """The earlier agent's `_profiled`: an /etc/profile.d snippet that re-adds
+    the re-entry key on every interactive login, so a clean that misses the
+    profile file silently regrows access."""
     path = _name(names, "profile")
     comment = _name(names, "key_comment")
     pub, problem = reentry_pubkey(ctx, comment)
@@ -386,8 +389,8 @@ def _profile(ctx, ip, fh, names):
 
 
 def _sshd_dropin(ctx, ip, fh, names):
-    """v1 `_sshd_dropin`: a second, red-controlled AuthorizedKeysFile — removing
-    ~/.ssh/authorized_keys does not evict us."""
+    """The earlier agent's `_sshd_dropin`: a second, red-controlled
+    AuthorizedKeysFile — removing ~/.ssh/authorized_keys does not evict us."""
     dropin = _name(names, "sshd_dropin")
     keydir = _name(names, "keys_dir")
     user = fh["user"]
@@ -425,8 +428,8 @@ def _sshd_dropin(ctx, ip, fh, names):
 
 
 def _cron(ctx, ip, fh, names):
-    """v1 `_cron`: a /etc/cron.d entry that re-touches a marker every 10 min —
-    a heartbeat blue can find and hunt."""
+    """The earlier agent's `_cron`: a /etc/cron.d entry that re-touches a marker
+    every 10 min — a heartbeat blue can find and hunt."""
     path = _name(names, "cron")
     marker = _name(names, "cron_marker")
     line = f'*/10 * * * * root /bin/sh -c "touch {marker}"'
@@ -447,13 +450,13 @@ def _cron(ctx, ip, fh, names):
 
 
 def _cron_reaper(ctx, ip, fh, names):
-    """v1 `_rekill`: a cron that re-stops a service we already took down every
-    5 min — the direct counter to a blue restore.
+    """The earlier agent's `_rekill`: a cron that re-stops a service we already
+    took down every 5 min — the direct counter to a blue restore.
 
-    v1 required the caller to name the unit. v2 has one source of truth for
-    "which unit did we take down on this box": the impact ledger (takedown
-    records the RESOLVED unit, so `roundcube` lands as `apache2`). With no
-    recorded impact there is nothing to reap — and stopping a service we never
+    The earlier agent required the caller to name the unit. tlaloc has one source
+    of truth for "which unit did we take down on this box": the impact ledger
+    (takedown records the RESOLVED unit, so `roundcube` lands as `apache2`). With
+    no recorded impact there is nothing to reap — and stopping a service we never
     took down would be an unlogged takedown, so that is an honest ok=False.
     """
     if not (ctx.cfg.get("effects") or {}).get("rekill_cron", True):
@@ -489,9 +492,9 @@ def _cron_reaper(ctx, ip, fh, names):
 
 
 def _timer(ctx, ip, fh, names):
-    """v1 `_timer`: the timer twin of the reaper cron — a oneshot unit that
-    re-asserts the login hook every 5 min, so deleting the cron file is not
-    enough."""
+    """The earlier agent's `_timer`: the timer twin of the reaper cron — a
+    oneshot unit that re-asserts the login hook every 5 min, so deleting the cron
+    file is not enough."""
     timer = _name(names, "timer")
     svc_path = f"/etc/systemd/system/{_name(names, 'timer_unit')}"
     tmr_path = f"/etc/systemd/system/{timer}"
@@ -546,12 +549,13 @@ def _timer(ctx, ip, fh, names):
 
 
 def _user_cron(ctx, ip, fh, names):
-    """v1 `_user_cron`: a line in the foothold user's own spool plus linger — a
-    periodic task that never touches /etc/cron.d.
+    """The earlier agent's `_user_cron`: a line in the foothold user's own spool
+    plus linger — a periodic task that never touches /etc/cron.d.
 
-    v1 appended unconditionally (`crontab -l; echo line | crontab -`), which
-    duplicated the line on every re-plant. Here the append sits behind the same
-    `grep -qF` guard the standing check uses, so re-assertion is a no-op.
+    The earlier agent appended unconditionally (`crontab -l; echo line | crontab
+    -`), which duplicated the line on every re-plant. Here the append sits behind
+    the same `grep -qF` guard the standing check uses, so re-assertion is a
+    no-op.
     """
     user = fh["user"]
     if user == "root":
@@ -582,8 +586,8 @@ def _user_cron(ctx, ip, fh, names):
 
 
 def _keys(ctx, ip, fh, names):
-    """v1 `_sshkey`: the re-entry key in authorized_keys for the foothold user
-    and for root — re-entry that survives a password rotation."""
+    """The earlier agent's `_sshkey`: the re-entry key in authorized_keys for the
+    foothold user and for root — re-entry that survives a password rotation."""
     comment = _name(names, "key_comment")
     pub, problem = reentry_pubkey(ctx, comment)
     if pub is None:
@@ -617,8 +621,8 @@ def _keys(ctx, ip, fh, names):
 
 
 def _suid(ctx, ip, fh, names):
-    """v1 `_suid`: a SUID-root copy of bash at a boring path — a re-entry root
-    path that does not depend on any credential blue can rotate."""
+    """The earlier agent's `_suid`: a SUID-root copy of bash at a boring path — a
+    re-entry root path that does not depend on any credential blue can rotate."""
     dest = _name(names, "suid")
     guard = f"test -u {dest}"
     create = (f"(cp -f /bin/bash {dest} 2>/dev/null || cp -f /usr/bin/bash "
@@ -638,8 +642,8 @@ def _suid(ctx, ip, fh, names):
 
 
 def _preload(ctx, ip, fh, names):
-    """v1 `evasion_linux._preload`: the ld.so.preload hider — red's own paths
-    disappear from a naive readdir() listing.
+    """The earlier agent's `evasion_linux._preload`: the ld.so.preload hider —
+    red's own paths disappear from a naive readdir() listing.
 
     The hider .so must be staged first (it is built at comp-prep, never on the
     box mid-event) and the hidden names are this box's artifacts, because the
@@ -697,8 +701,9 @@ def _preload(ctx, ip, fh, names):
 
 
 def _immu(ctx, ip, fh, names):
-    """v1 `evasion_linux._immu`: chattr +i over red's planted files, so a plain
-    `rm` fails until blue notices the attribute and clears it first.
+    """The earlier agent's `evasion_linux._immu`: chattr +i over red's planted
+    files, so a plain `rm` fails until blue notices the attribute and clears it
+    first.
 
     Read off the box per path: newly-immutable counts as created, all-already
     counts as a no-op re-assertion, and every refusal is a failure (a family
@@ -741,8 +746,9 @@ def _immu(ctx, ip, fh, names):
 
 
 def _timestomp(ctx, ip, fh, names):
-    """v1 `evasion_linux._stomp`: mtimes matched to /etc/hostname, so a "files
-    modified in the last hour" sweep comes back empty.
+    """The earlier agent's `evasion_linux._stomp`: mtimes matched to
+    /etc/hostname, so a "files modified in the last hour" sweep comes back
+    empty.
 
     The original mtimes are read (and printed) before the stomp, so the undo is
     a real `touch -d @<epoch>` per path instead of an apology.
@@ -785,13 +791,14 @@ def _timestomp(ctx, ip, fh, names):
 
 
 def _logwipe(ctx, ip, fh, names):
-    """v1 `evasion_linux._logs`: journal vacuum + auth/syslog truncation on a
-    cron — red's login trail thins while blue hunts.
+    """The earlier agent's `evasion_linux._logs`: journal vacuum + auth/syslog
+    truncation on a cron — red's login trail thins while blue hunts.
 
-    v2 rotates instead of wiping: the cron calls a drawn helper script which
+    tlaloc rotates instead of wiping: the cron calls a drawn helper script which
     COPIES auth.log/syslog into a drawn directory and then truncates the live
     files. The live trail thins (the point) and the content is still on the box
-    for the organizer's restore table (the v1 audit's "never delete" finding).
+    for the organizer's restore table (the rebuild's "never delete" audit
+    finding).
     """
     cron = _name(names, "log_cleanup")
     helper = f"{_name(names, 'cron_marker')}.sh"
@@ -833,8 +840,9 @@ def _logwipe(ctx, ip, fh, names):
 
 
 def procfilter_so(ctx):
-    """v1 `proc_hide._staged_so`: a built procfilter.so, compiled once from
-    source if it is not staged (red01 has cc — the beacon build needed it too)."""
+    """The earlier agent's `proc_hide._staged_so`: a built procfilter.so,
+    compiled once from source if it is not staged (red01 has cc — the beacon
+    build needed it too)."""
     directory = str((ctx.cfg.get("procfilter") or {}).get("install_dir") or "") \
         or "/opt/tlaloc/vendor/procfilter"
     if not os.path.isdir(directory):
@@ -858,8 +866,9 @@ def procfilter_so(ctx):
 
 
 def _decoy(ctx, ip, fh, names):
-    """The procfilter hunt-bait (v1 `proc_hide`): an /etc/ld.so.preload readdir
-    filter plus a decoy sleeper whose argv is smeared to a kernel-thread name.
+    """The procfilter hunt-bait (the earlier agent's `proc_hide`): an
+    /etc/ld.so.preload readdir filter plus a decoy sleeper whose argv is smeared
+    to a kernel-thread name.
 
     Invisible to ps/top/ls and visible to unhide's syscall brute-force — the
     mismatch is the hunt blue is supposed to find. The artifact's `check_cmd`
@@ -868,8 +877,8 @@ def _decoy(ctx, ip, fh, names):
     file records pid/lib/dir because the filter hides all three from a listing.
 
     The preload line goes in through the shared `preload_install`, so this
-    family cannot skip the `LD_PRELOAD=/bin/true` load test that its own v1
-    version (and v1's audit finding #4) is about.
+    family cannot skip the `LD_PRELOAD=/bin/true` load test that its own earlier
+    version (and the rebuild's audit finding #4) is about.
     """
     if not (ctx.cfg.get("effects") or {}).get("decoy"):
         return Result(False, "decoy: the procfilter hunt-bait is off by default "

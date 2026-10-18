@@ -12,9 +12,10 @@ python3 -m pytest tlaloc/tests -q
 ```
 
 `unittest discover` is NOT a runner here. It silently skips pytest-only files
-(fixtures, `monkeypatch`, `tmp_path`), which is how v1's suite reported green
-while 50 tests — the whole deploy config-contract, engine-NAT and keepalive
-surface — never ran. If you see an `unittest` invocation in CI, that is a bug.
+(fixtures, `monkeypatch`, `tmp_path`), which is how the earlier agent's suite
+reported green while 50 tests — the whole deploy config-contract, engine-NAT and
+keepalive surface — never ran. If you see an `unittest` invocation in CI, that is
+a bug.
 
 `pyproject.toml` pins `testpaths`, `pythonpath = ["."]` and registers the
 `net`/`live` markers.
@@ -27,7 +28,7 @@ surface — never ran. If you see an `unittest` invocation in CI, that is a bug.
 | `test_policy.py` | ladder tiers over event progress, the mercy rule, grace/caps/floor, unrecoverable unlocking, the final window suspending the gates, candidate determinism and ladder obedience, the question bundle's shape and batch budget, focus rotation, restore detection |
 | `test_decide.py` | the gate (act / arbiter / deterministic), the arbiter bounded to the candidate list, hold semantics, clef-down degradation, per-question thresholds, the expected-value read of a `score` answer, `noul` probability handling, command-intent's conservative floor, **the batch budget** (at 16k the whole state goes out untrimmed and un-compacted — asserted byte-identical to an unlimited-budget frame; at 1k the compact fallback still fits; below the floor it is *flagged*, never silently truncated; an endpoint "too large" rejection is learned from and retried exactly once), the cooldown, **and the replay of recorded bundles** |
 | `test_effects.py` | the `execute()` template (kill switch, `ensure_target`, dry-run neutrality, `PolicyError` → failed result + remembered rejection, `GuardrailError` propagates, ledger/artifact/restore bookkeeping, free-form linting), the registry contract and catalogue completeness, the **dry-run sweep over every registered effect**, `recon` and `takedown` behaviour incl. proof-of-damage, artifact naming |
-| `test_config_contract.py` | the deploy contract: every `config.DEFAULTS` leaf is in `cli.CONFIG_CONTRACT` (a key the agent can read but the deploy would drop is a feature that is dead on red01 — the v1 defect this guards), every contract entry resolves to a real path, every config path an effect module reads is declared, and the effect-read table is complete against a source scan |
+| `test_config_contract.py` | the deploy contract: every `config.DEFAULTS` leaf is in `cli.CONFIG_CONTRACT` (a key the agent can read but the deploy would drop is a feature that is dead on red01 — the earlier agent's defect this guards), every contract entry resolves to a real path, every config path an effect module reads is declared, and the effect-read table is complete against a source scan |
 | `test_c2.py` | the Mythic REST mapping (auth, callbacks, attribution by description, freshness, task polling incl. a queued `submitted` not being terminal), the planter (frozen payload, install record without a callback, manifest discipline), `implant_channel`/`task_channel` preconditions and attribution |
 | `test_integration.py` | the loop end to end on fakes (decision → gate → effect → ledger → reports), the kill switch halting a run, the consecutive-error breaker, escalation choosing a legal stronger mode, the host guard, the seed stages (full/light/resumable/manifest), the report artifacts and their file modes |
 
@@ -47,8 +48,9 @@ monkeypatch.setattr(socket.socket, "connect", boom)
 
 A test that reaches for a box or a URL raises `AssertionError` with an
 instruction to use the fakes (or to opt in with `@pytest.mark.net`). This is not
-pedantry: v1's destroy tests were green because they really did dial the club LAN
-and swallowed the failures, and every one of them stalled for seconds.
+pedantry: the earlier agent's destroy tests were green because they really did
+dial the club LAN and swallowed the failures, and every one of them stalled for
+seconds.
 
 ## The fakes
 

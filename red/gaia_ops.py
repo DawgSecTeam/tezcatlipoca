@@ -158,7 +158,7 @@ def auth_argv(path, server, user=MYTHIC_ADMIN, port=MYTHIC_WEB_PORT):
     No `-k`: in this Gaia it maps to the client's `ssl=False`, i.e. http://, and Mythic
     serves TLS on 7443 — the client already skips certificate verification on its https
     path. Live 2026-10-17: `-k` sent an HTTP request to the HTTPS port, Mythic answered
-    400 + HTML, and the deploy refused a v2 comp with no C2.
+    400 + HTML, and the deploy refused a competition with no C2.
     """
     return gaia_argv(path, "auth", "-S", str(server), "-P", str(int(port)),
                      "-u", str(user), "-p")

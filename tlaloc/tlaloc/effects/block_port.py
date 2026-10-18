@@ -8,28 +8,31 @@ this is the only mechanism that touches it.
 One effect, three Linux mechanisms in preference order, all attempted in one
 script so the box itself says which one landed:
 
-* ``iptables`` ``-I INPUT -p tcp --dport <port> -j REJECT`` (the v1 mechanic)
+* ``iptables`` ``-I INPUT -p tcp --dport <port> -j REJECT`` (the earlier agent's
+  mechanic)
 * ``ufw``      ``ufw insert 1 deny <port>/tcp`` (a different backend: on
                 firewalld hosts the iptables call can be a shim that says yes)
 * ``nft``      an ``inet`` table of OUR OWN, hooked at ``input`` — the lesson
-                v1 learned after ``nft insert rule inet filter input`` died with
-                "No such file or directory" on a firewalld box (caught live,
-                three failed actions)
+                the earlier agent learned after ``nft insert rule inet filter
+                input`` died with "No such file or directory" on a firewalld box
+                (caught live, three failed actions)
 
 Each mechanism echoes its own return code, so the box says which one landed
-(v1's `_picked_cleanup` fix, kept). What v2 adds is that an add's own rc is never
-taken as proof: a second pass reads every rule BACK, and only a rule that holds
-becomes an impact — the ledger is what scoreboard attribution is graded on. The
-restore recipe then names the mechanism(s) that hold and this activation's drawn
-table/rule name (never a fixed one blue can grep once and clear forever).
+(the earlier agent's `_picked_cleanup` fix, kept). What tlaloc adds is that an
+add's own rc is never taken as proof: a second pass reads every rule BACK, and
+only a rule that holds becomes an impact — the ledger is what scoreboard
+attribution is graded on. The restore recipe then names the mechanism(s) that
+hold and this activation's drawn table/rule name (never a fixed one blue can
+grep once and clear forever).
 
-Two v1 bugs are fixed in the mechanics themselves rather than copied:
+Two bugs from the earlier agent are fixed in the mechanics themselves rather than
+copied:
 
 * the nft brace spec is single-quoted. Unquoted, the ``;`` inside the braces
-  ends the shell command and the trailing ``}`` is a syntax error — v1's nft
-  fallback could not have worked on any box;
-* the whole script runs under ONE root shell (``sh -c``, v1's own root_cmd
-  idiom). A bare ``sudo -n`` prefix binds to the first command only, so
+  ends the shell command and the trailing ``}`` is a syntax error — the earlier
+  agent's nft fallback could not have worked on any box;
+* the whole script runs under ONE root shell (``sh -c``, the earlier agent's own
+  root_cmd idiom). A bare ``sudo -n`` prefix binds to the first command only, so
   ``sudo -n iptables …; echo …; ufw …`` would run everything after the first
   ``;`` as the foothold user and silently half-apply.
 
@@ -62,8 +65,9 @@ def run_root_script(ctx, ip, fh, script, timeout=60):
     `root_cmd` only *prefixes* the escalation label, so a bare prefix covers the
     first command of a `;`-separated script and nothing after it
     (`sudo -n iptables -I …; echo …; ufw …` runs the ufw half unprivileged).
-    v1's root_cmd wrapped multi-command scripts in `sh -c`; this is that idiom,
-    kept in ONE place so the three pressure effects cannot drift apart.
+    the earlier agent's root_cmd wrapped multi-command scripts in `sh -c`; this
+    is that idiom, kept in ONE place so the three pressure effects cannot drift
+    apart.
     """
     return ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
                        root_cmd(f"sh -c {shlex.quote(script)}", fh),
@@ -107,7 +111,8 @@ def undo_command(mechanism, port, table):
 
 
 def windows_add(port, rule):
-    """v1's Windows mechanic: netsh exists on every SKU under an admin shell."""
+    """The earlier agent's Windows mechanic: netsh exists on every SKU under an
+    admin shell."""
     return (f"netsh advfirewall firewall add rule name={rule} dir=in "
             f"action=block protocol=TCP localport={port}")
 

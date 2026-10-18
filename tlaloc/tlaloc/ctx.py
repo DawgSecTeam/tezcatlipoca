@@ -1,7 +1,7 @@
 """Ctx: the typed execution context every effect receives.
 
-v1's ctx was an untyped dict whose dry-run flag was read two different ways
-(``ctx["dry_run"]`` vs ``ctx["cfg"]["run"]["dry_run"]``) — so the realm family
+the earlier agent's ctx was an untyped dict whose dry-run flag was read two
+different ways (``ctx["dry_run"]`` vs ``ctx["cfg"]["run"]["dry_run"]``) — so the
 could silently bypass a runtime toggle. One dataclass, one dry_run field, read
 one way, everywhere.
 """

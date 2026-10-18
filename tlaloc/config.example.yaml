@@ -1,4 +1,4 @@
-# tlaloc v2 — example configuration
+# tlaloc — example configuration
 #
 # Layers (lowest wins nothing; later wins): DEFAULTS in tlaloc/config.py <
 # this file (or /etc/tlaloc/config.yaml on red01) < the TLALOC_* env allow-map <
@@ -112,8 +112,8 @@ effects:
   allow_ssh_takedown: false # scoring sshd down needs explicit opt-in
   rekill_cron: true
   rotate_credlist: true
-  decoy: false              # optional v1 flavour (not in the catalogue)
-  mysql_udf: false          # optional v1 flavour (not in the catalogue)
+  decoy: false              # optional earlier-agent flavour (not in the catalogue)
+  mysql_udf: false          # optional earlier-agent flavour (not in the catalogue)
 
 # Optional flavour ASSETS. Empty = the effects draw their own locations from
 # tlaloc/effects/artifactnames.py; set these only to point at a vendored asset.

@@ -2,7 +2,7 @@
 
 clef accepts any JSON `state`, and the whole request (digest + question bundle)
 must fit the endpoint's batch. That budget is now generous (16k, up from the
-512-token `--ubatch-size` the v2 design was originally
+512-token `--ubatch-size` the design was originally
 written against), so in practice the full state goes out and nothing is cut.
 The digest keeps its fixed shape and its truncation cascade anyway: it is the
 guard that lets the same code run against a small-batch endpoint or a different

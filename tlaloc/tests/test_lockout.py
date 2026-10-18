@@ -245,7 +245,8 @@ def test_windows_refuses_to_disable_our_own_ssh_path_without_a_channel(tmp_path)
 
 def test_windows_leaves_the_ssh_account_alone_when_other_logins_exist(tmp_path):
     """Without a channel the Windows box account is dropped from the plan, and the
-    rest of the credlist is still locked (v1's keep_foothold_user case). `ubuntu`
+    rest of the credlist is still locked (the earlier agent's keep_foothold_user
+    case). `ubuntu`
     comes from users.json's credlist and is not on a Windows box at all, so the
     read-back reports it absent rather than pretending it was locked."""
     ssh = FakeSSH().on("net user ubuntu /active:no", rc=0,

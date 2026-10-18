@@ -6,12 +6,13 @@ engine authenticates with. Rotating one is the hardest realistic hit in this
 format: nothing is down, the credential is simply wrong, and only someone who can
 restore the original password brings it back.
 
-Ported from v1's `credlist_sabotage`, with four of its lessons load-bearing:
+Ported from the earlier agent's `credlist_sabotage`, with four of its lessons
+load-bearing:
 
 * **never rotate red's own way in.** The account this foothold is logged in as,
-  the box account, root and every planted `svc-*` account are protected (v1's
-  `is_protected`): rotating red's own way in is how a credlist hit turns into a
-  self-lockout;
+  the box account, root and every planted `svc-*` account are protected (the
+  earlier agent's `is_protected`): rotating red's own way in is how a credlist
+  hit turns into a self-lockout;
 * **the original comes from intel ground truth first** — a world cred is only a
   fallback, and never one this effect wrote — or a second pass "restores" the
   first pass's random password (caught live);
@@ -42,8 +43,8 @@ PROTECTED = ("root", "administrator", "admin")
 
 _USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
-# Same shape as v1's: long enough to be unguessable, plain alnum so it survives
-# every shell, `chpasswd` and `net user` quoting path unchanged.
+# Same shape as the earlier agent's: long enough to be unguessable, plain alnum
+# so it survives every shell, `chpasswd` and `net user` quoting path unchanged.
 _PASSWORD_LEN = 14
 _ALPHABET = string.ascii_letters + string.digits
 
@@ -252,9 +253,9 @@ class RotateCredlist(Effect):
 
     @staticmethod
     def _previous_original(ctx, ip, user):
-        """The last non-rotation password world saw for this account (v1's
-        fallback). Excludes our own rotations, or a second pass would restore the
-        first pass's random value."""
+        """The last non-rotation password world saw for this account (the
+        earlier agent's fallback). Excludes our own rotations, or a second pass
+        would restore the first pass's random value."""
         for cred in ctx.world.valid_creds(ip):
             if cred.get("user") == user and cred.get("source") not in (
                     "rotate_credlist", "sabotage"):

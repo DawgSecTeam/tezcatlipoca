@@ -10,14 +10,14 @@ every later op). Each host is reached through a per-node route table
 `multinode/placement_record.activate_placement` points the process config at the engine's host
 and registers those routes, so every node-scoped API call goes to the host that owns it.
 
-Since placement schema v2 that section also records every identity the run will create —
+Since placement schema version 2 that section also records every identity the run will create —
 `engine_template_vmid`, `golden_vmids` per node, the engine management IP and gateway, the
 management bridge, and red01's `{vmid, ip, node, explicit_ip}`. `prepare()` writes them once,
 before preflight reads anything, so preflight, resume, verify and teardown derive no vmid
-independently. A v1 section is upgraded on read — red01 resolved by the current derivation
-(`red/red01_ops.py`: Compfile `red01_vmid`/`red01_ip`, else the value recorded for the range, else
-the stride) — and written back, so a teardown run by newer code can still find the red01 an older
-deploy left live.
+independently. A section written by placement schema version 1 is upgraded on read — red01
+resolved by the current derivation (`red/red01_ops.py`: Compfile `red01_vmid`/`red01_ip`, else the
+value recorded for the range, else the stride) — and written back, so a teardown run by newer code
+can still find the red01 an older deploy left live.
 
 ## Why routing, not bridging
 

@@ -125,15 +125,28 @@ class ArtifactStep(Step):
     resumable = True
 
     def run(self, ctx):
+        import shutil
         from artifacts_lib import artifacts_ops
         from artifacts_lib.lifecycle import latest_run_key
         from artifacts_lib.paths import test_dir
+        from teardown.machinery import collect_box_logs
+        # Box logs first: the deploy's trail wipe is inside the restore point, and the
+        # destroy that follows is irreversible. Always collected, no opt-out.
+        logs_dir = ctx.comp_dir / "evidence" / "box-logs"
+        try:
+            collect_box_logs(ctx, logs_dir)
+        except Exception as e:                       # noqa: BLE001 - never blocks teardown
+            print(f"  WARNING: box-log collection failed ({type(e).__name__}: {e})")
         artifacts_ops.collect_for_teardown(
             ctx.comp_dir, run_id=ctx.ownership.run_id, teams=ctx.teams, boxes=ctx.boxes,
             node=ctx.default_node, nodes=ctx.nodes,
             script="destroy-competition.py", timeout=ctx.artifacts_timeout)
         key, _ = latest_run_key(ctx.comp_dir, ctx.ownership.run_id)
-        return StepResult(self.name, "ok", str(test_dir(ctx.comp_dir, key)))
+        dest = test_dir(ctx.comp_dir, key)
+        if logs_dir.is_dir():
+            shutil.copytree(logs_dir, Path(dest) / "evidence" / "box-logs",
+                            dirs_exist_ok=True)
+        return StepResult(self.name, "ok", str(dest))
 
     def journal_detail(self, result):
         return {"detail": result.detail, "test_dir": result.detail}
@@ -216,8 +229,11 @@ class EstateStep(Step):
         # goldens and engine template die by vmid math instead.
         if ctx.full and not (document.resources("golden")
                              or document.resources("engine_template")):
-            skipped = teardown_templates(ctx.comp_dir, ctx.deployed_state, ctx.ownership,
-                                         ctx.boxes, ctx.placement, full=True)
+            skipped, blocking = teardown_templates(
+                ctx.comp_dir, ctx.deployed_state, ctx.ownership, ctx.boxes,
+                ctx.placement, full=True)
+            if blocking:
+                return StepResult(self.name, "failed", "; ".join(blocking))
             if skipped:
                 return StepResult(self.name, "warned", "; ".join(skipped))
         if ctx.full:

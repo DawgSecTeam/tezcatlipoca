@@ -18,11 +18,13 @@ harmless."""
 import argparse
 import json
 import sys
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(".env"))
+if not os.environ.get("TEZ_TEST_OFFLINE"):
+    load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from common.comp_paths import resolve_comp_dir  # noqa: E402
 from multinode.placement_record import activate_placement, read_placement  # noqa: E402

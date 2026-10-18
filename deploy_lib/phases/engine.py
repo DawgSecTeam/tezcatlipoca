@@ -72,8 +72,18 @@ def ensure_engine_template(ctx):
             # (phase 1 leaves a run's VMs alone), so destroy it here.
             # Apply #1 recreates it as a linked clone of the new template.
             destroy_vm_if_exists(ctx.node, ctx.engine_vmid, expect_tags=ctx.reclaim_tags)
-            destroy_engine_template(ctx.node, ctx.engine_vmid,
-                                    expect_tags=ctx.reclaim_tags | {"engine-template"})
+            left = destroy_engine_template(
+                ctx.node, ctx.engine_vmid,
+                expect_tags=ctx.reclaim_tags | {"engine-template"})
+            if left:
+                from infra.ownership import Refusal
+                raise Refusal(
+                    saw="; ".join(left),
+                    expected="the engine-template slot free, or a template this run owns",
+                    remedy="let the run that owns it finish (or run its teardown), then "
+                           "resume the deploy",
+                    detail="cannot rebuild the engine template over another run's VM: "
+                           + "; ".join(left))
         with timed(ctx.comp_dir, 2, "engine_template_build"):
             tmpl, build_info = build_engine_template(
                 ctx.node, ctx.comp_dir, ctx.engine_vmid,

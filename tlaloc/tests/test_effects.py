@@ -1,8 +1,9 @@
 """The execute() template, the registry contract, and the reference effects.
 
-The template is where v1's bypasses died: kill switch, ensure_target, the lint,
-the precondition, the dry-run short-circuit and the ledger/artifact/restore
-bookkeeping are all outside `run()`, so no effect can forget them.
+The template is where the earlier agent's bypasses died: kill switch,
+ensure_target, the lint, the precondition, the dry-run short-circuit and the
+ledger/artifact/restore bookkeeping are all outside `run()`, so no effect can
+forget them.
 """
 
 import pytest

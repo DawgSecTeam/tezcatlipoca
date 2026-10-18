@@ -11,7 +11,8 @@ from common.constants import (
 )
 from infra.client import proxmox_api, storage_queue_lock, wait_for_proxmox_task
 from infra.lifecycle import start_vm, stop_vm
-from infra.ownership import destroy_vm_if_exists
+from infra.ownership import (MARKER, MISSING, OWNED, comp_name_from_tags,
+                             destroy_vm_if_exists, vm_occupancy)
 from engine.template_freeze import engine_template_vmid, write_template_hash
 from common.utils import competition_name, record_degradation
 from multinode.placement_record import resolved_mgmt_bridge
@@ -179,10 +180,26 @@ def _discover_vm_ipv4(node, vmid):
     return None
 
 
+OTHER_RUN = "another run of this competition"
+
+
 def destroy_engine_template(node, engine_vmid, expect_tags=None):
-# A FOREIGN VM in the slot is skipped with a warning instead of aborting the teardown.
-    try:
-        destroy_vm_if_exists(node, engine_template_vmid(engine_vmid), expect_tags=expect_tags)
-    except RuntimeError as e:
-        print(f"    WARNING: engine template slot is FOREIGN — skipping it and "
-              f"continuing: {e}")
+    """Destroy this run's engine template; return skip messages for anything else."""
+    vmid = engine_template_vmid(engine_vmid)
+    verdict, tags, vm = vm_occupancy(node, vmid, expect_tags)
+    if verdict == "absent":
+        return []
+    if verdict in (OWNED, MARKER):
+        destroy_vm_if_exists(node, vmid, expect_tags=expect_tags)
+        return []
+    if verdict == "unknown":
+        return [f"vmid {vmid} could not be classified (unreadable) — check by hand"]
+    comp = comp_name_from_tags(expect_tags or ())
+    if verdict == MISSING and comp and f"comp-{comp}" in tags:
+        message = (f"{OTHER_RUN} holds vmid {vmid} "
+                   f"({vm.get('name') or '?'}, tags: {';'.join(sorted(tags))}) — not touched")
+    else:
+        message = (f"vmid {vmid} is occupied by a foreign VM ({vm.get('name') or '?'}, "
+                   f"tags: {';'.join(sorted(tags)) or 'none'}) — skipped")
+    print(f"    WARNING: engine template slot: {message}")
+    return [message]

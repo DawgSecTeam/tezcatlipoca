@@ -2,7 +2,7 @@
 
 The loader is the only place that decides which source the run uses, so
 "blind fallback" is one branch rather than a property every consumer has to
-re-derive (v1 decided it in the CLI, the digest and two tactics).
+re-derive (the earlier agent decided it in the CLI, the digest and two tactics).
 """
 
 from pathlib import Path

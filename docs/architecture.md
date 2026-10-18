@@ -6,7 +6,7 @@ eight phases: generate Quotient config and a nakon machine list, provision Proxm
 and misconfigurations with nakon. Quotient scores; nakon provisions. The engine is the only host with
 a NIC on every team bridge: SSH jump host, nakon execution host, NAT gateway. Team isolation is
 iptables on the engine, not bridge separation. Red is a range component like the engine and the team
-boxes: tlaloc v2 is the only red engine, provisioned by `red/` in phase 7 and torn down with the
+boxes: tlaloc is the only red engine, provisioned by `red/` in phase 7 and torn down with the
 range.
 
 There is one pipeline version. The deploy refuses a state document written by a different
@@ -81,8 +81,8 @@ the earlier phases complete (`--force-from-phase` overrides).
    step is fatal), so the restore point every box carries is already compromised. Then the last
    pass for account-file mode pins (they must follow every account writer — see
    `constants.ACCOUNT_FILE_MODE_CONFIGS`), and the `tz-ready` snapshot (pool of 4). A Compfile that
-   still says `team_beacons` is refused: it is a v1 feature. The firewall's `tz-base` lands at the
-   end of phase 5, after cutover.
+   still says `team_beacons` is refused: that option belonged to the earlier agent and no longer
+   exists. The firewall's `tz-base` lands at the end of phase 5, after cutover.
 8. **Seed** — poll Quotient, `seed_teams`, `unpause_engine`, `create_injects`, each gated on
    state-document flags. Opt-in (Compfile `portal 1`): the student portal ([portal.md](portal.md)).
 

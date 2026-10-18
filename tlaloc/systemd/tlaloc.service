@@ -1,5 +1,5 @@
 [Unit]
-Description=tlaloc v2 — assume-breach red team loop (tezcatlipoca)
+Description=tlaloc — assume-breach red team loop (tezcatlipoca)
 # The loop talks to Quotient, the C2 and clef; nothing here needs the engine's
 # Docker or Proxmox, so it can start as soon as the network is up.
 After=network-online.target

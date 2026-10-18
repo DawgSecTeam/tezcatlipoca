@@ -1,10 +1,12 @@
 """spray_access — the credential-spray port: candidates, caps, and honesty.
 
-What these tests are for (the v1 defects this effect is shaped by):
+What these tests are for (the defects from the earlier agent this effect is
+shaped by):
 
 * candidates come from intel per box, not from a table in the module;
 * the attempt cap and the per-login retry cap bound the work, and a cap hit with
-  no working credential is ``ok=False`` (v1 returned ``ok=True`` there and the
+  no working credential is ``ok=False`` (the earlier agent returned ``ok=True``
+  there and the
   seed recorded `access` for boxes it had never entered);
 * a box that stops answering costs two probes, not the whole cap;
 * nothing is planted, so nothing needs an undo recipe.
@@ -21,7 +23,8 @@ WIN_IP = "192.168.1.20"
 
 
 def _ctx(tmp_path, ssh, cfg=None, **over):
-    """A live ctx on the fixture range, with v1's human-mimic delay switched off."""
+    """A live ctx on the fixture range, with the earlier agent's human-mimic
+    delay switched off."""
     cfg = cfg or base_cfg(limits={"spray_delay_sec": 0})
     ctx = make_ctx(tmp_path, cfg=cfg, comp_dir=FIXTURE, ssh=ssh, compfile=False,
                    **over)

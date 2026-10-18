@@ -441,7 +441,8 @@ def check_hides(check_cmd, path):
 
 
 def test_hide_reports_failure_when_nothing_ends_up_hidden(tmp_path, pinned_names):
-    """rc=0 with no HIDDEN line is NOT success — v1 claimed the plant here."""
+    """rc=0 with no HIDDEN line is NOT success — the earlier agent claimed the
+    plant here."""
     ssh = scripted(FakeSSH(), rc=0, out="")
     ctx = win_ctx(tmp_path, ssh, seeded=True)
     result = execute("persist", {"ip": WIN_IP, "family": "hide"}, ctx)

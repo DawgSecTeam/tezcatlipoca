@@ -80,7 +80,7 @@ class CommandShapeTest(unittest.TestCase):
 
     def test_auth_uses_the_prompt_flag_and_https(self):
         # No -k: Gaia maps it to ssl=False (http) and Mythic serves TLS on 7443; the
-        # deploy refused a v2 comp on a 400-HTML auth (live 2026-10-17).
+        # deploy refused a competition on a 400-HTML auth (live 2026-10-17).
         argv = g.auth_argv("/tmp/gaia", "10.0.0.198")
         assert argv[2:] == ["auth", "-S", "10.0.0.198", "-P", "7443",
                             "-u", "mythic_admin", "-p"]

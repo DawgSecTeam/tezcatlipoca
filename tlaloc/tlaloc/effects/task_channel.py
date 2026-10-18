@@ -10,8 +10,8 @@ Attribution: the command's intent is classified (`decide.classify_command`, clef
 with a deterministic floor) and an intent of `takedown` records an impact row for
 the scored service named in `service`. That parameter is the *advertising claim*
 — nothing is attributed unless the task reported success AND the classifier
-agrees it was an impact move, which is what v1's substring sniff got wrong in
-both directions.
+agrees it was an impact move, which is what the earlier agent's substring sniff
+got wrong in both directions.
 """
 
 from ..errors import PolicyError

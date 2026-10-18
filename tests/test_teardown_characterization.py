@@ -245,7 +245,7 @@ class MainSequence(unittest.TestCase):
             patch.object(machinery, "pre_stop_windows_boxes",
                          side_effect=lambda *a, **k: calls.append("pre_stop_windows_boxes")),
             patch.object(machinery, "sweep_tagged_leftovers"),
-            patch.object(machinery, "teardown_templates", return_value=[]),
+            patch.object(machinery, "teardown_templates", return_value=([], [])),
             patch("estate.destroy.destroy_estate", side_effect=estate),
             patch.object(artifacts_ops, "collect_for_teardown", side_effect=collect),
             patch.object(tlaloc_ops, "destroy_tlaloc_red", side_effect=red),

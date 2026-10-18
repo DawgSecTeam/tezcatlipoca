@@ -8,7 +8,7 @@ two is exactly two names:
     FAMILIES : {family_name: handler_fn}
     apply(ctx, ip, family, names) -> Result
 
-Three rules this module obeys (each one is a v1 lesson):
+Three rules this module obeys (each one is a lesson from the earlier agent):
 
 * **The script's exit code is the proof.** Every handler installs *and* verifies
   inside one round trip and exits non-zero when the artifact is not standing, so
@@ -18,8 +18,8 @@ Three rules this module obeys (each one is a v1 lesson):
   twice re-asserts the existing artifact (``-Force``, ``Set-WmiInstance`` on a
   keyed instance, or an explicit ``if standing -> config else -> create``
   branch) instead of creating a second one, and the world record is not
-  duplicated either. v1's families were create-only: the second plant either
-  failed outright or left two artifacts behind.
+  duplicated either. The earlier agent's families were create-only: the second
+  plant either failed outright or left two artifacts behind.
 * **Every artifact carries a ``check_cmd`` and a ``restore`` recipe** rendered
   from the same derived names. ``run.py``'s verify loop re-runs ``check_cmd``
   through the *legacy* Windows wrap (``ssh(..., windows=True)`` ->
@@ -33,7 +33,8 @@ script and the legacy ``-Command "<line>"`` wrap cannot carry a quote at all
 (the landing shell is cmd.exe, and ``winexec`` asserts the invariant).
 
 One deliberate split on "payload": a helper ``.cmd`` we *drop* gets a batch
-body (v1's ``ping -n 600 127.0.0.1 >nul``), while a command line **Windows
+body (the earlier agent's ``ping -n 600 127.0.0.1 >nul``), while a command line
+**Windows
 itself evaluates** (a Run value, a WMI consumer's CommandLineTemplate, a
 watchdog payload's argv) is ``SLEEP_CMDLINE`` — built by winexec, so the
 quoting decision is never made by hand.
@@ -46,7 +47,8 @@ from .base import Result, can_root
 
 TIMEOUT = 90
 
-# The bland batch body of every helper .cmd we drop (v1's exact body).
+# The bland batch body of every helper .cmd we drop (the earlier agent's exact
+# body).
 SLEEP_CMD_BODY = "ping -n 600 127.0.0.1 >nul"
 
 # A command line Windows evaluates by itself. Composed through winexec: one
@@ -62,7 +64,7 @@ HKU_DEFAULT_RUN = ("Registry::HKEY_USERS\\.DEFAULT\\Software\\Microsoft"
 # Trailing verdict of a one-statement install: the exit code is the proof.
 VERIFY_TAIL = "if ($?) { exit 0 } else { exit 1 }"
 
-# Concrete Windows paths inside a detail string (fallback only: v2 artifacts
+# Concrete Windows paths inside a detail string (fallback only: tlaloc artifacts
 # carry `paths`, which is what hide/timestomp read first).
 _WIN_PATH_RE = re.compile(r"([A-Za-z]:\\[\w\\.+@-]{2,})")
 
@@ -151,9 +153,9 @@ def _done(ctx, ip, kind, name, detail, check_cmd, paths, recipe, note=None):
 def _planted_paths(ctx, ip):
     """Concrete filesystem paths of everything we have planted on this box.
 
-    Reads the artifact's recorded ``paths`` first: v1 described its Windows
-    plants in prose ("task TzNetUpdate") and scraped paths back out of the
-    detail, so hide/timestomp found nothing on a Windows box and reported
+    Reads the artifact's recorded ``paths`` first: the earlier agent described
+    its Windows plants in prose ("task TzNetUpdate") and scraped paths back out
+    of the detail, so hide/timestomp found nothing on a Windows box and reported
     "nothing planted" on every plant. The scrape stays as a fallback.
     """
     paths = set()
@@ -176,17 +178,17 @@ def _maint_path(names):
 
 # -- the families --------------------------------------------------------------
 # Order inside AUTO_ORDER_WINDOWS first (that is the "auto" walk), then the two
-# extra v1 mechanisms that the order does not name but that the auto walk still
-# offers once the ordered families are all standing.
+# extra mechanisms from the earlier agent that the order does not name but that
+# the auto walk still offers once the ordered families are all standing.
 
 def scheduled_task(ctx, ip, fh, names):
     """A SYSTEM-class scheduled task that keeps our helper .cmd alive.
 
-    v1's mechanism verbatim — ``schtasks /Create /TN <name> /SC MINUTE /MO 15
-    /RU SYSTEM`` — with ``/F`` doing the work v1 left undone: a second plant
-    re-asserts the same task instead of failing on "already exists" or leaving
-    two tasks behind. The ``/Query`` tail is the proof, and blue's undo is one
-    ``schtasks /Delete``.
+    The earlier agent's mechanism verbatim — ``schtasks /Create /TN <name> /SC
+    MINUTE /MO 15 /RU SYSTEM`` — with ``/F`` doing the work the earlier agent
+    left undone: a second plant re-asserts the same task instead of failing on
+    "already exists" or leaving two tasks behind. The ``/Query`` tail is the
+    proof, and blue's undo is one ``schtasks /Delete``.
     """
     task, script = names["task"], names["script"]
     ps = (f"Set-Content -Path '{script}' -Value '{SLEEP_CMD_BODY}' -Encoding ascii; "
@@ -207,10 +209,10 @@ def scheduled_task(ctx, ip, fh, names):
 def defrun(ctx, ip, fh, names):
     """``HKU\\.DEFAULT\\...\\Run``: every NEW user profile inherits red's entry.
 
-    v1's mechanism and v1's bug fix both kept: the default-profile hive ships NO
-    Run key and ``New-ItemProperty`` refuses a missing parent (rc=1 — the reason
-    this family never planted in v1), so the key is created first, ``-Force``
-    making that idempotent.
+    The earlier agent's mechanism and its bug fix both kept: the default-profile
+    hive ships NO Run key and ``New-ItemProperty`` refuses a missing parent
+    (rc=1 — the reason this family never planted in the earlier agent), so the
+    key is created first, ``-Force`` making that idempotent.
     """
     value = names["run_value"]
     ps = (f"$p = '{HKU_DEFAULT_RUN}'; "
@@ -234,10 +236,11 @@ def defrun(ctx, ip, fh, names):
 def runkey(ctx, ip, fh, names):
     """``HKLM\\...\\Run``: the box re-plants us at every logon.
 
-    v1's flagship Windows mechanism, unchanged in location, with the value name
-    drawn from the naming pool (v1's fixed value name was the giveaway) and a
-    real verification instead of v1's ``$?`` after an ``Out-Null`` — which reads
-    the pipe's exit code and is true whatever the write did.
+    The earlier agent's flagship Windows mechanism, unchanged in location, with
+    the value name drawn from the naming pool (its fixed value name was the
+    giveaway) and a real verification instead of the earlier agent's ``$?`` after
+    an ``Out-Null`` — which reads the pipe's exit code and is true whatever the
+    write did.
     """
     value = names["run_value"]
     ps = (f"New-ItemProperty -Path '{HKLM_RUN}' -Name '{value}' "
@@ -258,10 +261,10 @@ def runkey(ctx, ip, fh, names):
 def service(ctx, ip, fh, names):
     """A bland auto-start service backed by a no-space helper .cmd.
 
-    ``sc.exe create <name> binPath= <script> start= auto`` is v1's mechanism.
-    The branch is the re-assert half: ``create`` on an existing service fails
-    (rc=1073), so a second plant goes through ``sc.exe config`` and touches
-    nothing else.
+    ``sc.exe create <name> binPath= <script> start= auto`` is the earlier agent's
+    mechanism. The branch is the re-assert half: ``create`` on an existing
+    service fails (rc=1073), so a second plant goes through ``sc.exe config`` and
+    touches nothing else.
     """
     svc, script = names["service"], names["script"]
     ps = (f"Set-Content -Path '{script}' -Value '{SLEEP_CMD_BODY}' -Encoding ascii; "
@@ -283,7 +286,7 @@ def service(ctx, ip, fh, names):
 
 def wmisub(ctx, ip, fh, names):
     """A permanent WMI event subscription: filter + CommandLineEventConsumer +
-    binding, v1's mechanism unchanged.
+    binding, the earlier agent's mechanism unchanged.
 
     It survives reboots and most cleanup sweeps because the instances live in
     ``root\\subscription`` where blue rarely looks, and re-assertion is free:
@@ -331,13 +334,14 @@ def watchpair(ctx, ip, fh, names):
     Two SYSTEM tasks run one shared helper that re-registers BOTH tasks and
     restarts BOTH payloads, so a piecemeal cleanup is undone within a minute:
     blue has to unregister both tasks in the same pass, then the helper
-    directory. v1's fixed names (``TzHelpMon``/``TzHelpUpd`` in
+    directory. The earlier agent's fixed names (``TzHelpMon``/``TzHelpUpd`` in
     ``C:\\ProgramData\\Microsoft\\Help``) are exactly the giveaway this rewrite
     removes — the directory, the helper, the tasks and the payload copies are
     all derived from this plant's own draw.
 
-    Payloads are copies of ``$env:ComSpec`` under the task names (v1's trick: a
-    live process whose image name means nothing), started on a sleeper argv.
+    Payloads are copies of ``$env:ComSpec`` under the task names (the earlier
+    agent's trick: a live process whose image name means nothing), started on a
+    sleeper argv.
     """
     t1, t2 = names["task"], names["log_task"]
     root = f"C:\\ProgramData\\Microsoft\\{names['service']}"
@@ -367,8 +371,8 @@ def watchpair(ctx, ip, fh, names):
         "  }",
         "}",
     ]
-    # The helper ships as an array of single-quoted lines (v1's form): the
-    # script is written BY PowerShell, so embedded quotes get doubled.
+    # The helper ships as an array of single-quoted lines (the earlier agent's
+    # form): the script is written BY PowerShell, so embedded quotes get doubled.
     body = ",".join("'" + line.replace("'", "''") + "'" for line in lines)
 
     ps = (f"$d = '{root}'; "
@@ -405,7 +409,8 @@ def watchpair(ctx, ip, fh, names):
 
 
 def hide(ctx, ip, fh, names):
-    """``attrib +h +s`` over everything we planted (v1's hiding technique).
+    """``attrib +h +s`` over everything we planted (the earlier agent's hiding
+    technique).
 
     The point is that a directory listing and a "recently modified" sweep both
     come back clean, so the payloads survive a casual hunt; unhiding is one
@@ -438,8 +443,8 @@ def hide(ctx, ip, fh, names):
 
 def logwipe(ctx, ip, fh, names):
     """Clear Security/System/Application, then leave a SYSTEM task that keeps
-    clearing them (v1's ``wevtutil`` mechanism, same three logs, same 30-minute
-    re-clear via a helper .cmd).
+    clearing them (the earlier agent's ``wevtutil`` mechanism, same three logs,
+    same 30-minute re-clear via a helper .cmd).
 
     The cleared logs themselves are NOT recoverable — they are gone. The
     artifact is the re-clear task: stopping it stops the bleeding, and the undo
@@ -470,11 +475,12 @@ def logwipe(ctx, ip, fh, names):
 def timestomp(ctx, ip, fh, names):
     """Stamp our artifacts with a system-plausible timestamp.
 
-    v1 matched them to a fixed reference file (``System32\\ntdll.dll``); here the
-    reference is the Windows directory's own creation time — the same technique
-    with no ported literal path. The pre-stamp ticks of every file are captured
-    in the SAME round trip, so the restore recipe is exact instead of nominal:
-    ticks are integers, so the recipe survives locale and formatting.
+    The earlier agent matched them to a fixed reference file
+    (``System32\\ntdll.dll``); here the reference is the Windows directory's own
+    creation time — the same technique with no ported literal path. The
+    pre-stamp ticks of every file are captured in the SAME round trip, so the
+    restore recipe is exact instead of nominal: ticks are integers, so the
+    recipe survives locale and formatting.
     """
     paths = _planted_paths(ctx, ip)
     if not paths:
@@ -515,7 +521,8 @@ def timestomp(ctx, ip, fh, names):
 
 
 def decoy(ctx, ip, fh, names):
-    """An obvious bait service that absorbs blue's cleanup (v1's decoy).
+    """An obvious bait service that absorbs blue's cleanup (the earlier agent's
+    decoy).
 
     ``sc.exe create <name> binPath= C:\\Windows\\System32\\cmd.exe type= own
     start= auto`` with an obviously malicious description: the point is that it
@@ -543,8 +550,8 @@ def decoy(ctx, ip, fh, names):
 
 
 # The families `persist.auto_order(windows=True)` walks, in that order, then the
-# extra v1 mechanisms. The values are the handlers above; `persist.py` owns the
-# choice, this map owns the mechanics.
+# extra mechanisms from the earlier agent. The values are the handlers above;
+# `persist.py` owns the choice, this map owns the mechanics.
 FAMILIES = {
     "scheduled_task": scheduled_task,
     "defrun": defrun,

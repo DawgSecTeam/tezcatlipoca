@@ -9,7 +9,7 @@ from multinode.nodes_config import (JUMP_MGMT_IP_BASE, JUMP_VMID_OFFSET, NodeRec
 
 
 def read_placement(comp_dir):
-# A v1 document upgrades on read and is written back, so a companion op (teardown above all)
+# A document from placement schema version 1 upgrades on read and is written back, so a companion op (teardown above all)
 #     can still find the red01 that range deployed; an unknown version is refused.
     from estate import state
     placement = state.EstateState.load(comp_dir).data.get("placement")
@@ -19,7 +19,7 @@ def read_placement(comp_dir):
     if version == PLACEMENT_VERSION:
         return placement
     if version == 1:
-        upgraded = _upgrade_v1(comp_dir, placement)
+        upgraded = _upgrade_legacy(comp_dir, placement)
         write_placement(comp_dir, upgraded)
         return upgraded
     raise SystemExit(f"  ERROR: the placement record was written by schema v"
@@ -27,8 +27,8 @@ def read_placement(comp_dir):
                      f"v{PLACEMENT_VERSION}. Tear the competition down and redeploy.")
 
 
-def _upgrade_v1(comp_dir, placement):
-# Resolve red01 the way the v1 code did — that is where the live red01 sits.
+def _upgrade_legacy(comp_dir, placement):
+# Resolve red01 the legacy way — that is where a pre-ownership red01 sits.
     from estate import state
     from red import red01_ops
     upgraded = dict(placement)

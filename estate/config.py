@@ -4,9 +4,9 @@ import os
 import tomllib
 from pathlib import Path
 
-DEFAULT_PATH = "tezcatlipoca.toml"
-CONFIG_ENV = "TEZ_CONFIG"
 REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PATH = str(REPO_ROOT / "tezcatlipoca.toml")
+CONFIG_ENV = "TEZ_CONFIG"
 
 # dotted key -> default. The default's type drives parsing.
 _SPEC = {
@@ -128,7 +128,10 @@ class _Section:
 
 class Config:
     def __init__(self, path=None):
-        self.path = Path(path or os.environ.get(CONFIG_ENV) or DEFAULT_PATH)
+        raw = path or os.environ.get(CONFIG_ENV) or DEFAULT_PATH
+        resolved = Path(raw).expanduser()
+        # Anchored at the repo root: the profile must not change identity with the cwd.
+        self.path = resolved if resolved.is_absolute() else REPO_ROOT / resolved
         self._file = _read_toml(self.path)
         self._overrides = {}
         for prefix in ("proxmox", "ssh", "engine", "headscale", "portal", "knobs"):

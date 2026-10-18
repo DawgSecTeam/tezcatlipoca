@@ -311,7 +311,7 @@ class VerifyClean(unittest.TestCase):
                               ownership=OURS, placement=None, nodes=["n"], default_node="n",
                               inventory=None, full=False)
         with patch("teardown.machinery.sweep_tagged_leftovers"), \
-                patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
+                patch("teardown.machinery.teardown_templates", return_value=([], [])) as destroy:
             result = EstateStep().run(ctx)
         destroy.assert_not_called()
         self.assertEqual(result.status, "ok")
@@ -325,7 +325,7 @@ class VerifyClean(unittest.TestCase):
                               ownership=OURS, placement=None, nodes=["n"], default_node="n",
                               inventory=None, full=True)
         with patch("teardown.machinery.sweep_tagged_leftovers"), \
-                patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
+                patch("teardown.machinery.teardown_templates", return_value=([], [])) as destroy:
             result = EstateStep().run(ctx)
         self.assertTrue(destroy.call_args.kwargs["full"])
         self.assertEqual(result.status, "ok")

@@ -1,8 +1,8 @@
 """reestablish — get back onto a box we lost, cheapest mechanism first.
 
-The eviction-recovery effect: v1's `foothold_ssh` plus the re-entry rungs its
-director walked after blue evicted us (held creds -> spray -> whatever channel
-still stands). Blue evicts by rotating a password, deleting a key, hardening
+The eviction-recovery effect: the earlier agent's `foothold_ssh` plus the
+re-entry rungs its director walked after blue evicted us (held creds -> spray ->
+whatever channel still stands). Blue evicts by rotating a password, deleting a key, hardening
 sshd or dropping a firewall rule; each of those closes exactly one door, so the
 mechanisms are tried in ascending order of what they cost us and how loud they
 are:
@@ -11,7 +11,8 @@ are:
                   (``ctx.ssh.reentry_key``) and any key credential world already
                   holds for this box. Quiet, needs no password, and it survives
                   the rotation that took the password path away — which is why
-                  it goes first (v1's transport carried the same key fallback).
+                  it goes first (the earlier agent's transport carried the same key
+                  fallback).
 2. ``password`` — the credentials world already holds for this box, then intel's
                   per-box ground truth and the generic pool. Bounded by
                   `cred_spray_max` and by the gate's per-login retry counter.
@@ -27,10 +28,11 @@ no live channel this effect says so and returns ``ok=False`` naming
 `implant_channel` — a channel that is not there is that effect's job.
 
 Nothing is claimed that was not verified on the wire: each mechanism ends with a
-real login (v1's `ssh_ok` alone reported access on boxes where it could not
-usefully work), and the key re-arm records its mutation with the artifact and the
-undo even when the verification that follows fails (``installed=True``) — a record
-gated on the verification disappears exactly when it is most needed.
+real login (the earlier agent's `ssh_ok` alone reported access on boxes where it
+could not usefully work), and the key re-arm records its mutation with the
+artifact and the undo even when the verification that follows fails
+(``installed=True``) — a record gated on the verification disappears exactly when
+it is most needed.
 """
 
 import shlex
@@ -53,7 +55,8 @@ REARM_MARKER = "TLALOC_REARM"
 # Windows admin logins read ONE key list, whoever the account is.
 WINDOWS_KEY_PATH = r"$env:ProgramData\ssh\administrators_authorized_keys"
 
-# Mechanisms in the order they are tried (v1's re-entry ladder, one module).
+# Mechanisms in the order they are tried (the earlier agent's re-entry ladder, one
+# module).
 MECHANISMS = ("key", "password", "c2")
 
 

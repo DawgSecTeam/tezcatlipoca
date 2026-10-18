@@ -47,6 +47,9 @@ INTERNAL_ENV = {
     # environment; the file's existence is the "hold at the next phase boundary" request.
     # Internal run-queue handoff, never operator configuration.
     "TEZ_PAUSE_FILE": "tezcatlipoca-dashboard -> deploy_lib/pause.py boundary hold",
+    # tests/conftest.py sets it before any test import; drivers skip .env when it is set
+    # so the offline suite cannot inherit the developer's live estate identity.
+    "TEZ_TEST_OFFLINE": "tests/conftest.py -> driver .env guard",
     # The dashboard's own service env, inherited by every driver child it starts, so an
     # orphan reclaim can retire its range over /api/ranges/retire. Internal run-queue
     # handoff, never operator configuration.

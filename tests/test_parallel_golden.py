@@ -276,7 +276,9 @@ class GoldenParallelism(unittest.TestCase):
 # conversion barrier (every golden stopped before ANY POST /template) must survive it.
 class GoldenCheckpoint(unittest.TestCase):
     def _seed(self, harness, mapping):
-        save_template_hashes(harness.comp_dir, golden_planted=mapping)
+        save_template_hashes(
+            harness.comp_dir,
+            golden_planted={box: {"hash": h, "run": ""} for box, h in mapping.items()})
 
     def test_a_checkpointed_golden_is_not_rolled_back(self):
         harness = GoldenBuildHarness(n=2, golden_hashes={"box0": "h0", "box1": "h1"})
@@ -302,6 +304,15 @@ class GoldenCheckpoint(unittest.TestCase):
         self.assertIsNone(exc)
         self.assertIn(str(harness.vmids[0]), events.keys("rollback"))
 
+    def test_a_checkpoint_from_another_run_is_ignored(self):
+        harness = GoldenBuildHarness(n=2, golden_hashes={"box0": "h0", "box1": "h1"})
+        save_template_hashes(harness.comp_dir, golden_planted={
+            "box0": {"hash": "h0", "run": "run-other"}})
+        _result, events, exc = harness.run()
+        self.assertIsNone(exc)
+        self.assertIn(str(harness.vmids[0]), events.keys("rollback"),
+                      "another run's checkpoint must not skip this run's plant")
+
     # A fresh clone has no tz-base snapshot, so a leftover checkpoint entry must
     # not make it look planted — that is the destroy-and-redeploy path.
     def test_a_golden_with_no_tz_base_is_not_treated_as_checkpointed(self):
@@ -321,7 +332,9 @@ class GoldenCheckpoint(unittest.TestCase):
         _result, _events, exc = harness.run()
         self.assertIsNotNone(exc, "the conversion failure must still raise")
         recorded = load_template_hashes(harness.comp_dir)
-        self.assertEqual(recorded.get("golden_planted"), {"box0": "h0", "box1": "h1"})
+        self.assertEqual(recorded.get("golden_planted"),
+                         {"box0": {"hash": "h0", "run": ""},
+                          "box1": {"hash": "h1", "run": ""}})
 
     # Without golden hashes there is no identity to key on, so nothing is skipped —
     # the conservative default.
@@ -407,7 +420,9 @@ class GoldenCoverageRecords(unittest.TestCase):
     def test_a_half_converted_golden_fails_the_conversion_loudly(self):
         harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
         doc = estate_state.EstateState.load(harness.comp_dir)
-        doc.section("templates").update({"golden_planted": {"box0": "h0", "box1": "h1"}})
+        doc.section("templates").update({"golden_planted": {
+            "box0": {"hash": "h0", "run": ""},
+            "box1": {"hash": "h1", "run": ""}}})
         doc.save()
         real = harness._proxmox
 
@@ -428,7 +443,9 @@ class GoldenCoverageRecords(unittest.TestCase):
     def test_a_properly_renamed_golden_passes_the_conversion_check(self):
         harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
         doc = estate_state.EstateState.load(harness.comp_dir)
-        doc.section("templates").update({"golden_planted": {"box0": "h0", "box1": "h1"}})
+        doc.section("templates").update({"golden_planted": {
+            "box0": {"hash": "h0", "run": ""},
+            "box1": {"hash": "h1", "run": ""}}})
         doc.save()
         real = harness._proxmox
 
@@ -461,7 +478,9 @@ class GoldenCoverageRecords(unittest.TestCase):
     def test_a_fully_checkpointed_plant_records_a_skip_verdict(self):
         harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
         doc = estate_state.EstateState.load(harness.comp_dir)
-        doc.section("templates").update({"golden_planted": {"box0": "h0", "box1": "h1"}})
+        doc.section("templates").update({"golden_planted": {
+            "box0": {"hash": "h0", "run": ""},
+            "box1": {"hash": "h1", "run": ""}}})
         doc.save()
         with patch.object(golden_ops, "run_nakon") as p_nakon:
             _r, _e, exc = harness.run()

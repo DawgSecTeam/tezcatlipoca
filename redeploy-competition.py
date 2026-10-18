@@ -7,6 +7,7 @@ shared configure half in redeploy_plant_ops, and the state/run-id gate (checked 
 Proxmox call) in redeploy_gate_ops."""
 
 import argparse
+import os
 from pathlib import Path
 
 import urllib3
@@ -31,8 +32,9 @@ from redeploy.redeploy_select_ops import select_targets
 from common.utils import competition_name, load_compfile, pick_competition, valid_comp_name
 from estate import config
 
-ENV_PATH = Path(".env")
-load_dotenv(ENV_PATH)
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+if not os.environ.get("TEZ_TEST_OFFLINE"):
+    load_dotenv(ENV_PATH)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # mode -> (targets, rctx, nakon_config_path, nakon_bundle) -> (done, levels|None).

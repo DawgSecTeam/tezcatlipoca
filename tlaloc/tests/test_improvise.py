@@ -1,8 +1,8 @@
 """improvise — what runs, what is attributed, and what counts as done.
 
-Each test names the v1 defect it locks out: the substring sniff that decided
-whether an improvised goal was impacty, and ``ok = any(rc == 0)`` that declared
-an unverified command a success. The author is always a real
+Each test names the defect from the earlier agent it locks out: the substring
+sniff that decided whether an improvised goal was impacty, and ``ok = any(rc ==
+0)`` that declared an unverified command a success. The author is always a real
 ``tlaloc.llm.LLM`` with an injected poster (no socket, no model endpoint), so
 the authoring path is exercised end to end rather than stubbed away.
 """
@@ -149,7 +149,8 @@ def test_authors_the_command_through_the_llm_and_runs_it_verbatim(tmp_path):
 
 
 def test_success_needs_the_verification_step_not_an_exit_status(tmp_path):
-    """rc=0 plus a verification that says 'no' is NOT a success (v1's defect)."""
+    """rc=0 plus a verification that says 'no' is NOT a success (the earlier
+    agent's defect)."""
     ssh = FakeSSH().on("systemctl restart vsftpd", rc=0, out="Unit restarted")
     ctx = rooted(tmp_path, ssh)
     decided(ctx, intent="benign", verified=False,
@@ -335,7 +336,7 @@ def test_a_destructive_caller_supplied_command_is_stopped_by_the_template(tmp_pa
 
 
 def test_the_authored_command_is_linted_with_the_targets_os_pattern_set(tmp_path):
-    """The audited v1 gap: a POSIX-only lint in front of PowerShell."""
+    """The audited gap: a POSIX-only lint in front of PowerShell."""
     windows_cmd = "Remove-Item -Recurse -Force C:\\Windows\\Temp\\tlaloc"
     assert danger_lint(windows_cmd, "linux") is None, \
         "pick a command the POSIX lint lets through"
@@ -441,7 +442,8 @@ def test_improvise_needs_a_foothold(tmp_path):
 
 
 def test_an_impacty_goal_obeys_the_pressure_cap(tmp_path):
-    """v1 gated improvise on the goal looking impacty; the floor still does."""
+    """The earlier agent gated improvise on the goal looking impacty; the floor
+    still does."""
     ctx = rooted(tmp_path, FakeSSH(), clock=0.0)      # observe tier / grace window
 
     result = execute("improvise", {"ip": IP,

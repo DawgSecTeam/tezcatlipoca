@@ -4,8 +4,8 @@ Every key the agent reads must be listed in `cli.CONFIG_CONTRACT`, because that
 list is what the deploy pipeline writes into `/etc/tlaloc/config.yaml` and what
 `tlaloc verify-config --pushed` diffs per field. A key that is read but not
 listed is dropped on the way to the VM: the feature is dead on red01 while every
-local test stays green. v1 shipped exactly that bug (a whole feature absent from
-the push allowlist), and this file is the wall against it.
+local test stays green. The earlier agent shipped exactly that bug (a whole
+feature absent from the push allowlist), and this file is the wall against it.
 """
 
 import re

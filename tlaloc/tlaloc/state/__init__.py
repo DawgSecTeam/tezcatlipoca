@@ -1,4 +1,4 @@
-"""State: World v2 + schema + the clef digest.
+"""State: World + schema + the clef digest.
 
 (The migration plan lists `state.py` and `state/` side by side; Python cannot
 have a module and a package of the same name, so World lives in the package —

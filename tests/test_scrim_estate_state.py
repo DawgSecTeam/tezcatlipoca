@@ -62,7 +62,7 @@ class RedIpResolution(unittest.TestCase):
             self.assertEqual(args.red_ip, "10.0.0.240")
 
     def test_the_red_stage_passes_the_placement_to_the_resolver(self):
-        """The v2 path called the resolver without its `placement` argument, so every
+        """The red path called the resolver without its `placement` argument, so every
         tlaloc scrim crashed after red staging and before T0 (live 2026-10-17,
         run-b0395fba)."""
         from unittest import mock

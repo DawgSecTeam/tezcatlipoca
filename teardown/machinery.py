@@ -13,6 +13,7 @@ from infra.ownership import parse_vm_tags
 from engine.engine_template_ops import destroy_engine_template
 from engine.template_freeze import forget_template_hashes
 from infra.ownership import Ownership, Refusal, ownership_identity
+from pathlib import Path
 from estate import config
 
 # Deletes are metadata-light on ZFS; 4 workers keeps even a shared node comfortable.
@@ -149,6 +150,55 @@ def sweep_tagged_leftovers(nodes, ownership, keep_templates=False):
             print(line, flush=True)
 
 
+_LINUX_LOG_CMD = (
+    "echo '### journalctl'; journalctl --no-pager -n 2000 2>&1; "
+    "for f in /var/log/auth.log /var/log/secure /var/log/syslog /var/log/messages; do "
+    "[ -f \"$f\" ] && { echo \"### $f\"; tail -n 2000 \"$f\"; }; done; "
+    "echo '### dmesg'; dmesg -T 2>&1")
+_WINDOWS_LOG_PS = (
+    "$ErrorActionPreference='SilentlyContinue'; "
+    "foreach ($l in 'Security','System','Application') { \"### $l\"; "
+    "Get-WinEvent -LogName $l -MaxEvents 500 | "
+    "Format-List TimeCreated,Id,ProviderName,Message }")
+
+
+def collect_box_logs(ctx, out_dir):
+    """Copy every owned VM's logs to `out_dir` before anything destructive runs.
+
+    Uses the guest agent (no box credentials, no SSH path) and never fails the teardown:
+    an unreadable box is recorded in its own note file. This is the last copy — the
+    deploy's trail wipe and the destroy both run before the range is gone.
+    """
+    from infra.guest_exec import guest_agent_exec_root, guest_agent_exec_windows
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    for node, vm in ctx.inventory.owned(ctx.ownership):
+        if vm.get("status") != "running":
+            continue
+        vmid = int(vm["vmid"])
+        name = vm.get("name") or f"vm{vmid}"
+        try:
+            cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+            windows = str(cfg.get("ostype") or "").lower().startswith("win")
+            if windows:
+                rc, out, err = guest_agent_exec_windows(node, vmid, _WINDOWS_LOG_PS,
+                                                        timeout=180)
+            else:
+                rc, out, err = guest_agent_exec_root(node, vmid, _LINUX_LOG_CMD,
+                                                     timeout=180)
+            text = (out or "") + (("\n### stderr\n" + err) if err else "")
+            if rc != 0 and not out:
+                text = f"log collection failed (rc {rc})\n{err or ''}"
+        except Exception as exc:                             # noqa: BLE001 - recorded
+            text = f"log collection failed: {type(exc).__name__}: {exc}"
+        target = out_dir / f"{name}-{vmid}.log"
+        target.write_text(text)
+        written.append(str(target))
+        print(f"  logs        : {name} (vmid {vmid}) -> {target.name}")
+    return written
+
+
 def engine_vmid_from_state(deployed_state):
     engine_vmid = deployed_state.get("scoring_vm_id") or SCORING_ENGINE_VMID
     try:
@@ -159,6 +209,8 @@ def engine_vmid_from_state(deployed_state):
 
 # templates are the clones' base disks, so they can only go after every clone has
 def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, full):
+    """(skipped, blocking): blocking entries are this competition's templates owned by
+    another run — never touched, and never reported as a clean teardown."""
     skipped = []
     engine_vmid = engine_vmid_from_state(deployed_state)
     node = config.active().proxmox.node
@@ -166,7 +218,7 @@ def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, fu
         print("  Teams-only teardown — templates kept for THIS competition's next run only.")
         print("  Goldens never carry across competitions; run a full teardown (no --teams-only) once the "
               "run's goal is met.")
-        return skipped
+        return skipped, []
     print(f"  Destroying golden templates (engine vmid {engine_vmid} + 150 + i)...")
     skipped += destroy_golden_set(node, engine_vmid, len(boxes), slot=0,
                                   expect_tags=ownership.with_role(GOLDEN_TAG).tags)
@@ -181,12 +233,14 @@ def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, fu
         destroy_jump_vms(placement, set(ownership.tags))
     print(f"  Destroying the engine template (vmid {engine_vmid} + 140)...")
     try:
-        destroy_engine_template(node, engine_vmid,
-                                expect_tags=ownership.with_role("engine-template").tags)
+        skipped += destroy_engine_template(
+            node, engine_vmid, expect_tags=ownership.with_role("engine-template").tags)
     except Refusal as e:
         skipped.append(str(e))
     # A destroyed template's hash record is a loaded gun for the reuse path: the next deploy
     # would clone from a dead vmid.
     forget_template_hashes(comp_dir)
     print("  Template hash record removed from the state document.")
-    return skipped
+    from golden.golden_ops import OTHER_RUN
+    blocking = [s for s in skipped if s.startswith(OTHER_RUN)]
+    return [s for s in skipped if s not in blocking], blocking

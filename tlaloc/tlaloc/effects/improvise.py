@@ -1,17 +1,18 @@
 """improvise — the model authors ONE command for a bespoke goal, and an explicit
 verification step decides whether it worked.
 
-v1's improvise tactic was the "AI for implementation" lever: the catalog covers
-the standard path, so when a box needs something bespoke (a weird service, a
-SUID escape the privesc module only noted) the director handed the model a
-one-line goal. The mechanics are worth keeping — the goal, the target's OS and
-the box's own facts go to the model, the text it returns is screened before it
-runs, and the foothold's own credentials carry it. Three of v1's behaviours are
-exactly why v2 exists, and this module is built the other way round:
+The earlier agent's improvise tactic was the "AI for implementation" lever: the
+catalog covers the standard path, so when a box needs something bespoke (a weird
+service, a SUID escape the privesc module only noted) the director handed the
+model a one-line goal. The mechanics are worth keeping — the goal, the target's
+OS and the box's own facts go to the model, the text it returns is screened
+before it runs, and the foothold's own credentials carry it. Three of the earlier
+agent's behaviours are exactly why tlaloc exists, and this module is built the
+other way round:
 
-* **attribution was a substring sniff.** v1's policy judged a goal "impacty"
-  with ``any(w in goal for w in _IMPACTY_WORDS)`` and the ledger inherited the
-  same guess. Here ``check()`` takes the deterministic word-boundary floor
+* **attribution was a substring sniff.** The earlier agent's policy judged a goal
+  "impacty" with ``any(w in goal for w in _IMPACTY_WORDS)`` and the ledger
+  inherited the same guess. Here ``check()`` takes the deterministic word-boundary floor
   (``decide.keyword_intent``) to decide whether the ROE's impact gate applies,
   and ``Result.impact`` is set from the decision layer's ``command_intent``
   answer (``decide.classify_command``, clef with that floor underneath it) — one
@@ -34,7 +35,8 @@ one the shared ``execute()`` template screens it with every other param. Text
 that only exists after the model answers cannot be screened there — it is
 screened inside ``run()`` with the same primitive the template uses,
 ``ctx.gate.ensure_command(text, target_os)``, on the TARGET's OS pattern set
-(v1's lint was POSIX-only in front of cmd.exe). A model-authored command that
+(the earlier agent's lint was POSIX-only in front of cmd.exe). A model-authored
+command that
 trips it fails the round, logged; a bad suggestion is not a broken design, so it
 does not halt the event. Nothing runs unlinted.
 
@@ -105,9 +107,9 @@ def intent_of(ctx, command, os_name):
 def facts_for(ctx, ip, fh, goal):
     """What the author is allowed to see: the box, not the range.
 
-    Same shape as v1's improvise context (host/user/root/ports/notes) plus the
-    scored service slugs, because they are what a bespoke goal is usually about.
-    """
+    Same shape as the earlier agent's improvise context (host/user/root/ports/
+    notes) plus the scored service slugs, because they are what a bespoke goal
+    is usually about."""
     target = ctx.world.target_record(ip) or {}
     ports = [p.get("port") for p in (target.get("ports") or []) if p.get("port")]
     return {
@@ -125,7 +127,8 @@ def facts_for(ctx, ip, fh, goal):
 def escalate(cmd, fh, as_root):
     """``as_root`` rides the foothold's label — and only a label we know works.
 
-    v1 reshaped the text itself when the goal wanted root. Here the shared
+    The earlier agent reshaped the text itself when the goal wanted root. Here
+    the shared
     ``root_cmd`` owns the wrapping, and free-form text never rides an
     ``escape:``/``capexec:`` wrapper: those break on arbitrary quoting (their
     own warning in effects/base.py), so the round runs unprivileged instead and
@@ -220,9 +223,9 @@ class Improvise(Effect):
         ip = params["ip"]
         goal = goal_of(params)
         # The deterministic floor decides whether the ROE's impact gate applies
-        # at all (v1 gated improvise the same way, with a substring sniff; this
-        # is the word-boundary read, and it never consults the model because
-        # check() runs under --dry-run too).
+        # at all (the earlier agent gated improvise the same way, with a
+        # substring sniff; this is the word-boundary read, and it never consults
+        # the model because check() runs under --dry-run too).
         policy = getattr(ctx, "policy", None)
         if policy is not None and keyword_intent(goal) == "takedown":
             ok, why = policy.can_impact(ctx.intel.team_of(ip))
@@ -363,7 +366,8 @@ class Improvise(Effect):
         """(True|False|None, how) — the explicit verification step.
 
         ``None`` means nothing could verify the step and the caller must not
-        read that as success (v1 read ``rc == 0`` there). The decision layer is
+        read that as success (the earlier agent read ``rc == 0`` there). The
+        decision layer is
         asked when it is wired, with the author's verification result as its
         deterministic default — so a clef outage degrades to the in-band check,
         never to the exit status.

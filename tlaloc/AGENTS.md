@@ -7,13 +7,13 @@ the bug.
 
 ## What this repo is
 
-tlaloc v2 — the tezcatlipoca range's red team. An assume-breach CCDC red teamer:
+tlaloc — the tezcatlipoca range's red team. An assume-breach CCDC red teamer:
 it is already inside when the event starts, then pressures scored services while
-adapting to blue. It is a **rebuild** of v1; the v1 audit's findings are what
-every module here is shaped by. This folder is part of the tezcatlipoca tree:
-phase 7 of every deploy provisions red01, installs the C2 unless `red.c2 off`,
-and stages the package through `red/tlaloc_ops.py` — there is no engine selector
-and no fallback. The ownership split (the engine owns the range, tlaloc owns
+adapting to blue. It is a **rebuild** of an earlier private agent; the rebuild's
+audit findings are what every module here is shaped by. This folder is part of
+the tezcatlipoca tree: phase 7 of every deploy provisions red01, installs the C2
+unless `red.c2 off`, and stages the package through `red/tlaloc_ops.py` — there
+is no engine selector and no fallback. The ownership split (the engine owns the range, tlaloc owns
 decisions and effects) is in [`docs/deploy.md`](docs/deploy.md). Read the docs
 before proposing an architecture change.
 
@@ -33,8 +33,9 @@ before proposing an architecture change.
 3. **`ok=True` means the objective was met.** Every give-up path returns
    `ok=False` with a detail that says so. A C2 implant that installed but never
    checked in is `ok=False` **and** `installed=True` — the record is written from
-   the install, never gated on a channel proof (v1 wrote nothing when a check-in
-   was slow, and both blue's and the organizer's artifact lists went blind).
+   the install, never gated on a channel proof (the earlier agent wrote nothing
+   when a check-in was slow, and both blue's and the organizer's artifact lists
+   went blind).
 4. **Attribution is code-side.** An effect that takes a scored service down sets
    `Result.impact`; the ledger never depends on a caller remembering a
    `service=` argument. Conversely, a takedown whose damage did not hold is NOT
@@ -66,7 +67,8 @@ before proposing an architecture change.
 11. **Every config key an effect reads is in `cli.CONFIG_CONTRACT`.** The contract
     is the per-field list the deploy pushes to `/etc/tlaloc/config.yaml` and
     `verify-config --pushed` diffs; a key read by the agent but absent from it is
-    silently dropped on the way to the VM (v1 shipped a whole feature that way).
+    silently dropped on the way to the VM (the earlier agent shipped a whole
+    feature that way).
     Add the key to `config.DEFAULTS`, the contract, and
     `tests/test_config_contract.py`'s table together — that test fails otherwise.
 
@@ -91,8 +93,8 @@ fails until you do). The full contract is in `docs/effects-authoring.md`; the
 reference implementations are `recon.py` (read-only) and `takedown.py` (pressure
 with mechanisms, both OSes, proof-of-damage, restore recipes).
 
-The catalogue is 12 effects. Optional flavour effects from v1 (`decoy`,
-`mysql_udf`) are deliberately NOT in the catalogue — they come back behind config
+The catalogue is 12 effects. Optional flavour effects from the earlier agent
+(`decoy`, `mysql_udf`) are deliberately NOT in the catalogue — they come back behind config
 flags only if the club wants them, because each one is surface without pressure.
 
 ## State
@@ -106,12 +108,12 @@ no merge, disk is truth. `world.ensure_event_start()` saves only on create.
 ## Testing and verification
 
 - **Runner: `python3 -m pytest tests/ -q`.** `unittest discover` silently skips
-  pytest-only files — that is how v1 reported green while a real regression test
-  never ran. CI is pytest.
+  pytest-only files — that is how the earlier agent reported green while a real
+  regression test never ran. CI is pytest.
 - **Hermetic by default:** `tests/conftest.py` patches `subprocess.Popen`,
   `socket.create_connection` and `socket.socket.connect` to raise, so a test that
   dials a range address fails loudly instead of "passing" against the club LAN
-  (v1's destroy tests did exactly that). Opt out per-test with
+  (the earlier agent's destroy tests did exactly that). Opt out per-test with
   `@pytest.mark.net`.
 - **Fakes, not mocks of the code under test:** `tests/helpers.py` gives
   `make_ctx()` (temp state dir, real World/Gate/EventLog, `FakeSSH` scripted
@@ -133,11 +135,11 @@ no merge, disk is truth. `world.ensure_event_start()` saves only on create.
 
 - Times in reports and status output are **EST/EDT**, never UTC.
 - `run.state_dir` is per competition. Never reuse a state dir across events and
-  never "reset" one in place (v1's `--reset-event` leaked tallies, seed state and
-  burndown rows into the next event).
+  never "reset" one in place (the earlier agent's `--reset-event` leaked tallies,
+  seed state and burndown rows into the next event).
 - Config: `DEFAULTS < config.yaml < env allow-map`; a missing explicit
-  `--config` path is a hard error (v1 silently ran on defaults once, and
-  deployed the wrong VM). Config is frozen once the context is built — anything
+  `--config` path is a hard error (the earlier agent silently ran on defaults
+  once, and deployed the wrong VM). Config is frozen once the context is built — anything
   that changes mid-run lives in world state or the Compfile.
 - Anything a deploy pipeline pushes to red01 must be in
   `cli.CONFIG_CONTRACT`; `tlaloc verify-config` diffs the effective config

@@ -4,10 +4,10 @@ Three jobs, all deterministic and all pure enough to unit-test without a box:
 
 1. **Bounds.** The event clock, the escalation ladder, the pressure caps and the
    final windows all come from the config/Compfile — never from a constant baked
-   into a module (v1's 420-minute clock misfired on every shorter event, and its
-   unrecoverable set existed in three places that drifted). Everything a
-   candidate needs to be legal is asked here, and every answer is a reason
-   string a human can read in the decision log.
+   into a module (the earlier agent's 420-minute clock misfired on every shorter
+   event, and its unrecoverable set existed in three places that drifted).
+   Everything a candidate needs to be legal is asked here, and every answer is a
+   reason string a human can read in the decision log.
 
 2. **Candidates.** The list the decision model chooses from: which effects are
    applicable on which box right now, with a deterministic score and a reason.
@@ -140,7 +140,8 @@ class Policy:
     def teardown_active(self):
         """The final window: ROE suspends the pacing gates and the SAME loop,
         registry and gate run full-board takedowns at a faster cadence. There is
-        no separate sweeper (v1's coverage/endgame/burndown collapse into this)."""
+        no separate sweeper (the earlier agent's coverage/endgame/burndown
+        collapse into this)."""
         return self.window_open("endgame_teardown")
 
     def event_phase(self):
@@ -311,9 +312,10 @@ class Policy:
         """The team the loop is concentrating on, rotated on a clock.
 
         A shuffle bag, not a bare random pick: a uniform re-pick can starve a
-        team for a whole event (a live v1 soak had five consecutive rotations
-        land on the same half of the range and half the board took zero red
-        pressure). The bag holds the teams not yet focused this cycle.
+        team for a whole event (a live soak of the earlier agent had five
+        consecutive rotations land on the same half of the range and half the
+        board took zero red pressure). The bag holds the teams not yet focused
+        this cycle.
         """
         teams = [t["team"] for t in self.intel.teams()]
         if not teams:
