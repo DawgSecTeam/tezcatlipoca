@@ -1,18 +1,20 @@
-"""Mythic REST client — tasking and callback evidence, nothing else.
+"""Mythic client — tasking and callback evidence, nothing else.
 
-Endpoints are the Mythic v1.4 REST surface. This module is deliberately thin and
-injectable (`http=` seam) so the whole C2 path is testable offline and so a
-Mythic upgrade is one mapping table, not a rewrite:
+Mythic 4 removed the `/api/v1.4` REST surface; the data API is GraphQL at
+`/graphql` with a Bearer token (`POST /auth` still issues the access token, and
+built payload files still download from `/direct/download/<agent_file_id>`).
+This module is deliberately thin and injectable (`http=` for auth/download,
+`graphql=` for the data calls) so the whole C2 path is testable offline:
 
     POST /auth                                  -> {access_token, ...}
-    GET  /api/v1.4/callbacks/                   -> [callback rows]
-    POST /api/v1.4/task/                        -> {id: <task id>}
-    GET  /api/v1.4/task/{id}/                   -> task row (status, output)
-    POST /api/v1.4/payload/                     -> {uuid: ..., identifier: ...}
-    GET  /api/v1.4/payload/{uuid}/              -> build status + file_id
-    GET  /api/v1.4/payload/download/{file_id}   -> the binary
+    POST /graphql  callback(...)                -> [callback rows]
+    POST /graphql  createTask(...)              -> {id: <task id>}
+    POST /graphql  task(...) + response(...)    -> task row (status, output)
+    POST /graphql  createPayload(definition)    -> {uuid: ...}
+    POST /graphql  payload(where: {uuid})       -> build phase + agent_file_id
+    GET  /direct/download/{agent_file_id}       -> the binary
 
-Two behaviours worth stating because the earlier agent got them wrong:
+Two behaviours worth stating because v1 got them wrong:
 
 * **liveness is a callback row with a fresh timestamp, never a process.** The
   tavern lesson: a row survives the agent's death, so `callbacks()` reports
@@ -21,6 +23,7 @@ Two behaviours worth stating because the earlier agent got them wrong:
   a callback maps to a box without guessing from IPs.
 """
 
+import base64
 import json
 import time
 from dataclasses import dataclass
@@ -52,7 +55,7 @@ class Callback:
 
 
 class MythicClient:
-    def __init__(self, cfg, http=None, now=None, log=None, password=None):
+    def __init__(self, cfg, http=None, graphql=None, now=None, log=None, password=None):
         c2 = cfg.get("c2") or {}
         self.base_url = (c2.get("base_url") or "").rstrip("/")
         self.username = c2.get("username") or "tlaloc"
@@ -69,6 +72,7 @@ class MythicClient:
         self.timeout = float(c2.get("timeout_sec", 30))
         self.enabled = bool(c2.get("enabled")) and bool(self.base_url)
         self._http = http
+        self._graphql_fn = graphql
         self._now = now or time.time
         self._token = None
         self.log = log
@@ -112,11 +116,104 @@ class MythicClient:
         self._token = token
         return token
 
+    def _graphql_call(self, query, variables=None):
+        if self._graphql_fn is not None:
+            return self._graphql_fn(query, variables or {})
+        if not self._token:
+            self.login()
+        import requests                                     # lazy
+        response = requests.post(
+            f"{self.base_url}/graphql",
+            json={"query": query, "variables": variables or {}},
+            headers={"Authorization": f"Bearer {self._token}",
+                     "Content-Type": "application/json"},
+            timeout=self.timeout, verify=self.verify_tls)
+        if response.status_code >= 400:
+            raise C2Error(f"POST /graphql -> HTTP {response.status_code}: "
+                          f"{response.text[:200]}")
+        body = response.json()
+        if body.get("errors"):
+            message = (body["errors"][0] or {}).get("message") or body["errors"][0]
+            raise C2Error(f"graphql error: {message}")
+        return body.get("data") or {}
+
     # -- evidence -----------------------------------------------------------
 
+    CALLBACK_QUERY = """
+query Callbacks($operation: String!) {
+  callback(where: {operation: {name: {_eq: $operation}}, active: {_eq: true}}) {
+    id
+    display_id
+    description
+    host
+    user
+    process_name
+    last_checkin
+    payload { payloadtype { name } }
+  }
+}
+"""
+
+    CREATE_TASK = """
+mutation CreateTask($callback_id: Int!, $command: String!) {
+  createTask(callback_id: $callback_id, command: $command, params: "") {
+    status
+    error
+    id
+    display_id
+  }
+}
+"""
+
+    TASK_QUERY = """
+query Task($id: Int!) {
+  task(where: {id: {_eq: $id}}) {
+    id
+    status
+    completed
+    stdout
+    stderr
+  }
+  response(where: {task_id: {_eq: $id}}, order_by: {timestamp: asc}) {
+    response_text
+  }
+}
+"""
+
+    CREATE_PAYLOAD = """
+mutation CreatePayload($payload: String!) {
+  createPayload(payloadDefinition: $payload) {
+    status
+    error
+    uuid
+  }
+}
+"""
+
+    PAYLOAD_QUERY = """
+query Payload($uuid: String!) {
+  payload(where: {uuid: {_eq: $uuid}}) {
+    uuid
+    build_phase
+    build_message
+    filemetum { agent_file_id filename_utf8 }
+  }
+}
+"""
+
     def callback_rows(self):
-        payload = self._request("GET", "/api/v1.4/callbacks/")
-        return list(payload if isinstance(payload, list) else []) or []
+        data = self._graphql_call(self.CALLBACK_QUERY,
+                                  {"operation": self.operation_name})
+        rows = []
+        for row in data.get("callback") or []:
+            payload = row.get("payload") or {}
+            ptype = (payload.get("payloadtype") or {}) if isinstance(payload, dict) else {}
+            rows.append({"id": row.get("id"), "display_id": row.get("display_id"),
+                         "description": row.get("description"), "host": row.get("host"),
+                         "user": row.get("user"), "process_name": row.get("process_name"),
+                         "last_checkin": row.get("last_checkin"),
+                         "agent": ptype.get("name")})
+        return rows
 
     def callbacks(self):
         """{box_id: {"seen_at": epoch, "agent": str, "external_id": str}}.
@@ -160,8 +257,7 @@ class MythicClient:
     # -- tasking ------------------------------------------------------------
 
     def callback_id_for(self, box_id):
-        payload = self._request("GET", "/api/v1.4/callbacks/")
-        for row in (payload if isinstance(payload, list) else []):
+        for row in self.callback_rows():
             if (row.get("description") or row.get("host") or "").strip() == box_id:
                 return row.get("id") or row.get("display_id")
         return None
@@ -174,28 +270,33 @@ class MythicClient:
         if callback_id is None:
             return {"ok": False, "detail": f"no callback for {box_id}",
                     "output": "", "task_id": None}
-        created = self._request("POST", "/api/v1.4/task/",
-                                {"callback_id": callback_id, "command": command})
-        task_id = (created or {}).get("id") or (created or {}).get("task_id")
+        created = (self._graphql_call(self.CREATE_TASK,
+                                      {"callback_id": int(callback_id),
+                                       "command": command}).get("createTask") or {})
+        if created.get("error"):
+            return {"ok": False, "detail": f"task creation: {created['error']}",
+                    "output": "", "task_id": None}
+        task_id = created.get("id")
         if task_id is None:
             return {"ok": False, "detail": f"task creation returned {str(created)[:120]}",
                     "output": "", "task_id": None}
         deadline = self._now() + timeout
-        last = None
+        last, output = {}, ""
         while self._now() < deadline:
-            last = self._request("GET", f"/api/v1.4/task/{task_id}/")
-            if not isinstance(last, dict):          # a malformed poll is not a verdict
-                last = {}
+            data = self._graphql_call(self.TASK_QUERY, {"id": int(task_id)})
+            rows = data.get("task") or []
+            last = rows[0] if rows and isinstance(rows[0], dict) else {}
+            output = _responses_text(data.get("response") or []) or _task_output(last)
             status = str(last.get("status") or "").lower()
-            if status in TERMINAL_OK:
-                return {"ok": True, "output": _task_output(last),
-                        "task_id": task_id, "status": status}
             if status in TERMINAL_BAD:
                 return {"ok": False, "detail": f"task {status}",
-                        "output": _task_output(last), "task_id": task_id}
+                        "output": output, "task_id": task_id}
+            if status in TERMINAL_OK or last.get("completed"):
+                return {"ok": True, "output": output,
+                        "task_id": task_id, "status": status}
             time.sleep(poll_interval)
         return {"ok": False, "detail": f"task {task_id} not finished within {timeout}s",
-                "output": _task_output(last), "task_id": task_id}
+                "output": output, "task_id": task_id}
 
     # -- payload prep (comp-prep; never mid-event) ---------------------------
 
@@ -213,11 +314,13 @@ class MythicClient:
         params = self.profile_parameters(extra)
         if params:
             profile["c2_profile_parameters"] = params
-        body = {"payload_type": agent, "description": box_id,
-                "c2_profiles": [profile],
-                "build_parameters": {}}
-        created = self._request("POST", "/api/v1.4/payload/", body)
-        uuid = (created or {}).get("uuid")
+        definition = {"selected_os": os_name, "filename": f"{box_id}-{transport}.bin",
+                      "description": box_id, "payload_type": agent,
+                      "commands": [], "c2_profiles": [profile],
+                      "build_parameters": []}
+        created = (self._graphql_call(
+            self.CREATE_PAYLOAD, {"payload": json.dumps(definition)}).get("createPayload") or {})
+        uuid = created.get("uuid")
         if not uuid:
             raise C2Error(f"payload build for {box_id} returned {str(created)[:120]}")
         return {"uuid": str(uuid), "box": box_id, "agent": agent,
@@ -241,15 +344,18 @@ class MythicClient:
         return {"host": self.callback_host, "port": self.callback_port}
 
     def payload_status(self, uuid):
-        return self._request("GET", f"/api/v1.4/payload/{uuid}/") or {}
+        data = self._graphql_call(self.PAYLOAD_QUERY, {"uuid": uuid})
+        rows = data.get("payload") or []
+        return rows[0] if rows and isinstance(rows[0], dict) else {}
 
     def download_payload(self, uuid, path):
         status = self.payload_status(uuid)
-        file_id = status.get("file_id") or (status.get("payload") or {}).get("file_id")
+        file_id = (status.get("filemetum") or {}).get("agent_file_id")
         if not file_id:
-            raise C2Error(f"payload {uuid} has no file yet "
-                          f"(build status {status.get('build_status')})")
-        blob = self._request("GET", f"/api/v1.4/payload/download/{file_id}", raw=True)
+            raise C2Error(f"payload {uuid} has no built file yet "
+                          f"(build phase {status.get('build_phase')}: "
+                          f"{status.get('build_message') or 'building'})")
+        blob = self._request("GET", f"/direct/download/{file_id}", raw=True)
         with open(path, "wb") as fh:
             fh.write(blob)
         return path
@@ -271,6 +377,22 @@ def _epoch(value):
         return datetime.datetime.fromisoformat(text).timestamp()
     except ValueError:
         return None
+
+
+def _responses_text(rows):
+    """Mythic stores agent output base64-encoded in `response.response_text`."""
+    chunks = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            chunk = base64.b64decode(str(row.get("response_text") or "")).decode(
+                "utf-8", "replace")
+        except (ValueError, TypeError):
+            continue
+        if chunk:
+            chunks.append(chunk)
+    return "".join(chunks)
 
 
 def _task_output(row):

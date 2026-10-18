@@ -1,10 +1,12 @@
-"""The C2 layer: Mythic REST mapping, callback freshness, planting, tasking.
+"""The C2 layer: Mythic GraphQL mapping, callback freshness, planting, tasking.
 
-Every test drives the client through its injected `http` seam, so nothing here
-touches a network — which is exactly what the plan asks for: the C2 path has to
-be verifiable offline because the live Mythic only exists during a comp.
+Every test drives the client through its injected `graphql`/`http` seams, so
+nothing here touches a network — which is exactly what the plan asks for: the C2
+path has to be verifiable offline because the live Mythic only exists during a
+comp.
 """
 
+import base64
 import json
 import shutil
 from pathlib import Path
@@ -39,6 +41,23 @@ class StubHTTP:
         raise C2Error(f"unrouted {method} {path}")
 
 
+class StubGQL:
+    """A scripted Mythic GraphQL endpoint: routes by a marker in the query text."""
+
+    def __init__(self, routes):
+        self.routes = routes
+        self.calls = []
+
+    def __call__(self, query, variables):
+        self.calls.append({"query": query, "variables": variables})
+        for marker, response in self.routes.items():
+            if marker in query:
+                if isinstance(response, Seq):
+                    return response.pop(0)
+                return response
+        raise C2Error(f"unrouted query: {query[:80]}")
+
+
 def c2_cfg(**over):
     cfg = base_cfg(c2={"enabled": True, "base_url": "https://mythic.example",
                        "username": "tlaloc", "operation": "comp-x",
@@ -55,13 +74,15 @@ def test_epoch_parses_mythic_timestamps():
 
 def test_callbacks_map_description_to_box_and_keep_freshness():
     now = 1792116000.0        # 2026-10-16T02:00:00Z, just after both check-ins
-    http = StubHTTP({("GET", "/api/v1.4/callbacks/"): [
+    graphql = StubGQL({"callback(": {"callback": [
         {"id": 7, "display_id": 7, "description": "web01-1", "host": "192.168.1.10",
-         "user": "ubuntu", "agent": "poseidon", "last_checkin": "2026-10-16T01:59:30Z"},
+         "user": "ubuntu", "last_checkin": "2026-10-16T01:59:30Z",
+         "payload": {"payloadtype": {"name": "poseidon"}}},
         {"id": 8, "display_id": 8, "description": "db01-1", "host": "192.168.1.11",
-         "user": "ubuntu", "agent": "poseidon", "last_checkin": "2026-10-16T01:00:00Z"},
-    ]})
-    client = MythicClient(c2_cfg(), http=http, now=lambda: now)
+         "user": "ubuntu", "last_checkin": "2026-10-16T01:00:00Z",
+         "payload": {"payloadtype": {"name": "poseidon"}}},
+    ]}})
+    client = MythicClient(c2_cfg(), graphql=graphql, now=lambda: now)
     callbacks = client.callbacks()
     assert set(callbacks) == {"web01-1", "db01-1"}
     assert callbacks["web01-1"]["agent"] == "poseidon"
@@ -71,50 +92,54 @@ def test_callbacks_map_description_to_box_and_keep_freshness():
 
 def test_callback_row_without_a_timestamp_is_not_fresh():
     now = 1770000000.0
-    http = StubHTTP({("GET", "/api/v1.4/callbacks/"): [
-        {"id": 1, "description": "web01-1", "agent": "poseidon",
-         "last_checkin": None}]})
-    client = MythicClient(c2_cfg(), http=http, now=lambda: now)
+    graphql = StubGQL({"callback(": {"callback": [
+        {"id": 1, "description": "web01-1", "last_checkin": None,
+         "payload": {"payloadtype": {"name": "poseidon"}}}]}})
+    client = MythicClient(c2_cfg(), graphql=graphql, now=lambda: now)
     assert client.callbacks()["web01-1"]["stale"] is True
     assert client.fresh_callbacks() == {}
 
 
 def test_tasking_creates_and_polls_a_task():
-    http = StubHTTP({
-        ("GET", "/api/v1.4/callbacks/"): [
-            {"id": 42, "description": "web01-1", "last_checkin": "2026-10-16T01:59:30Z"}],
-        ("POST", "/api/v1.4/task/"): {"id": 900},
-        ("GET", "/api/v1.4/task/900/"): Seq([
-            {"id": 900, "status": "submitted"},
-            {"id": 900, "status": "completed",
-             "response": json.dumps({"output": "nginx stopped"})}]),
+    graphql = StubGQL({
+        "callback(": {"callback": [
+            {"id": 42, "description": "web01-1", "last_checkin": "2026-10-16T01:59:30Z"}]},
+        "createTask": {"createTask": {"status": "success", "error": "", "id": 900,
+                                      "display_id": 900}},
+        "query Task": Seq([
+            {"task": [{"id": 900, "status": "submitted", "completed": False}],
+             "response": []},
+            {"task": [{"id": 900, "status": "completed", "completed": True}],
+             "response": [{"response_text": base64.b64encode(b"nginx stopped").decode()}]}]),
     })
-    client = MythicClient(c2_cfg(), http=http, now=lambda: 1770000000.0)
+    client = MythicClient(c2_cfg(), graphql=graphql, now=lambda: 1770000000.0)
     outcome = client.task("web01-1", "systemctl stop nginx", timeout=5,
                           poll_interval=0)
     assert outcome["ok"] is True and outcome["output"] == "nginx stopped"
-    posted = [c for c in http.calls if c["method"] == "POST"][0]
-    assert posted["body"] == {"callback_id": 42, "command": "systemctl stop nginx"}
+    created = [c for c in graphql.calls if "createTask" in c["query"]][0]
+    assert created["variables"] == {"callback_id": 42,
+                                    "command": "systemctl stop nginx"}
 
 
 def test_tasking_reports_a_missing_callback_instead_of_guessing():
-    http = StubHTTP({("GET", "/api/v1.4/callbacks/"): []})
-    client = MythicClient(c2_cfg(), http=http, now=lambda: 1770000000.0)
+    graphql = StubGQL({"callback(": {"callback": []}})
+    client = MythicClient(c2_cfg(), graphql=graphql, now=lambda: 1770000000.0)
     outcome = client.task("web01-1", "id")
     assert outcome["ok"] is False and "no callback" in outcome["detail"]
 
 
 def test_a_failed_task_is_not_success():
-    http = StubHTTP({
-        ("GET", "/api/v1.4/callbacks/"): [{"id": 1, "description": "web01-1",
-                                           "last_checkin": "2026-10-16T01:59:30Z"}],
-        ("POST", "/api/v1.4/task/"): {"id": 5},
-        ("GET", "/api/v1.4/task/5/"): Seq([{"id": 5, "status": "error",
-                                            "response": json.dumps({"output": "denied"})}]),
+    graphql = StubGQL({
+        "callback(": {"callback": [{"id": 1, "description": "web01-1",
+                                    "last_checkin": "2026-10-16T01:59:30Z"}]},
+        "createTask": {"createTask": {"status": "success", "error": "", "id": 5}},
+        "query Task": {"task": [{"id": 5, "status": "error", "completed": True}],
+                       "response": [{"response_text": base64.b64encode(b"denied").decode()}]},
     })
-    client = MythicClient(c2_cfg(), http=http, now=lambda: 1770000000.0)
+    client = MythicClient(c2_cfg(), graphql=graphql)
     outcome = client.task("web01-1", "id", timeout=1, poll_interval=0)
     assert outcome["ok"] is False and outcome["detail"].startswith("task error")
+    assert outcome["output"] == "denied"
 
 
 def test_disabled_c2_refuses_to_task():
@@ -300,27 +325,31 @@ def test_a_task_that_ran_but_failed_still_records_its_undo(tmp_path):
 
 
 def test_build_payload_carries_the_callback_address():
-    http = StubHTTP({("POST", "/api/v1.4/payload/"): {"uuid": "uuid-1"}})
+    graphql = StubGQL({"createPayload": {"createPayload": {
+        "status": "success", "error": "", "uuid": "uuid-1"}}})
     client = MythicClient(c2_cfg(callback_host="http://172.31.2.1",
-                                 callback_port=8000), http=http)
+                                 callback_port=8000), graphql=graphql)
     entry = client.build_payload("web01-1", "linux", transport="http")
-    posted = [c for c in http.calls if c["method"] == "POST"][0]
-    profile = posted["body"]["c2_profiles"][0]
+    definition = json.loads(graphql.calls[0]["variables"]["payload"])
+    profile = definition["c2_profiles"][0]
     assert profile["c2_profile"] == "http"
     assert profile["c2_profile_parameters"] == {"callback_host": "http://172.31.2.1",
                                                 "callback_port": 8000}
     assert entry["uuid"] == "uuid-1" and entry["callback"] == {"host": "http://172.31.2.1",
                                                                "port": 8000}
-    assert posted["body"]["build_parameters"] == {}
+    assert definition["build_parameters"] == []
+    assert definition["selected_os"] == "linux" and definition["commands"] == []
 
 
 def test_build_payload_without_a_callback_keeps_the_profile_default():
     """No configured callback = the profile instance's own value stays in place;
     nothing is invented (and the field is absent, not empty)."""
-    http = StubHTTP({("POST", "/api/v1.4/payload/"): {"uuid": "uuid-2"}})
-    client = MythicClient(c2_cfg(), http=http)
+    graphql = StubGQL({"createPayload": {"createPayload": {
+        "status": "success", "error": "", "uuid": "uuid-2"}}})
+    client = MythicClient(c2_cfg(), graphql=graphql)
     client.build_payload("web01-1", "windows")
-    posted = [c for c in http.calls if c["method"] == "POST"][0]
-    profile = posted["body"]["c2_profiles"][0]
+    definition = json.loads(graphql.calls[0]["variables"]["payload"])
+    profile = definition["c2_profiles"][0]
     assert "c2_profile_parameters" not in profile
-    assert posted["body"]["payload_type"] == "apollo"
+    assert definition["payload_type"] == "apollo"
+    assert definition["selected_os"] == "windows"
