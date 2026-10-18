@@ -5,6 +5,7 @@ import pytest
 from tests.helpers import DEFAULT_COMP, FakeSensors, make_ctx
 from tlaloc.errors import PolicyError
 from tlaloc.policy import MODE_RANK, Policy
+from tlaloc.state.world import now_iso
 
 FIXTURE = str(DEFAULT_COMP)
 
@@ -257,3 +258,13 @@ def test_rotation_prefers_an_unhit_service_on_an_unhit_box(tmp_path):
     b_cold, why, skip_cold = policy.pressure_rotation(cold, "apache", False)
     assert not skip_hot and not skip_cold
     assert b_cold > b_hot and "not hit yet" in why
+
+
+def test_a_live_callback_is_found_by_box_id_not_by_ip(tmp_path):
+    """The world's c2 map is keyed <box>-<team>; asking by IP said "no channel"."""
+    ctx, policy = policy_for(tmp_path)
+    box = next(iter(ctx.intel.boxes()))
+    box_id = f"{box['box']}-{box['identifier']}"
+    ctx.world.note_callback(box_id, now_iso(), agent="poseidon")
+    assert policy._channel_fresh(box["ip"]) is True
+    assert policy.world.callback_age(policy._box_id_for_ip(box["ip"])) is not None

@@ -459,7 +459,7 @@ class Policy:
         # 2. channel (C2)
         if ctx.c2 is not None and root:
             if not live_channel:
-                age = self.world.callback_age(ip)
+                age = self.world.callback_age(self._box_id_for_ip(ip))
                 why = ("no C2 callback recorded for this box" if age is None
                        else f"last callback {int(age)}s ago (stale)")
                 out.append(make_candidate("implant_channel", {"ip": ip},
@@ -580,8 +580,20 @@ class Policy:
         box = next(iter(self.intel.boxes()), None)
         return box["ip"] if box else None
 
+    def _box_id_for_ip(self, ip):
+        """The manifest/C2 key for a box: `<name>-<team>` (e.g. web01-120).
+
+        The world's `c2` map is keyed by that id, so asking it for an IP always
+        answered "no callback" — every box looked channelless and the loop kept
+        re-implanting a live agent (live 2026-10-18: 52 wasted implants).
+        """
+        box = self.intel.box_by_ip(ip)
+        if not box:
+            return ip
+        return f"{box['box']}-{box['identifier']}"
+
     def _channel_fresh(self, ip):
-        age = self.world.callback_age(ip)
+        age = self.world.callback_age(self._box_id_for_ip(ip))
         if age is None:
             return False
         return age <= float((self.cfg.get("c2") or {}).get("callback_max_age_sec", 120))
