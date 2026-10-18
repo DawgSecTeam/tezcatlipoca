@@ -681,16 +681,18 @@ def _in_path_firewall(comp_dir):
 def callback_host_for(comp_dir):
     """The address team boxes dial for the C2 on this topology.
 
-    Behind an in-path firewall that is the engine's transit address; otherwise it
-    is their own gateway (the engine's team NIC). Multi-team comps are DNATed per
-    gateway at the engine; the payload host names the first team's.
+    It is the team GATEWAY address (192.168.<id>.1) in both topologies, because
+    that is the address the range DNATs to red01: without an in-path firewall the
+    engine owns it and DNATs the callback port; with one, the generated pfSense
+    config carries the same DNAT (\"firewall owns the gateway address\"). The
+    engine's transit address (172.31.<id>.1) is NOT the C2: it is Quotient, and a
+    payload built with it beacons into the scoring engine and never checks in.
     """
     identifiers = [tv.get("identifier") for tv in _team_records(comp_dir)
                    if tv.get("identifier") is not None]
     if not identifiers:
         return None
-    prefix = "172.31" if _in_path_firewall(comp_dir) else "192.168"
-    return f"{prefix}.{identifiers[0]}.1"
+    return f"192.168.{identifiers[0]}.1"
 
 
 def c2_plan(comp_dir, *, red_ip=None, comp_id=None):

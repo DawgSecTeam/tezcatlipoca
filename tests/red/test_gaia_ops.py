@@ -160,12 +160,14 @@ class CallbackAddressTest(unittest.TestCase):
             assert block["callback_host"] == "http://192.168.2.1"
             assert block["callback_port"] == 4470
 
-    def test_an_in_path_firewall_moves_the_callback_to_the_transit_address(self):
+    def test_an_in_path_firewall_keeps_the_gateway_as_the_callback(self):
+        """The firewall owns the gateway address and DNATs the callback port to
+        red01; the transit address is Quotient, not the C2."""
         with tempfile.TemporaryDirectory() as tmp:
             comp = comp_dir(tmp, "firewall_dnat 4470->10.0.0.198\n")
             (comp / "boxes.json").write_text(
                 '[{"name": "pfsense", "last_octet": 1, "in_path": true, "unmanaged": true}]')
-            assert g.callback_host_for(comp) == "172.31.2.1"
+            assert g.callback_host_for(comp) == "192.168.2.1"
 
 
 
