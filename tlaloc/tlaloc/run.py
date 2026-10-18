@@ -45,6 +45,12 @@ from .state import World
 
 LIVE_HOSTS = ("red01",)
 
+# How many candidate attempts beyond the requested pressure count the loop may
+# spend when a target is refused (ssh is our access path) or an effect fails.
+# Bounded on purpose: the budget falls through to the next legal target, it does
+# not sweep the range.
+PRESSURE_FALLTHROUGH = 3
+
 
 class Loop:
     def __init__(self, ctx, *, policy=None, decider=None, sensors=None, log=None,
@@ -195,8 +201,19 @@ class Loop:
                 executed.append(self._run_candidate(stronger, source=escalate.source))
 
         budget = self.decider.pressure_count(digest, cycle=self.cycle)
-        for extra in self._extra_pressure(int(budget.answer or 0), candidates, decision):
-            executed.append(self._run_candidate(extra, source="deterministic"))
+        wanted = int(budget.answer or 0)
+        landed = 0
+        # The budget is a target, not an allocation. A candidate the guardrails
+        # refuse — ssh is our own access path — must not absorb it: fall through
+        # to the next legal target, or a range with a live red team records zero
+        # impacts while the budget goes unused.
+        for extra in self._extra_pressure(wanted, candidates, decision):
+            result = self._run_candidate(extra, source="deterministic")
+            executed.append(result)
+            if result and result.get("ok"):
+                landed += 1
+                if landed >= wanted:
+                    break
 
         self.decider.record(self.cycle, executed=[e for e in executed if e])
         # The report's decision-log section reads this list; nothing else fills
@@ -261,12 +278,20 @@ class Loop:
         return None
 
     def _extra_pressure(self, count, candidates, decision):
+        """The pressure-budget candidates, in order, best first.
+
+        Returns MORE than `count` when the list allows it: the caller executes
+        them until `count` actually land, so a refused target (ssh is our own
+        access path) cannot consume the whole budget. The extra attempts are
+        bounded — never a sweep of the whole candidate list.
+        """
         if count <= 0:
             return []
         taken = (decision.chosen or {}).get("id")
+        ceiling = count + PRESSURE_FALLTHROUGH
         out = []
         for candidate in candidates:
-            if len(out) >= count:
+            if len(out) >= ceiling:
                 break
             if candidate["effect"] not in ("takedown", "block_port"):
                 continue

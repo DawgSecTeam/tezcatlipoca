@@ -407,3 +407,19 @@ def test_a_composite_manifest_key_is_found_by_box():
     assert manifest_entry(manifest, "web01-1", "webhook")["uuid"] == "u-2"
     assert manifest_entry(manifest, "web01-1", "smb")["uuid"] == "u-1"
     assert manifest_entry(manifest, "db01-1") is None
+
+
+def test_the_plant_rides_the_escalated_foothold_when_sudo_is_broken(tmp_path):
+    """web01's writable-sudoers makes sudo refuse; the escalated path still works."""
+    _manifest(tmp_path)
+    ssh = FakeSSH().on("is-active", rc=0, out="active")
+    ctx = make_ctx(tmp_path / "state", ssh=ssh)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "user",
+                           escalation="escape:/tmp/.x")
+    ctx.c2 = FakeMythic({})
+    planter = Planter(ctx, comp_dir=tmp_path)
+    info = planter.plant("192.168.1.10", "web01-1", wait_sec=0)
+    assert info["ok"] is True
+    install = [c["cmd"] or "" for c in ssh.calls if "systemctl enable" in (c["cmd"] or "")]
+    assert install, "the unit install ran"
+    assert "/tmp/.x" in install[0] and "sudo -n" not in install[0]

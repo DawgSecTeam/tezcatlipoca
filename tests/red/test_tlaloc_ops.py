@@ -5,6 +5,7 @@ prove the control flow, the pushed-config contract and the fail-loud policy.
 """
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -203,9 +204,11 @@ class FakeCtx:
 
 
 class PlantTests(unittest.TestCase):
+    CLEF = "red.clef_url http://10.0.0.9:8080\n"
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.comp = compfile(self.tmp.name, "red.c2 off\n")
+        self.comp = compfile(self.tmp.name, "red.c2 off\n" + self.CLEF)
         self.ctx = FakeCtx(self.comp)
         self.runner = lambda argv, **kw: Completed(0, "[]")
 
@@ -266,6 +269,17 @@ class PlantTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             to.plant_assume_breach(ctx, ssh_key="/k", runner=self.runner)
         self.assertIn("red.assume_breach", str(cm.exception))
+
+    def test_a_missing_decision_model_endpoint_fails_the_deploy(self):
+        """A placeholder endpoint is not a degradation: decisions would silently
+        fall back to deterministic for the whole event."""
+        comp = compfile(self.tmp.name + "noclef", "red.assume_breach light\n")
+        ctx = FakeCtx(comp)
+        with mock.patch.dict(os.environ, {}, clear=False) as env:
+            env.pop("TEZ_CLEF_URL", None)
+            with self.assertRaises(RuntimeError) as cm:
+                to.plant_assume_breach(ctx, ssh_key="/k", runner=self.runner)
+        self.assertIn("decision-model endpoint", str(cm.exception))
 
     def test_a_failed_provision_fails_the_deploy(self):
         self._patch(deploy={"side_effect": RuntimeError("boom")})

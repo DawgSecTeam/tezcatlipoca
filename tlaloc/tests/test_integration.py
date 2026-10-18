@@ -302,3 +302,22 @@ def test_report_narrative_is_passed_through_verbatim(tmp_path):
     paths = report_mod.write_artifacts(tmp_path, ctx.world, policy=policy,
                                        narrative="Red held the range all event.")
     assert "Red held the range all event." in Path(paths["report"]).read_text()
+
+
+def test_the_pressure_budget_offers_more_than_one_candidate_per_count(tmp_path):
+    """A refused target must not absorb the budget: the list carries fallbacks."""
+    from tlaloc.decide import Decision
+    from tlaloc.run import PRESSURE_FALLTHROUGH
+    ctx, policy, decider = live_ctx(tmp_path, ssh=scripted_takedown_ssh())
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    loop = Loop(ctx, policy=policy, decider=decider, sensors=ctx.sensors,
+                sleeper=lambda _s: None)
+    candidates = policy.candidates(ctx)
+    eligible = [c for c in candidates
+                if c["effect"] in ("takedown", "block_port")]
+    holder = Decision("next_effect", None, source="deterministic", chosen=None)
+    out = loop._extra_pressure(1, candidates, holder)
+    assert len(out) == min(len(eligible), 1 + PRESSURE_FALLTHROUGH)
+    if len(eligible) > 1:
+        assert len(out) > 1

@@ -490,10 +490,21 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     ownership = Ownership(getattr(ctx, "comp_name", ""), getattr(ctx, "run_id", ""))
     run_id = getattr(ctx, "run_id", "")
     cfg_path = comp_dir / ".tlaloc-config.yaml"
+    # The decision model is configured per competition, never left to the
+    # placeholder in config.DEFAULTS A missing endpoint does not degrade — it
+    # silently turns every decision into a deterministic fallback while the run
+    # log still looks healthy — so refuse the deploy here, exactly like a missing
+    # red team.
+    clef_url = block.get("clef_url") or os.environ.get("TEZ_CLEF_URL") or ""
+    if not clef_url:
+        raise RuntimeError(
+            "no decision-model endpoint: set the competition's red.clef_url or "
+            "TEZ_CLEF_URL in the run host's environment (red01 must be able to "
+            "reach it, or every decision silently falls back)")
     write_config(comp_dir, cfg_path,
                  comp_id=getattr(ctx, "comp_id", None) or comp_dir.name,
                  engine_ip=getattr(ctx, "scoring_ip", None) or getattr(ctx, "engine_ip", None),
-                 clef_url=block.get("clef_url"),
+                 clef_url=clef_url,
                  c2_url=block.get("c2_url"),
                  c2_operation=block.get("c2_operation"),
                  llm=llm)
