@@ -37,6 +37,9 @@ _SPEC = {
     "knobs.python": "",
     "knobs.competitions_root": "",
     "knobs.gaia_path": "",
+    # The decision model red asks (clef): a competition pins red.clef_url; this is
+    # the estate-wide default, exported as TEZ_CLEF_URL.
+    "knobs.clef_url": "",
     "knobs.team_identifiers": "",
     "knobs.scoring_vmid": 0,
     "knobs.artifacts_archive": "",

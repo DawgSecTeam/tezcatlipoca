@@ -312,6 +312,21 @@ class World:
     def blue_events(self, n=8):
         return list(self._d.get("blue_events", []))[-n:]
 
+    def blue_events_for(self, ip=None, service=None):
+        """Every recorded blue restore, optionally filtered by box/service.
+
+        The rotation/verification logic needs the WHOLE history (what did blue
+        bring back after we killed it), not the last few rows the digest reads.
+        """
+        out = []
+        for e in self._d.get("blue_events", []):
+            if ip is not None and e.get("ip") != ip:
+                continue
+            if service is not None and not _service_matches(e.get("service"), service):
+                continue
+            out.append(e)
+        return out
+
     def restore_count(self, team, service, within_min=None, now=None):
         out = 0
         for e in self._d.get("blue_events", []):

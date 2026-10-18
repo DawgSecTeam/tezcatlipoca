@@ -23,10 +23,12 @@ choose among what `candidates()` produced and `validate()` accepts.
 """
 
 import random
+import time
 
 from .effects.base import can_root
 from .errors import PolicyError
 from .state import digest as digest_mod
+from .state.world import parse_ts
 
 # Takedown mechanism strength order — used only for "strongest unlocked" and for
 # tie-breaking a candidate list. The authoritative allowlist is the LADDER's
@@ -272,17 +274,20 @@ class Policy:
         self.counts = counts or {}
 
     def max_down_now(self):
-        """Concurrent services down per team. The ladder widens the blast radius
-        by tier (one box, then pairs, then a quarter of the board); the final
-        window suspends it."""
-        if self.teardown_active():
-            return 10 ** 6
+        """Concurrent services down per team; 0 means NO LIMIT.
+
+        The owner's directive (2026-10-18) is that red must be free to put as many
+        scored services down as it can reach — the old caps (base 5, widened by the
+        ladder tier) made a live event look one-sided: 16/16 takedowns on one
+        service because every extra target the ladder allowed went unused.
+        """
         caps = self.red.get("caps") or {}
-        base = int(caps.get("max_down", 5))
-        tier = self.ladder()
-        if tier and tier.get("boxes_per_team"):
-            base = max(base, int(tier["boxes_per_team"]))
-        return base
+        return max(0, int(caps.get("max_down", 0)))
+
+    def cap_label(self):
+        """Human wording for the takedown cap the digest and questions carry."""
+        cap = self.max_down_now()
+        return "no cap" if cap == 0 else str(cap)
 
     def can_impact(self, team):
         """(ok, reason) — the per-team pressure check every impact candidate obeys."""
@@ -298,13 +303,61 @@ class Policy:
         if up is None:
             return True, f"{team}: no scoreboard data yet — proceed"
         max_down = self.max_down_now()
-        if down >= max_down:
+        if max_down and down >= max_down:
             return False, f"{team} is at max concurrent down ({down}/{max_down})"
         floor = int((self.red.get("caps") or {}).get("min_standing", 1))
         if up <= floor:
             return False, (f"{team} has only {up} standing services (floor {floor}) "
                            "— ease off")
         return True, "ok"
+
+    # -- pressure rotation + verification (owner directive 2026-10-18) --------
+
+    def _service_matches(self, a, b):
+        """Loose match: the scoreboard says "dc01-ldap", the takedown said "ADDS"."""
+        a, b = str(a or "").lower(), str(b or "").lower()
+        return bool(a and b) and (a in b or b in a)
+
+    def _kill_restore(self, ip, service):
+        """(last kill, last blue activity) epoch stamps for this service on this box.
+
+        Blue's restore is matched at BOX level on purpose: the scoreboard pin is
+        `dc01-ldap` while the service red stopped is `ADDS`, so a service-name match
+        misses every real restore. Any blue restore on the box after our kill is
+        the signal that they touched it.
+        """
+        kills = [parse_ts(i["at"]) for i in self.world.impacts()
+                 if i.get("ip") == ip and self._service_matches(i.get("service"), service)]
+        restores = [parse_ts(e["at"]) for e in self.world.blue_events_for(ip=ip)]
+        return (max(kills) if kills else None), (max(restores) if restores else None)
+
+    def pressure_rotation(self, ip, service, down, now=None):
+        """(bonus, reason, skip) for a takedown candidate — the rotation policy.
+
+        Three rules, in order:
+          1. A service we already took down is SKIPPED while our damage stands (no
+             blue activity on that box since the kill): re-hitting it scores nothing
+             and spends the cycle blue does not have to answer.
+          2. Once blue acts on that box, the same attack is re-launched — the test
+             is whether they fixed the cause or just restarted the service.
+          3. Everything else rotates: a box already hit in the last `rotate_min`
+             is penalised so one box cannot absorb a whole cycle, and a service
+             never hit this event is preferred.
+        """
+        now = now or time.time()
+        kill, restore = self._kill_restore(ip, service)
+        rotate_min = float((self.red.get("caps") or {}).get("rotate_min", 20))
+        if kill is not None and (restore is None or restore < kill):
+            return 0.0, "already down since our own takedown — no new damage to score", True
+        if kill is not None and restore >= kill:
+            return 30.0, (f"blue touched this box {int((now - restore) / 60)}min ago — "
+                          "re-hit to test whether they fixed it or just restarted it"), False
+        if down and kill is None:
+            return 0.0, "the scoreboard already has it down — no new damage to score", True
+        recent = [parse_ts(i["at"]) for i in self.world.impacts()
+                  if i.get("ip") == ip and now - parse_ts(i["at"]) <= rotate_min * 60]
+        penalty = -min(24.0, 6.0 * len(recent))
+        return 6.0 + penalty, "not hit yet this event — rotate pressure here", False
 
     # -- pacing helpers ------------------------------------------------------
 
@@ -445,14 +498,16 @@ class Policy:
             if ok and modes and not dead:
                 for service in self._pressure_targets(ctx, ip, up):
                     mode = strongest or "stop"
-                    extra = 4.0 if service.get("down") else 0.0
+                    rot, why, skip = self.pressure_rotation(ip, service["name"],
+                                                            service.get("down"))
+                    if skip:
+                        continue
                     out.append(make_candidate(
                         "takedown",
                         {"ip": ip, "service": service["name"], "mode": mode},
-                        BASE_SCORE["takedown"] + extra + score_bonus,
-                        f"{service['name']} is a scored service on {ip}"
-                        + (f" and the scoreboard has it DOWN already" if service.get("down")
-                           else "") + f"; mechanism {mode}",
+                        BASE_SCORE["takedown"] + rot + score_bonus,
+                        f"{service['name']} is a scored service on {ip}; {why}; "
+                        f"mechanism {mode}",
                         cost="low", tag=f"{mode} {service['name']}@{ip}", high_stakes=True))
             elif modes and dead:
                 pass          # re-plant first: a dead box cannot be pressured
@@ -628,7 +683,7 @@ class Policy:
         frame = {
             "t": f"{int(self.elapsed_min())}/{int(self.red['duration_min'])}",
             "phase": self.event_phase(),
-            "cap": self.max_down_now(),
+            "cap": self.cap_label(),
             "down": sum(d for _, d in self.counts.values() if d is not None),
             "boxes": boxes,
             "more": untouched,
@@ -719,11 +774,11 @@ class Policy:
             questions["pressure_count"] = {
                 "type": "score",
                 "instructions": (f"Extra services to take down this cycle (cap "
-                                 f"{self.max_down_now()}/team, tier "
+                                 f"{self.cap_label()}/team, tier "
                                  f"{(self.ladder() or {}).get('name', 'n/a')})?"
                                  if compact else
                                  f"Additional scored services to take down this cycle "
-                                 f"(cap {self.max_down_now()} per team, "
+                                 f"(cap {self.cap_label()} per team, "
                                  f"tier {(self.ladder() or {}).get('name', 'n/a')})?"),
                 "criteria": ["zero", "one", "two", "three"],
             }

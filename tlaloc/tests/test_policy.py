@@ -77,7 +77,10 @@ def test_teardown_window_suspends_the_pacing_gates(tmp_path):
     assert policy.teardown_active() is True
     assert policy.event_phase() == "endgame"
     assert policy.can_impact("Blue1") == (True, "final window — the board goes down")
-    assert policy.max_down_now() > ctx.cfg["red"]["caps"]["max_down"]
+    # the cap is whatever the comp/config says (0 = no cap at all)
+    cap = int(ctx.cfg["red"]["caps"]["max_down"])
+    assert policy.max_down_now() == cap
+    assert policy.cap_label() == ("no cap" if cap == 0 else str(cap))
     assert set(policy.allowed_impact_modes()) == {"stop", "stop_mask", "stop_rename",
                                                  "stop_break_config",
                                                  "stop_rename_config"}
@@ -222,3 +225,35 @@ def test_sensors_restore_detection(tmp_path):
                          {"Blue1": {"Web": True, "SSH": True}}) == \
         [{"team": "Blue1", "service": "Web"}]
     assert diff_restores({"Blue1": {"Web": False}}, {"Blue1": {}}) == []
+
+
+def test_there_is_no_concurrent_down_cap(tmp_path):
+    """Owner directive: red puts down as many services as it can reach."""
+    ctx, policy = policy_for(tmp_path)
+    ctx.cfg["red"]["caps"]["max_down"] = 0
+    ctx.world.meta["event_start"] = policy._now() - 20 * 60
+    policy.update_counts({"Blue1": (10, 9)})
+    assert policy.max_down_now() == 0
+    assert policy.can_impact("Blue1")[0] is True
+
+
+def test_rotation_skips_a_service_that_is_still_down_and_verifies_a_restored_one(tmp_path):
+    ctx, policy = policy_for(tmp_path)
+    ip = "192.168.1.10"
+    ctx.world.add_impact(ip, "nginx", "stop")
+    _, why, skip = policy.pressure_rotation(ip, "nginx", True)
+    assert skip is True and "already down" in why
+    # blue brings the pin back (its label is the scoreboard's, not ours): re-hit it
+    ctx.world.add_blue_event("Blue1", "web01-http", ip=ip)
+    bonus, why, skip = policy.pressure_rotation(ip, "nginx", False)
+    assert skip is False and bonus >= 30 and "blue touched this box" in why
+
+
+def test_rotation_prefers_an_unhit_service_on_an_unhit_box(tmp_path):
+    ctx, policy = policy_for(tmp_path)
+    hot, cold = "192.168.1.10", "192.168.1.11"
+    ctx.world.add_impact(hot, "nginx", "stop")      # the hot box has been hit
+    b_hot, _, skip_hot = policy.pressure_rotation(hot, "apache", False)
+    b_cold, why, skip_cold = policy.pressure_rotation(cold, "apache", False)
+    assert not skip_hot and not skip_cold
+    assert b_cold > b_hot and "not hit yet" in why

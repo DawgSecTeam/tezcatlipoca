@@ -290,7 +290,22 @@ class Loop:
         taken = (decision.chosen or {}).get("id")
         ceiling = count + PRESSURE_FALLTHROUGH
         out = []
+        # Breadth first: within one cycle the pressure budget takes one service per
+        # BOX before it takes a second from any box, so a single box cannot absorb
+        # the cycle and blue has to split its attention.
+        seen_ips = set()
+        first, rest = [], []
         for candidate in candidates:
+            if candidate["effect"] not in ("takedown", "block_port"):
+                first.append(candidate)
+                continue
+            ip = candidate["params"].get("ip")
+            if ip in seen_ips:
+                rest.append(candidate)
+                continue
+            seen_ips.add(ip)
+            first.append(candidate)
+        for candidate in first + rest:
             if len(out) >= ceiling:
                 break
             if candidate["effect"] not in ("takedown", "block_port"):

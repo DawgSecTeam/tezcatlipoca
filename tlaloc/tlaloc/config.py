@@ -65,7 +65,9 @@ DEFAULTS = {
             # mercy rule: recent blue remediation shifts the ladder clock back
             "pause_after_restore_min": 10,
         },
-        "caps": {"max_down": 5, "min_standing": 1, "grace_min": 10},
+        # max_down 0 means NO LIMIT on concurrent takedowns per team (owner
+        # directive 2026-10-18: red must be free to split blue's attention).
+        "caps": {"max_down": 0, "min_standing": 1, "grace_min": 10},
         "windows": {"endgame_teardown": 15, "lockout": 3},  # minutes before end
         "budget": {"extra_pressure_max": 2, "improvise_rounds": 2,
                    "improvise_commands": 6},

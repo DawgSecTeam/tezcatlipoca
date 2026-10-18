@@ -423,3 +423,24 @@ def test_the_plant_rides_the_escalated_foothold_when_sudo_is_broken(tmp_path):
     install = [c["cmd"] or "" for c in ssh.calls if "systemctl enable" in (c["cmd"] or "")]
     assert install, "the unit install ran"
     assert "/tmp/.x" in install[0] and "sudo -n" not in install[0]
+
+
+def test_the_windows_plant_is_a_system_scheduled_task(tmp_path):
+    """apollo is a console agent: New-Service/Start-Service dies 1053 (the CLIXML
+    error every Windows box reported on the 2026-10-18 scrim). A SYSTEM ONSTART
+    task runs it without a service wrapper."""
+    _manifest(tmp_path)
+    out = ("SUCCESS: The scheduled task \"X\" has successfully been created.\r\n"
+           "SUCCESS: Attempted to run the scheduled task \"X\".\r\n\r\n"
+           "Folder: \\\r\nStatus:        Running\r\nLogon Mode:    Interactive/Background\r\n")
+    ssh = FakeSSH().on("schtasks /Create", rc=0, out=out)
+    ctx = make_ctx(tmp_path / "state", ssh=ssh)
+    ctx.world.add_foothold("192.168.1.20", "Administrator", "pw", "admin", windows=True)
+    planter = Planter(ctx, comp_dir=tmp_path)
+    payload = tmp_path / "dc01.bin"
+    payload.write_bytes(b"MZ fake")
+    info = planter._install_windows("192.168.1.20", "web01-1", payload, "http")
+    assert info["ok"] is True and info["unit"]
+    cmd = [c["cmd"] or "" for c in ssh.calls if "schtasks /Create" in (c["cmd"] or "")][0]
+    assert "/RU SYSTEM" in cmd and "/SC ONSTART" in cmd and "New-Service" not in cmd
+    assert "ProgramData" in cmd

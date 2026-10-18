@@ -495,7 +495,9 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     # silently turns every decision into a deterministic fallback while the run
     # log still looks healthy — so refuse the deploy here, exactly like a missing
     # red team.
-    clef_url = block.get("clef_url") or os.environ.get("TEZ_CLEF_URL") or ""
+    from estate import config as estate_config
+    clef_url = (block.get("clef_url")
+                or (estate_config.active().knobs.clef_url or "").strip())
     if not clef_url:
         raise RuntimeError(
             "no decision-model endpoint: set the competition's red.clef_url or "

