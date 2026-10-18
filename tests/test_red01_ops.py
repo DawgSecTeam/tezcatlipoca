@@ -129,6 +129,43 @@ class Deploy(unittest.TestCase):
             self.assertEqual(r.recorded_identity(comp),
                              {"vmid": 1777, "ip": "10.0.0.241", "node": "pve"})
 
+    def test_the_mgmt_nic_is_matched_by_mac_not_the_default_route(self):
+        from infra.ownership import Ownership
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = _comp(tmp, "red01_vmid 1777\nred01_ip 10.0.0.241\n")
+            key = Path(tmp) / "key"
+            key.write_text("k")
+            (Path(tmp) / "key.pub").write_text("ssh-rsa AAAA test")
+            written = {}
+
+            def fake_exec(node, vmid, script, timeout=300):
+                if script.startswith("ls /sys/class/net/"):
+                    return "br-abc123\ndocker0\nens18\nens19\n"
+                if script.startswith("cat /sys/class/net/"):
+                    return ("bc:24:11:aa:bb:cc\n" if "ens18" in script
+                            else "bc:24:11:dd:ee:ff\n")
+                if "route show default" in script:
+                    return "default via 10.0.0.1 dev br-abc123\n"
+                return ""
+
+            with mock.patch.object(r, "_live", return_value={"vmid": 1777}), \
+                    mock.patch.object(r, "_config"), \
+                    mock.patch.object(r, "start_vm"), \
+                    mock.patch.object(r, "wait_for_guest_agent", return_value=True), \
+                    mock.patch.object(r, "_exec", side_effect=fake_exec), \
+                    mock.patch.object(r, "_write",
+                                      side_effect=lambda n, v, p, c, m: written.__setitem__(p, c)), \
+                    mock.patch.object(r, "proxmox_api",
+                                      return_value={"data": {
+                                          "net0": "virtio=BC:24:11:AA:BB:CC,bridge=vmbr0"}}):
+                r.deploy(comp, engine_vmid=1300, ssh_key=str(key),
+                         ownership=Ownership("demo", "run-test"), node="pve")
+        netplan = written["/etc/netplan/51-tlaloc.yaml"]
+        self.assertIn("ens18:", netplan)
+        self.assertIn("addresses: ['10.0.0.241/24']", netplan)
+        self.assertIn("ens19:", netplan)
+        self.assertNotIn("br-abc123", netplan)
+
     def test_a_missing_ssh_key_fails_before_any_clone(self):
         from infra.ownership import Ownership
         with tempfile.TemporaryDirectory() as tmp:

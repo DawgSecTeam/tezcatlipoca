@@ -534,8 +534,12 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
     result["reached"].append("user")
     result["gaia_output"]["user"] = _tail(proc, 300)
     agent_password = _password_from_creds(getattr(proc, "stdout", ""), agent_user)
-    if getattr(proc, "returncode", 1) != 0 and not agent_password:
-        result["degradations"].append(f"gaia user create: {_tail(proc)}")
+    # The operator's password is what c2-prep (and the agent) authenticate with; an
+    # admin-password stand-in logs in as nobody we created, and surfaced only as a 403
+    # from /auth. Gaia rotates it on every run, so no password means this step failed.
+    if not agent_password:
+        result["degradations"].append(
+            f"gaia user create returned no password for {agent_user}: {_tail(proc)}")
 
     name = operation or comp_id or comp_dir.name
     proc = runner(operation_argv(path, name), cwd=cwd, timeout=SHORT_TIMEOUT)

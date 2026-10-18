@@ -188,6 +188,17 @@ def _netplan(iface, ip, gw, red_iface):
             f"      routes:\n        - to: {ROUTE_NOTE}\n          via: {RED_SEGMENT_GW}\n")
 
 
+def _mac_from_net(value):
+    for part in str(value).split(","):
+        if part.startswith("virtio=") or part.count(":") == 5:
+            return part.split("=", 1)[-1].strip().lower()
+    return ""
+
+
+def _iface_mac(node, vmid, name):
+    return _exec(node, vmid, f"cat /sys/class/net/{name}/address").strip().lower()
+
+
 def _exec(node, vmid, script, timeout=300):
     rc, out, err = guest_agent_exec_root(node, vmid, script, timeout=timeout)
     if rc != 0:
@@ -268,13 +279,21 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
 
     # 2. Pin the network ourselves: cloud-init is disabled on this box because a
     #    kernel-upgrade reboot has come back with no IPv4 at all when it re-applied.
+    # net0 is the management NIC as PVE sees it; match it by MAC. Docker is already on
+    # this box by the time a resume re-pins the network, and picking the iface from the
+    # default route chose a docker bridge once (the mgmt IP landed on br-<hex>).
+    cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
+    mac = _mac_from_net(cfg.get("net0", ""))
     ifaces = _exec(node, vmid, "ls /sys/class/net/ | grep -v lo").split()
-    iface = _exec(node, vmid,
-                  "ip -4 route show default | awk '{print $5; exit}'").strip()
-    iface = iface if iface in ifaces else (ifaces[0] if ifaces else None)
+    phys = [i for i in ifaces if not i.startswith(
+        ("docker", "veth", "br-", "virbr", "cni", "flannel"))]
+    iface = next((i for i in phys if _iface_mac(node, vmid, i) == mac), None) if mac else None
+    iface = iface or _exec(node, vmid,
+                           "ip -4 route show default | awk '{print $5; exit}'").strip()
+    iface = iface if iface in phys else (phys[0] if phys else None)
     if not iface:
         raise RuntimeError("red01 reports no network interface")
-    red_iface = next((i for i in ifaces if i != iface), None)
+    red_iface = next((i for i in phys if i != iface), None)
     if not red_iface:
         raise RuntimeError("red01 has one NIC but the red bridge needs a second — "
                            "the clone did not get net1 on the red segment")
