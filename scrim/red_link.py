@@ -38,7 +38,7 @@ def _red_ssh_spec(args):
     if not red_ip:
         raise RuntimeError("red01's address is not recorded for this competition — "
                            "stage red first, or pass --red-ip")
-    key = str(core.REPO / "proxmox")
+    key = core.ssh_key_path()
     user = core.vm_username()
     engine = None
     try:
