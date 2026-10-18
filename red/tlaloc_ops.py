@@ -255,8 +255,13 @@ def seed_command():
     pushed intel dir: without it the agent loads blind intel (no boxes, nothing to
     seed) while the deploy still reports a successful seed.
     """
-    return (f"cd {INSTALL_DIR} && sudo -n python3 -m tlaloc "
-            f"--config {CONFIG_PATH} --comp {INTEL_DIR} seed")
+    # /etc/tlaloc/c2.env carries the Mythic operator password (the unit reads it
+    # through EnvironmentFile). A bare manual seed has no such environment, so its
+    # C2 client cannot authenticate and every "channel: no callback" verdict is a
+    # blind spot rather than a fact — live 2026-10-18: the seed reported no callback
+    # on all six boxes while Mythic held all six channels.
+    return (f"cd {INSTALL_DIR} && sudo -n bash -c 'set -a; . /etc/tlaloc/c2.env; "
+            f"set +a; python3 -m tlaloc --config {CONFIG_PATH} --comp {INTEL_DIR} seed'")
 
 
 def plant_command():

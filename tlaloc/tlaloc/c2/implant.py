@@ -268,6 +268,17 @@ class Planter:
                 key_path=fh.get("key_path"))
             status = _schtasks_status(_o)
         ok = status.lower() == "running"
+        if not ok:
+            # The task can start and then be reported outside the query window (or
+            # removed while its process lives). The process IS the implant: ask for
+            # it by image name before declaring the plant dead.
+            _r, _o, _e = self.ctx.ssh.ssh(
+                ip, fh["user"], fh.get("password") or "",
+                f'tasklist /FI "IMAGENAME eq {Path(staged).name}"', timeout=60,
+                key_path=fh.get("key_path"))
+            if Path(staged).name.lower() in (_o or "").lower():
+                ok = True
+                status = status or "process running"
         return {"ok": ok,
                 "detail": (f"task {task} Running on {ip} (transport {transport})" if ok
                            else f"task install rc={rc} status={status or '?'}: "
