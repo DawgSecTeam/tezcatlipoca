@@ -221,6 +221,13 @@ class CutoverNetplan(unittest.TestCase):
         self.assertIn("- to: \"192.168.120.0/24\"\n          via: \"172.31.120.2\"", yaml)
         self.assertIn("- to: \"192.168.121.0/24\"\n          via: \"172.31.121.2\"", yaml)
 
+    def test_the_red_gateway_survives_the_cutover(self):
+        """red01 routes the team subnets through the engine's red NIC: a cutover
+        that drops it leaves the day-0 seed with no path to any box."""
+        yaml = cutover_netplan_yaml(TEAMS, red_segment={"subnet": "10.200.0.0/24",
+                                                       "gw": "10.200.0.1"})
+        self.assertIn("    ens23:\n      addresses: [\"10.200.0.1/24\"]", yaml)
+
 
 class AuthorizedKey(unittest.TestCase):
     def test_key_lands_in_admins_authorizedkeys(self):

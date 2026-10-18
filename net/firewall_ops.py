@@ -515,7 +515,7 @@ def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, node, log=prin
 
 
 # NIC naming must match the engine's netplan: ens19+ are team NICs in sorted team-key order, then the transit NICs continue that sequence.
-def cutover_netplan_yaml(teams):
+def cutover_netplan_yaml(teams, red_segment=None):
     keys = sorted(teams)
     n = len(keys)
     lines = ["network:", "  version: 2", "  ethernets:"]
@@ -531,14 +531,23 @@ def cutover_netplan_yaml(teams):
         lines.append("      routes:")
         lines.append(f"        - to: \"192.168.{tid}.0/24\"")
         lines.append(f"          via: \"172.31.{tid}.2\"")
+    if red_segment:
+        # The red segment's gateway lives on the engine, and it is the ONLY address
+        # red01 can route the team subnets through. Dropping it here leaves red01
+        # with a gateway that does not exist: every SSH the day-0 seed tries times
+        # out, the seed plants nothing, and the deploy dies "no planted box" while
+        # the rest of the range is healthy.
+        lines.append(f"    ens{18 + n + n + 1}:")
+        lines.append(f"      addresses: [\"{red_segment['gw']}/24\"]")
+        lines.append("      optional: true")
     return "\n".join(lines) + "\n"
 
 
 # The cutover rewrites the engine's netplan in place; nothing re-applies the pre-cutover file, so the team gateway address stays on the firewalls.
-def cut_over_engine(ssh_ctx, teams, log=print):
+def cut_over_engine(ssh_ctx, teams, red_segment=None, log=print):
     log("  Engine cutover: 192.168.<team>.1 moves to the firewalls; engine routes "
         "team subnets via the transit /30s")
-    b64 = base64.b64encode(cutover_netplan_yaml(teams).encode()).decode()
+    b64 = base64.b64encode(cutover_netplan_yaml(teams, red_segment).encode()).decode()
     r = ssh_on_gateway(
         ssh_ctx,
         f"echo {b64} | base64 -d | sudo tee /etc/netplan/60-team-ifaces.yaml "

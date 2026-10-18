@@ -2,11 +2,11 @@
 
 from functools import partial
 
-from common.constants import SNAP_BASE
+from common.constants import RED_SEGMENT_GW, RED_SEGMENT_SUBNET, SNAP_BASE
 from net.firewall_ops import (bootstrap_firewalls, cut_over_engine, firewall_kind,
                           verify_in_path, write_team_configs)
 from common.timing import timed
-from common.utils import compfile_value, is_in_path_fw, run_concurrent
+from common.utils import compfile_value, is_in_path_fw, run_concurrent, stages_red
 
 from deploy_lib.phases._snapshots import snap_base
 
@@ -49,7 +49,12 @@ def phase5_firewall_bootstrap(ctx):
     with timed(ctx.comp_dir, 5, "firewall_bootstrap", f"x{len(fw_targets)}"):
         bootstrap_firewalls(ctx.teams, fw_targets, config_paths, ctx.tf_ctx, node=ctx.node)
     with timed(ctx.comp_dir, 5, "engine_cutover"):
-        cut_over_engine(ctx.tf_ctx, ctx.teams)
+        # The engine keeps the red segment's gateway across the cutover: red01
+        # routes the team subnets through it, so a cutover that drops it leaves
+        # the day-0 seed with nowhere to reach the boxes.
+        red_segment = ({"subnet": RED_SEGMENT_SUBNET, "gw": RED_SEGMENT_GW}
+                       if stages_red(ctx.comp_dir) else None)
+        cut_over_engine(ctx.tf_ctx, ctx.teams, red_segment=red_segment)
     # The first managed box of each team (boxes.json order) proves the routed path a
     # plant/scoring step will take — probe it through the firewall.
     first_box = {}
