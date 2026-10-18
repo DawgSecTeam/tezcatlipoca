@@ -50,6 +50,19 @@ class _FakeApi:
         return [kw["data"] for m, p, kw in self.calls if p.endswith("/agent/file-write")]
 
 
+class ExecChannelLoss(unittest.TestCase):
+    def test_a_lost_pid_is_a_lost_channel_not_an_httperror(self):
+        from requests import HTTPError
+        with patch.object(guest_exec, "proxmox_api") as api:
+            api.side_effect = [
+                {"data": {"pid": 9}},
+                HTTPError("500 Server Error: Agent error: PID 9 does not exist"),
+            ]
+            with self.assertRaises(RuntimeError) as cm:
+                guest_exec.guest_agent_exec_root("pve", 1, "true", timeout=5)
+        self.assertIn("lost exec pid 9", str(cm.exception))
+
+
 class WriteToGuest(unittest.TestCase):
     def test_chunks_stay_under_the_documented_content_cap(self):
         size = guest_exec._FILE_WRITE_CHUNK * 2 + 10          # guarantees 3 chunks

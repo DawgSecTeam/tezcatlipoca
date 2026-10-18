@@ -636,7 +636,10 @@ def _in_path_firewall(comp_dir):
         boxes = json.loads((Path(comp_dir) / "boxes.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    return any(box.get("in_path") for box in boxes.values() if isinstance(box, dict))
+    # boxes.json is a list of box records; accept the older name-keyed object too.
+    if isinstance(boxes, dict):
+        boxes = boxes.values()
+    return any(box.get("in_path") for box in boxes if isinstance(box, dict))
 
 
 def callback_host_for(comp_dir):

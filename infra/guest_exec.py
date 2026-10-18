@@ -42,6 +42,21 @@ def diagnose_unreachable_box(node, vmid):
     return f"      guest agent (vmid {vmid}): {iface_summary}; cloud-init {cloud_init_summary}"
 
 
+def _exec_status(node, vmid, pid):
+    # A guest-agent restart (it upgrades itself during first boot) drops every live exec pid;
+    # the status call then 500s with "PID … does not exist". That is a lost channel, not the
+    # command's exit status — report it as such instead of an HTTPError traceback.
+    try:
+        return proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/agent/exec-status",
+                           params={"pid": pid})["data"]
+    except Exception as e:
+        if "does not exist" in str(e):
+            raise RuntimeError(
+                f"guest agent on vmid {vmid} lost exec pid {pid} (the agent restarted "
+                f"mid-command) — the command's outcome is unknown") from e
+        raise
+
+
 def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
     pid = proxmox_api(
         "POST", f"/nodes/{node}/qemu/{vmid}/agent/exec",
@@ -50,10 +65,7 @@ def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
     last = {}
     deadline = time.time() + timeout
     while time.time() < deadline:
-        s = proxmox_api(
-            "GET", f"/nodes/{node}/qemu/{vmid}/agent/exec-status",
-            params={"pid": pid},
-        )["data"]
+        s = _exec_status(node, vmid, pid)
         if s.get("exited"):
             return s.get("exitcode", -1), s.get("out-data", ""), s.get("err-data", "")
         last = s
@@ -123,10 +135,7 @@ def guest_agent_exec_windows(node, vmid, ps_script, timeout=120):
     last = {}
     deadline = time.time() + timeout
     while time.time() < deadline:
-        s = proxmox_api(
-            "GET", f"/nodes/{node}/qemu/{vmid}/agent/exec-status",
-            params={"pid": pid},
-        )["data"]
+        s = _exec_status(node, vmid, pid)
         if s.get("exited"):
             return s.get("exitcode", -1), s.get("out-data", ""), s.get("err-data", "")
         last = s

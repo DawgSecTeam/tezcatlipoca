@@ -49,18 +49,17 @@ Entries are strings or `{"name": ..., "vars": {...}}` (see `vendor/nakon/config-
 ```bash
 cd vendor/nakon
 python3 -m nakon catalog list --json
-python3 -m nakon catalog check --pins /abs/path/competitions/<id>/box_vulns.json \
-                               /abs/path/competitions/<id>/box_services.json \
-                               --platforms /abs/path/competitions/<id>/box_platforms.json
+python3 -m nakon catalog check --boxes-json /abs/path/competitions/<id>/boxes.json \
+                               --box-vulns /abs/path/competitions/<id>/box_vulns.json \
+                               --box-services /abs/path/competitions/<id>/box_services.json
 ```
 
-`box_platforms.json` is the per-box `{name: "linux"|"windows"}` map — write it once per
-competition (`{"win":"in template" → windows}`, same rule as everywhere else). `catalog check`
+`--boxes-json` derives each box's platform from its template name (the `{"win": … →
+windows}` rule the driver uses), so there is no separate platform map. `catalog check`
 catches typos, building blocks requested instead of their wrapping misconfig, platform
 mismatches, and missing vars (each row's declared `required_vars` — curated with
-`vulndb-cli update <name> --required-vars …`). `--pins` takes the vulns file first, the
-optional services file second. The pinned submodule shows mechanism only; check the remote
-catalog before concluding something is unsupported.
+`vulndb-cli update <name> --required-vars …`). The pinned submodule shows mechanism only;
+check the remote catalog before concluding something is unsupported.
 
 ## `generate-packet.py`
 

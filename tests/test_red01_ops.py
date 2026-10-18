@@ -63,6 +63,7 @@ class Network(unittest.TestCase):
         self.assertIn("via: 10.0.0.1", text)
         self.assertIn("addresses: ['10.200.0.10/24']", text)
         self.assertIn("to: 192.168.0.0/16\n          via: 10.200.0.1", text)
+        self.assertIn("nameservers:\n        addresses: [8.8.8.8]", text)
 
 
 class Rules(unittest.TestCase):
@@ -121,6 +122,13 @@ class Deploy(unittest.TestCase):
                              ownership=Ownership("demo", "run-test"))
         self.assertIn("not this run's", str(cm.exception))
 
+    def test_the_identity_is_recorded_without_a_placement_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = _comp(tmp)
+            r.record_identity(comp, None, vmid=1777, ip="10.0.0.241", node="pve")
+            self.assertEqual(r.recorded_identity(comp),
+                             {"vmid": 1777, "ip": "10.0.0.241", "node": "pve"})
+
     def test_a_missing_ssh_key_fails_before_any_clone(self):
         from infra.ownership import Ownership
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,6 +139,40 @@ class Deploy(unittest.TestCase):
                              ownership=Ownership("demo", "run-test"))
             api.assert_not_called()
         self.assertIn("SSH public key", str(cm.exception))
+
+    def test_the_cloud_init_wait_reattaches_after_an_agent_restart(self):
+        from infra.ownership import Ownership
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = _comp(tmp, "red01_vmid 1777\nred01_ip 10.0.0.241\n")
+            key = Path(tmp) / "key"
+            key.write_text("k")
+            (Path(tmp) / "key.pub").write_text("ssh-rsa AAAA test")
+            waits = []
+
+            def fake_exec(node, vmid, script, timeout=300):
+                if "cloud-init status --wait" in script:
+                    waits.append(script)
+                    if len(waits) == 1:
+                        raise RuntimeError("guest agent on vmid 1777 lost exec pid 9 "
+                                           "(the agent restarted mid-command)")
+                if script.startswith("ls /sys/class/net/"):
+                    return "eth0\nens19\n"
+                if "route show default" in script:
+                    return "default via 10.0.0.1 dev eth0\n"
+                return ""
+
+            with mock.patch.object(r, "_live", return_value={"vmid": 1777}), \
+                    mock.patch.object(r, "_config"), \
+                    mock.patch.object(r, "start_vm"), \
+                    mock.patch.object(r, "wait_for_guest_agent", return_value=True) as wait, \
+                    mock.patch.object(r, "_exec", side_effect=fake_exec), \
+                    mock.patch.object(r, "_write"), \
+                    mock.patch.object(r, "proxmox_api"):
+                identity = r.deploy(comp, engine_vmid=1300, ssh_key=str(key),
+                                    ownership=Ownership("demo", "run-test"), node="pve")
+        self.assertEqual(identity["vmid"], 1777)
+        self.assertEqual(len(waits), 2)
+        self.assertEqual(wait.call_count, 2)
 
 
 class Destroy(unittest.TestCase):

@@ -4,6 +4,21 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 
 ## Open
 
+### tlaloc's Mythic client targets the REST API, and current Mythic serves GraphQL
+
+`tlaloc/tlaloc/c2/mythic.py` is written against Mythic's `/api/v1.4/*` REST surface (plus
+`POST /auth`). The Gaia installer clones Mythic master, whose `mythic_server` today exposes
+`/auth`, `/health` and GraphQL (`/graphql`; Hasura at `/v1/graphql`) — every `/api/v1.4/*`
+data route answers `404 page not found`. Caught live 2026-10-18 on tlaloc-smoke
+`run-f1c099c7`: Gaia reached install, auth, user, operation and callback, then `tlaloc
+c2-prep` died with `POST /api/v1.4/payload/ -> HTTP 404: 404 page not found`, which aborted
+phase 7 before red01 was staged (correctly — every red step is fatal). The module docstring
+claims a Mythic upgrade is "one mapping table, not a rewrite"; the data API is now GraphQL,
+so that is no longer true.
+**Next action**: move the C2 client to the current API (the `/auth` JWT plus `/v1/graphql`
+and whatever payload-build path this server exposes), or pin the Gaia install to a Mythic
+release that still serves `/api/v1.4`, then re-run the live lifecycle test.
+
 ### A retired range's kept templates cannot be reclaimed until the competition deploys again
 
 `--teams-only` retires the range and keeps this competition's golden + engine templates for

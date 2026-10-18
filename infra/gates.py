@@ -330,24 +330,12 @@ def catalog_gate(comp_dir):
         print("  Preflight: no pin files yet (fresh competition) — "
               "catalog check runs after pin generation")
         return
-    # nakon no longer derives a box platform from its template string; the caller
-    # supplies the map. The one "win" rule lives in common.windows_ops — classify
-    # here the same way the rest of the driver does. (Function-scope import: gates
-    # is imported before infra.guest_exec finishes windows_ops' import cycle.)
-    from common.windows_ops import is_windows_template
-
-    boxes = json.loads((comp_dir / "boxes.json").read_text())
-    platforms_path = comp_dir / ".catalog-check-platforms.json"
-    platforms_path.write_text(json.dumps({
-        box["name"]: "windows" if is_windows_template(box["template"]) else "linux"
-        for box in boxes
-    }, indent=2))
     catalog = subprocess.run(
         [sys.executable, "-m", "nakon", "catalog", "check",
-         "--pins", str(vuln_path.resolve()), str(svc_path.resolve()),
-         "--platforms", platforms_path.resolve()],
+         "--boxes-json", str((comp_dir / "boxes.json").resolve()),
+         "--box-services", str(svc_path.resolve()),
+         "--box-vulns", str(vuln_path.resolve())],
         cwd=str(NAKON_DIR), capture_output=True, text=True, timeout=600)
-    platforms_path.unlink(missing_ok=True)
     if cleanup:
         cleanup()
     if catalog.returncode != 0:

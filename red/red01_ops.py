@@ -106,18 +106,24 @@ def select_red_ip(comp_dir, placement, engine_mgmt_ip="", comp_tags=None):
 def recorded_identity(comp_dir):
     """What a previous deploy of this competition recorded: {vmid, ip, node} or {}."""
     from estate import state
-    flat = state.load_flat(comp_dir) or {}
-    recorded = flat.get("red") or {}
-    placement = (state.EstateState.load(comp_dir).data.get("placement") or {})
-    placed = placement.get("red01") or {}
+    document = state.EstateState.load(comp_dir)
+    recorded = document.section("red") or {}
+    placed = (document.data.get("placement") or {}).get("red01") or {}
     return {"vmid": recorded.get("vmid") or placed.get("vmid"),
             "ip": recorded.get("ip") or placed.get("ip") or "",
             "node": recorded.get("node") or placed.get("node")}
 
 
 def record_identity(comp_dir, placement, *, vmid, ip, node):
-    """Freeze the slot this run created into the placement document."""
+    """Freeze the slot this run created into the state (and the placement, when there is one)."""
+    from estate import state
     from multinode.placement_record import write_placement
+    # A single-node deploy has no placement document; the state's own `red` section is
+    # what teardown reads, so it must be written either way — otherwise a range that
+    # dies after the clone leaves a tagged red01 no teardown can claim.
+    document = state.EstateState.load(comp_dir)
+    document.section("red").update(vmid=int(vmid), ip=ip, node=node)
+    document.save()
     if placement is None:
         return
     placement["red01"] = {"vmid": int(vmid), "ip": ip, "node": node,
@@ -172,8 +178,11 @@ def find_template(node, name):
 
 
 def _netplan(iface, ip, gw, red_iface):
+    # The pinned static config replaces cloud-init's (which carried the resolver), so DNS has
+    # to be named here or the box can reach 8.8.8.8 and still resolve nothing.
     return (f"network:\n  version: 2\n  ethernets:\n"
             f"    {iface}:\n      dhcp4: no\n      addresses: ['{ip}/24']\n"
+            f"      nameservers:\n        addresses: [8.8.8.8]\n"
             f"      routes:\n        - to: default\n          via: {gw}\n"
             f"    {red_iface}:\n      dhcp4: no\n      addresses: ['{RED_SEGMENT_IP}/24']\n"
             f"      routes:\n        - to: {ROUTE_NOTE}\n          via: {RED_SEGMENT_GW}\n")
@@ -241,8 +250,18 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
         data["net1"] = f"virtio,bridge={red_bridge}"
     _config(node, vmid, data)
     start_vm(node, vmid)
-    wait_for_guest_agent(node, vmid, timeout=420)
-    _exec(node, vmid, "timeout 300 cloud-init status --wait >/dev/null 2>&1; true", 330)
+    if not wait_for_guest_agent(node, vmid, timeout=420):
+        raise RuntimeError(f"red01 vmid {vmid} started but its guest agent never answered")
+    # cloud-init can restart qemu-guest-agent while it installs upgrades, which drops the exec
+    # pid underneath this wait. The wait is idempotent, so re-attach and ask it again.
+    for attempt in range(3):
+        try:
+            _exec(node, vmid, "timeout 300 cloud-init status --wait >/dev/null 2>&1; true", 330)
+            break
+        except RuntimeError as e:
+            if "lost exec pid" not in str(e) or attempt == 2:
+                raise
+            wait_for_guest_agent(node, vmid, timeout=300)
 
     # 2. Pin the network ourselves: cloud-init is disabled on this box because a
     #    kernel-upgrade reboot has come back with no IPv4 at all when it re-applied.

@@ -198,6 +198,8 @@ class CallbackAddressTest(unittest.TestCase):
     def test_callback_address_reaches_the_agent_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp = comp_dir(tmp, "firewall_dnat 4470->10.0.0.198\n")
+            (comp / "boxes.json").write_text(
+                '[{"name": "web01", "last_octet": 4, "template": "base-debian13-lite-fix"}]')
             host = g.callback_host_for(comp)
             port = g.callback_port_for(comp)
             assert host == "192.168.2.1" and port == 4470
@@ -205,6 +207,13 @@ class CallbackAddressTest(unittest.TestCase):
                                       callback_host=host, callback_port=port)
             assert block["callback_host"] == "http://192.168.2.1"
             assert block["callback_port"] == 4470
+
+    def test_an_in_path_firewall_moves_the_callback_to_the_transit_address(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = comp_dir(tmp, "firewall_dnat 4470->10.0.0.198\n")
+            (comp / "boxes.json").write_text(
+                '[{"name": "pfsense", "last_octet": 1, "in_path": true, "unmanaged": true}]')
+            assert g.callback_host_for(comp) == "172.31.2.1"
 
     def test_callback_url_normalisation(self):
         assert g.callback_url("172.31.2.1") == "http://172.31.2.1"

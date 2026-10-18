@@ -22,7 +22,6 @@ Grouped by what each doc is for. New here: [README.md](../README.md) → [archit
 | `../infrastructure-status.md` (gitignored, local only) | Which hosts exist, how to reach them, token sources, datastores, template vmids, live ownership. **Read before any deploy** |
 | [usage-agents.md](usage-agents.md) | Driving the pipeline non-interactively: flags, pre-authored configs, verify/redeploy/destroy |
 | [e2e-testing.md](e2e-testing.md) | Triaging a failed deploy or planning a full pipeline test |
-| [live-test-prompt.md](live-test-prompt.md) | Paste-in prompt for a fresh session to test tlaloc's live lifecycle (deploy → red actions → verdict → teardown) |
 | [known-issues.md](known-issues.md) | Something is broken, or a decision is needed. Open/pending only — fixed issues are deleted |
 | [environment-facts.md](environment-facts.md) | Host-agnostic runtime/template/vmid behavior; estate-specific values live in `../infrastructure-status.md` |
 | [tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard) | Central run queue: authoring, deploying, MCP for agents |
