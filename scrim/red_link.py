@@ -202,9 +202,17 @@ def start_red_director(args):
     """Ordering hazard: booted before the day-0 seed lands, it loads an empty world.json and saves over the seed's artifact record."""
     target, common, jump = _red_ssh_ctx(args)
     unit = red_unit(args)
+    # A fresh attempt needs a FRESH window: the loop persists event_start, so a range
+    # kept up past its duration exits immediately on restart (live: cde-2026 resume).
+    # A resumed event keeps its original start.
+    reset = ""
+    if not getattr(args, "resume_event", False):
+        reset = ("sudo -n python3 -c 'import json; p=\"/var/lib/tlaloc/world.json\"; "
+                 "d=json.load(open(p)); d.get(\"meta\", {}).pop(\"event_start\", None); "
+                 "open(p, \"w\").write(json.dumps(d))' 2>/dev/null || true; ")
     # RESTART, not start: a re-stage pushes new code onto red01, and `systemctl
     # start` on a running unit is a no-op that keeps the old loop alive.
-    cmd = (f"sudo -n systemctl restart {unit}; sleep 3; "
+    cmd = (f"{reset}sudo -n systemctl restart {unit}; sleep 3; "
            f"systemctl is-active {unit}")
     for extra in ([], (["-o", jump] if jump else [])):
         try:
