@@ -4,7 +4,7 @@ from functools import partial
 
 from common.constants import SNAP_BASE
 from golden.golden_target_ops import _template_vmid_map
-from golden.golden_ops import build_golden_set
+from golden.golden_ops import build_golden_set, windows_plan_features
 from guests.apt_dns_ops import fix_dns_on_boxes, prep_apt_on_boxes
 from nakonops.nakon_config_ops import generate_slot_golden_config
 from multinode.placement_record import record_of
@@ -22,9 +22,11 @@ from deploy_lib.phases._snapshots import snap_base
 def boot_win(ctx, t):
     print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")
     gw = f"192.168.{t['identifier']}.1"
+    box_name = (t.get("box") or {}).get("name") or t.get("name")
     with timed(ctx.comp_dir, 4, "bootstrap_windows", t["ip"]):
         bootstrap_windows_box(t.get("node", ctx.node), t["vmid"], t["ip"], gw,
-                              "8.8.8.8", ctx.box_password)
+                              "8.8.8.8", ctx.box_password,
+                              features=windows_plan_features(ctx.comp_dir, box_name))
 
 
 def golden_coverage_recorder(ctx):
