@@ -1,5 +1,7 @@
 """Central constants for vmid math, snapshots, budgets, naming, and the nakon path."""
 
+import re
+
 from pathlib import Path
 
 # Resume and redeploy refuse state from any other version: the phase numbering is part of what the value means.
@@ -132,7 +134,10 @@ def red_bridge_name(run_id):
 def ownership_tags(comp_name, run_id=None, *extra):
     # Every destruction guard requires this full set; the comp tag is shared by concurrent
     # runs of one competition, so a missing run tag means another run's VM — refuse.
-    tags = {"tezcatlipoca", f"comp-{comp_name}"}
+    # Proxmox tags cannot carry a space: "CDE 2026" was written as two tags and the
+    # teardown then refused its own engine (live: cde-2026, 2026-10-19).
+    slug = re.sub(r"[^a-z0-9-]+", "-", str(comp_name).lower()).strip("-")
+    tags = {"tezcatlipoca", f"comp-{slug}"}
     if run_id:
         tags.add(run_id)
     return tags | set(extra)
