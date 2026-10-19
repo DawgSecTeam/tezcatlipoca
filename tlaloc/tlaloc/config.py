@@ -107,6 +107,11 @@ DEFAULTS = {
         "verify_tls": False,
         "callback_wait_sec": 120,
         "callback_max_age_sec": 120,
+        # "draw" (default): a plant registers one launcher + 1-2 redundant surfaces,
+        # chosen per box, which is what a real operator does. "full": register EVERY
+        # surface on every box — for the coverage/QA runs that have to prove each
+        # implant path works rather than whichever ones chance picked.
+        "implant_spread": "draw",
         # The callback address a built payload dials, as the team boxes see it —
         # the engine's DNAT gateway for the C2 port. Without it the payload
         # inherits the Mythic profile instance's own default (Mythic installs

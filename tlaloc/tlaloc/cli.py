@@ -33,6 +33,7 @@ CONFIG_CONTRACT = (
     "c2.callback_max_age_sec",
     "c2.callback_port",
     "c2.enabled",
+    "c2.implant_spread",
     "c2.operation",
     "c2.password_env",
     "c2.task_timeout_sec",

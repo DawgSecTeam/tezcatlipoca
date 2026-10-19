@@ -202,6 +202,11 @@ def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
     if c2_url:
         cfg.setdefault("c2", {}).update({"enabled": True, "base_url": c2_url,
                                          "operation": c2_operation or cfg["run"]["comp"]})
+    # Coverage runs: `red.c2_implant_spread full` in the Compfile registers every
+    # implant surface on every box instead of the per-plant draw.
+    spread = str(block.get("c2_implant_spread") or "").strip()
+    if spread:
+        cfg.setdefault("c2", {})["implant_spread"] = spread
     if llm:
         cfg["llm"] = dict(llm)
     return cfg
