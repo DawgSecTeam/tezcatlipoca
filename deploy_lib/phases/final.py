@@ -17,13 +17,8 @@ from deploy_lib.phases._snapshots import snap_ready
 
 
 def _wipe_targets(managed_targets):
-# clean_trails target rows from managed_targets.
-#
-#     The box record (name, template) is nested under t["box"] — reading top-level
-#     keys silently yielded name="" windows=False for EVERY box, dispatching
-#     Windows boxes into the Linux wipe path where they hung out their 180 s
-#     budget (caught live: dc01 NOT cleaned). fw01 needs no filter here:
-#     unmanaged boxes never enter managed_targets.
+    # The box record is nested under t["box"]: reading top-level keys silently yields
+    # windows=False and sends Windows boxes down the Linux wipe path, where they hang.
     from common.windows_ops import is_windows_template
     return [{"ip": t["ip"],
              "name": (t.get("box") or {}).get("name") or "",
@@ -32,11 +27,7 @@ def _wipe_targets(managed_targets):
 
 
 def _publish_red_intel_state(ctx):
-    """The agent's intel contract: the box account, the credlist and the admin login.
-
-    tlaloc's sensors use the admin account to read Quotient; without it every
-    scoreboard read is anonymous. 0600, atomic: the file carries the box password.
-    """
+    """tlaloc's sensors read the scoreboard as admin; the file holds box passwords."""
     from config.config_ops import write_text_atomic
     write_text_atomic(ctx.comp_dir / ".deploy_state.json", json.dumps({
         "box_password": ctx.box_password,
@@ -46,13 +37,6 @@ def _publish_red_intel_state(ctx):
 
 
 def phase7_domains_and_final(ctx):
-# [7/8] AD domains, then the final disruption/boot-hostile pass and beacons.
-#
-#     The final pass runs AFTER domain promotion on purpose: its disruptive configs
-#     break the DNS/apt the Linux realmd joins need, and the boot-hostile ones would
-#     brick a member box's domain-join reboot. From the final pass on, the boxes are
-#     in their as-started competition flavor — nothing downstream reboots them or
-#     needs apt/DNS.
     if ctx.from_phase > 7:
         print("[7/8] Skipped (resume).")
         return
@@ -63,10 +47,8 @@ def phase7_domains_and_final(ctx):
         deploy_domain_configs(ctx.teams, ctx.boxes, ctx.comp_dir, ctx.nakon_config_path,
                               ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip, ctx.box_password)
 
-    # Final-stage pass AFTER domains: the disruptive configs break the DNS/apt the
-    # Linux realmd joins need, and the boot-hostile configs would brick any member
-    # box's domain-join reboot. From here on the boxes are in their as-started
-    # competition flavor — nothing downstream reboots them or needs apt/DNS.
+    # AFTER domain promotion on purpose: these configs break the DNS/apt realmd joins need and
+    # would brick a member box's domain-join reboot; nothing downstream reboots or needs apt.
     final_machines = json.loads(ctx.final_config_path.read_text())["machines"]
     if not final_machines:
         record_clean_coverage(ctx)
@@ -78,22 +60,17 @@ def phase7_domains_and_final(ctx):
                                ctx.final_config_path,
                                timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(final_machines)),
                                strict=False, jobs=ctx.nakon_jobs)
-        # Merge, not overwrite: a failure in BOTH passes must keep the pre-domain
-        # tally (phase 6 used to erase it by writing only on failure).
+        # Merge, not overwrite: a failure in both passes must keep the pre-domain tally.
         merged = list(ctx.state.get("nakon_failed_steps") or [])
         merged += [f"final: {line}" for line in result.failed[:20]]
         seen = set()
         ctx.state["nakon_failed_steps"] = [x for x in merged if not (x in seen or seen.add(x))][:40]
-        # Save unconditionally: record_coverage may have CLEARED a stale
-        # coverage entry on this fully-green pass, and a clear that never
-        # reaches disk leaves verify's coverage gate red (see
-        # record_stage_coverage — the ff9b19f bug, re-created).
+        # Saving is mandatory even on a green pass: record_stage_coverage may have cleared a
+        # stale entry, and an unsaved clear leaves verify's coverage gate red.
         record_stage_coverage(ctx.state, final_machines, result, ctx.save_state)
 
-    # The mysql final-stage plants rebuild the auth tables, taking the credlist SQL
-    # accounts fix_services created pre-plant with them — the auth-based sql check
-    # then fails on every team copy (a 7-box test comp: db01-sql DOWN at first
-    # verify, users re-added by hand mid-prep). Idempotent; mysql-pinned boxes only.
+    # The mysql final-stage plants rebuild the auth tables and take the credlist SQL accounts
+    # fix_services created with them, failing the auth-based sql check on every team copy.
     reensure_mysql_credlist_users(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx, ctx.box_creds)
 
     if compfile_flag(ctx.comp_dir / "Compfile", "team_beacons"):
@@ -101,20 +78,14 @@ def phase7_domains_and_final(ctx):
               "from the Compfile")
         raise RuntimeError("team_beacons is not supported")
 
-    # Red is already inside when the clock starts: deploy red01, install its C2,
-    # freeze the payloads and seed the agent BEFORE the snapshot, so the restore
-    # point every box carries is already compromised and phase 8 starts on a range
-    # red owns. Every failure here aborts the deploy: a range with no red team is
-    # not a range.
+    # Red goes in before the snapshot: the restore point every box carries must already be
+    # compromised, and a range with no red team aborts the deploy rather than degrade.
     print("  Planting assume-breach red presence (tlaloc: red01 + C2 + persistence)...")
     with timed(ctx.comp_dir, 7, "red"):
         tlaloc_ops.plant_assume_breach(ctx)
 
-    # Account-file MODES last, after every account writer this deploy has: fix_services'
-    # credlist useradd (phase 6) and the assume-breach seed's persistence user (above).
-    # shadow-utils' useradd recreates /etc/passwd, /etc/shadow and /etc/group at their
-    # default modes, so a mode planted in any earlier pass is already gone when verify
-    # probes it. Before the trail wipe, so this pass's own SSH leaves no trace.
+    # Last of the account writers (useradd resets /etc/{passwd,shadow,group} to default modes,
+    # undoing any earlier plant), but before the trail wipe so this pass leaves no SSH trace.
     late_machines = json.loads(ctx.late_config_path.read_text())["machines"]
     if late_machines:
         print(f"  Account-file mode pass on {len(late_machines)} machine(s) "

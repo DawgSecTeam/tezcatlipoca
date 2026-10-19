@@ -1,9 +1,4 @@
-"""Stage the red team for a scrim: one deploy path, shared with phase 7.
-
-The harness never provisions red itself: it calls the same
-`tlaloc_ops.plant_assume_breach` the deploy pipeline does, then adds the two
-pre-T0 gates and the scrim-only LLM wiring.
-"""
+"""Stage the red team for a scrim: one deploy path, shared with phase 7."""
 
 import json
 from pathlib import Path
@@ -23,13 +18,7 @@ from red import red01_ops
 
 
 def verify_red_reaches_teams(args, comp, creds):
-    """Pre-T0 gate: red01 must be able to dial a box on EVERY team.
-
-    Judged from red's own summary lines, not the verify exit code: the full run's
-    rc also carries unrelated estate gates, and a scrim once died at this gate
-    with red_identity/red_teams both PASS because pre-existing FAILs rode the
-    same rc=1.
-    """
+    """Judge from red's summary lines, not verify's rc: unrelated gates ride the same rc."""
     log("pre-T0: red01 -> every team reachability gate [authoritative verify]")
     from scrim import compworld
     r = procs.run(compworld.verify_cmd(comp, creds, "--red-ip", args.red_ip,
@@ -51,21 +40,13 @@ def verify_red_reaches_teams(args, comp, creds):
 
 
 def red_pacing_caps():
-    """The three concurrent-down caps red is paced by, in ONE place.
-
-    They land in the run manifest (record_phase) so the scrim report judges
-    max_simultaneous_down against the same end cap the agent paces itself by.
-    """
+    """The report judges down-cap breaches against these same caps, via the run manifest."""
     return {"max_concurrent_down_start": 2, "max_concurrent_down_end": 4,
             "max_concurrent_down_endgame": 6}
 
 
 def red_llm_config(args, base_url=None):
-    """The `llm` block of the pushed config.
-
-    A local endpoint (llama.cpp/qwen) is slow and may emit reasoning tokens, so it
-    gets a longer read timeout; a fast cloud model simply answers early.
-    """
+    """A local endpoint is slow (reasoning tokens), so it gets the longer read timeout."""
     base = base_url or args.llm_base_url
     local = core.is_local_endpoint(base)
     return {"enabled": True, "base_url": base, "model": args.red_model,
@@ -110,7 +91,7 @@ def _resolve_red_ip(args, comp, placement=None):
 
 
 class _PipelineCtx:
-    """The little `ctx` phase 7's planter expects, built from a scrim's state."""
+    """Shim for the ctx phase 7's planter expects, built from scrim state."""
 
     def __init__(self, comp, args, ssh_key):
         from estate import config as estate_config
@@ -142,11 +123,10 @@ class _PipelineCtx:
 
 
 def stage_red(args, comp, creds, run_dir):
-    """Deploy red01 + its C2 + the day-0 seed, then prove red can act."""
     from red import tlaloc_ops
     staging.set_red_clock(args)
     _resolve_red_vmid(args, comp)
-    # The placement is authoritative once written; passing it avoids re-reading and re-selecting.
+    # A written placement is authoritative: pass it, never re-select for a live range.
     _resolve_red_ip(args, comp, read_placement(comp))
     base_url = args.llm_base_url
     tunnel = red_tunnel.maybe_start_red_tunnel(args)
@@ -179,11 +159,7 @@ def stage_red(args, comp, creds, run_dir):
 
 
 def verify_tlaloc_seeded(args, comp):
-    """Pre-T0 gate: the seed's manifest must show a stage landed on at least one box.
-
-    The manifest is pulled by the deploy into `<comp>/red/manifest.json`; nothing
-    else proves the range is already owned before T0.
-    """
+    """Pre-T0 gate: only the seed manifest proves the range is already owned."""
     manifest = Path(comp) / "red" / "manifest.json"
     try:
         data = json.loads(manifest.read_text())

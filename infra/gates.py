@@ -1,33 +1,4 @@
-"""Every refusal the deploy makes BEFORE it builds or destroys anything — in one place.
-
-Two layers, one module:
-
-  - the driver-state refusals (formerly deploy_lib/gates.py): the deploy lock, resume gates
-    (missing state / wrong pipeline version / skipped phases / resume-loop / ghost checkpoints),
-    the stale-estate refusal — collected here and called from exactly two spots in
-    deploy_lib/prepare.py, in a fixed order:
-      1. check_resume_gates   — right after the prior state is read.
-      2. run_range_gates      — after placement, BEFORE any secret is minted or estate applied:
-                                the stale-estate refusal, then the capacity /
-                                collision / template preflight (infra.collisions / .resources).
-  - the pre-Proxmox-mutation preflight (formerly the preflight/ package): run_preflight(plan)
-    is the single pre-mutation entry point, in this order:
-      1. per node share   - templates resolve + carry cloud-init + engine base image + jump
-                            source (infra.resources); vmid/bridge collisions
-                            (infra.collisions, ownership-proved); datastore headroom
-      2. mgmt IPs         - engine static IP, satellite jump IPs vs running guests
-                            (infra.collisions, cross-node)
-      3. catalog          - `nakon catalog check` over the competition's pins
-
-The small gates (catalog, remote-access) live here too rather than in one-file-each modules.
-run_capacity_preflight builds the plan (infra.plan) and calls run_preflight.
-
-Teardown/redeploy mutate under the same ownership proof (infra.ownership.ownership_verdict) -
-see destroy_vm_if_exists - so "ours" has one definition everywhere. The destroy-side ownership
-rules (tag-scoped reclaim, frozen gate) are enforced where the destroy decision is made - see
-golden_plan.py - and in infra.ownership.destroy_vm_if_exists. Every gate raises SystemExit with an
-operator-actionable message; none is bypassed except by the explicit --force-from-phase flag
-where documented."""
+"""Every refusal the deploy makes before it builds or destroys anything."""
 
 import fcntl
 import json
@@ -44,11 +15,8 @@ _DEPLOY_LOCKS = {}  # path -> open fh (keep referenced so flock survives)
 
 
 def acquire_deploy_lock(comp_dir):
-    """One driver per competition. Two concurrent deploys share the engine's
-    /opt/nakon staging dir and each one's 'rm -rf /opt/nakon/*' wipes the
-    other's plan archives mid-plant (caught live: a pkill'd
-    wrapper left run-2's python alive while run-3 started; both died with
-    'bundle is missing its plan archive'). The flock is held for the process's life."""
+    """One driver per competition: concurrent deploys share the engine's /opt/nakon staging
+    dir and each one's `rm -rf /opt/nakon/*` wipes the other's plan archives mid-plant."""
     lock_fh = open(comp_dir / ".deploy.lock", "w")
     try:
         fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -63,14 +31,8 @@ def acquire_deploy_lock(comp_dir):
 
 
 def check_resume_gates(comp_dir, state_path, previous_state, from_phase, force=False):
-    """The resume refusals, in order. A fresh deploy (from_phase 1) passes untouched.
-
-    Refuses a resume with no state file (there are no saved secrets to resume with),
-    refuses state written by a different pipeline version (the phase numbers are part of
-    what the version means), then runs the checkpoint guards: guard_resume_from_phase (do
-    not skip phases the state never saw complete) and guard_resume_existence (the
-    checkpoint's machines are really there). `force` is --force-from-phase, which relaxes
-    only those two."""
+    """Resume refusals, in order: missing state, foreign pipeline version, phases that
+    never completed, a checkpoint whose machines are gone. `force` relaxes the last two."""
     if from_phase > 1 and not state_path.exists():
         raise SystemExit(
             f"  ERROR: --from-phase {from_phase} but {state_path} doesn't exist — there are no "
@@ -80,8 +42,6 @@ def check_resume_gates(comp_dir, state_path, previous_state, from_phase, force=F
         )
     if from_phase <= 1:
         return
-    # A state file from another pipeline version numbers its phases differently, so
-    # resuming across versions is refused rather than silently misinterpreted.
     _pv = previous_state.get("pipeline_version")
     if _pv != PIPELINE_VERSION:
         raise SystemExit(
@@ -89,24 +49,14 @@ def check_resume_gates(comp_dir, state_path, previous_state, from_phase, force=F
             f"v{PIPELINE_VERSION} — its --from-phase numbers mean different things. Run a "
             f"fresh deploy (no --from-phase), or finish the run on the code that wrote "
             f"the state.")
-    # Refuse to skip a phase that never completed: the skipped phases are what build
-    # the machines the later ones target (see guard_resume_from_phase).
     guard_resume_from_phase(from_phase, previous_state.get("last_phase"), state_path,
                             force=force)
-    # ...and refuse to trust a checkpoint whose work is not actually there. The two
-    # guards above read the checkpoint as a fact; this one checks the fact
-    # (see guard_resume_existence for the soak that proved why).
     guard_resume_existence(from_phase, comp_dir, previous_state, force=force)
 
 
 def check_stale_estate_state(comp_dir, comp_name, previous_state, engine_vmid, from_phase):
-    """Refuse to point this deploy at a host the competition's state did not come from.
-
-    The document records the host and engine vmid the LAST deploy used. Targeting another
-    host would aim the teardown's ownership proof at VMs that are not there and leave the
-    real range standing (a real range once got deleted doing exactly that: the host's
-    existing engine was destroyed off the state's stale vmid). Runs before any secret
-    is minted, so a refusal leaves no half-written state behind."""
+    """Refuse to point a deploy at a host the competition's state did not come from: the
+    ownership proof would aim at absent VMs and the real range would stand. Runs before any secret mint."""
     from estate import config as estate_config
     if from_phase > 2 or not previous_state:
         return
@@ -128,17 +78,10 @@ def check_stale_estate_state(comp_dir, comp_name, previous_state, engine_vmid, f
 
 
 def run_capacity_preflight(ctx, comp_dir, from_phase):
-    """Run the competition preflight gates, at the phase-2 boundary.
-
-    Gated on from_phase <= 2 because the gates check free capacity and template
-    reachability for the work phases 1-2 do; a later resume must not re-refuse against
-    an already-deployed range, which is also why check_free is off on a resume."""
+    """Phase-2 boundary only: a later resume must not re-refuse against an already-deployed range."""
     if from_phase <= 2:
-        # The clash gates' "ours" exemption must be run-aware: the prior state's run
-        # id is what marks THIS competition directory's leftovers ours. With no prior
-        # state it falls back to the minted id — pre-existing comp-tagged VMs then
-        # classify as foreign and the gate refuses (fail-closed beats guessing whose
-        # VM it is).
+        # "Ours" is run-aware: the prior state's run id marks this comp dir's leftovers; with no
+        # prior state, comp-tagged leftovers classify foreign and the gate refuses (fail-closed).
         reclaim_tag = ctx.previous_state.get("run_id") or ctx.run_id
         from infra.plan import multinode_plan, single_node_plan
         if ctx.placement:
@@ -152,29 +95,16 @@ def run_capacity_preflight(ctx, comp_dir, from_phase):
 
 
 def run_range_gates(ctx, comp_dir, from_phase):
-    """Every refusal that needs the resolved placement, before any credential is minted.
-
-    Order: the cheap local stale-estate check first, then the capacity /
-    collision / template preflight (which queries Proxmox). Both must run before the fresh
-    secret mint — see prepare()'s order note on credential-desync corpses."""
+    """Local stale-estate check first, then the Proxmox-querying preflight; both before the
+    fresh-secret mint, so a refusal never leaves a desynced credential set."""
     check_stale_estate_state(comp_dir, ctx.comp_name, ctx.previous_state,
                              ctx.engine_vmid, from_phase)
     run_capacity_preflight(ctx, comp_dir, from_phase)
 
 
 def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
-    """Refuse a --from-phase that skips phases the state document never saw complete.
-
-    checkpoint() writes `last_phase` after each phase, so the only safe resume target is
-    last_phase + 1 (re-run the phase that died) or earlier. `last_phase` was written but
-    never read, so `--from-phase 6` on a range whose last checkpoint was 3 passed both
-    existing guards (state exists, pipeline_version matches) and then ran the
-    domain/final/beacon/tz-ready chain against machines that were never built, burying
-    the real failure in confusing downstream errors. A missing/unusable `last_phase`
-    (hand-made or pre-checkpoint state) reads as 0 — the conservative choice.
-    --force-from-phase is the escape hatch for an operator who knows the checkpoint is
-    stale (e.g. the process died after a phase finished but before its checkpoint
-    landed); the default must stay refusing."""
+    """Refuses a --from-phase beyond last_phase + 1 — the skipped phases built the machines
+    later ones target. A missing last_phase reads as 0; --force-from-phase is the escape hatch."""
     if force:
         return
     last = last_phase if isinstance(last_phase, int) and last_phase >= 0 else 0
@@ -190,11 +120,7 @@ def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
 
 
 def _artifact_probes(comp_dir):
-    """The two infrastructure probes guard_resume_existence needs, as one dict.
-
-    Indirection on purpose: it is the single seam a test patches to exercise the gate
-    offline, and the single place a caller could inject a cheaper probe. Resolved at
-    call time so a patch lands."""
+    """Test seam for guard_resume_existence's probes; resolved at call time so a patch lands."""
     from infra.client import live_vmids
     from estate.state import team_vmids
     return {"vmids_from_state": lambda: team_vmids(comp_dir),
@@ -203,32 +129,13 @@ def _artifact_probes(comp_dir):
 
 def guard_resume_existence(from_phase, comp_dir, state, force=False,
                            vmids_from_state=None, vm_exists=None):
-    """Refuse a resume whose skipped phases left no artifacts behind.
-
-    `guard_resume_from_phase` reads the checkpoint, which is a claim about work done —
-    and a claim can be written by a run that did nothing. One observable: attempts
-    9-11 resumed at --from-phase 5/6 after a phase-4 death: apply #2 never ran, the
-    phase-6 pre-domain pass is strict=False so it "succeeded" against 32 nonexistent
-    machines, and it checkpointed phase 5. Every later wait then raced a ghost, and the
-    run spent ~40 minutes in wait_for_windows_sshd before anyone understood why.
-
-    So: before trusting a skipped phase, verify the thing it produces. Each check is a
-    separate callable so every branch is testable without Proxmox. Escalation stays
-    available — an operator who genuinely has the infrastructure passes --force-from-phase;
-    what this removes is the SILENT skip.
-
-    Checks, by the phase whose output is being trusted:
-      > 2  the engine VM exists (created in phase 2)
-      > 4  every team box in the recorded inventory exists as a live VM (phase 4)
-    """
+    """A checkpoint is a claim about work done; before trusting a skipped phase, verify its
+    output: >2 needs the engine live, >4 every recorded team box. --force-from-phase skips this."""
     if force:
         return
     probes = _artifact_probes(comp_dir)
     probe_vmids = vmids_from_state or probes["vmids_from_state"]
     probe_live = vm_exists or probes["vm_exists"]
-    # Phase 2's apply #1 creates the engine; phase 4's apply #2 creates the
-    # team boxes (its first half builds the goldens they clone from). So a resume that
-    # skips phase 2 needs a live engine, and one that skips phase 4 needs live boxes.
     if from_phase <= 2:
         return
     needs_boxes = from_phase > 4
@@ -284,17 +191,12 @@ def guard_resume_existence(from_phase, comp_dir, state, force=False,
 
 
 def catalog_check_paths(comp_dir):
-    """Paths for `nakon catalog check`, filtered when the bundle uses constructs the
-    catalog can't know about. Score-only pins ({"score_only": true}) name no catalog
-    config; box_baseline.json pins plant like vulns but live in their own file. When
-    neither is present the bundle's real files pass straight through. Returns
-    (services_path, vulns_path, cleanup_fn)."""
+    """Paths for `nakon catalog check`, rewritten only when the bundle uses constructs the
+    catalog can't know: score-only pins name no config; baseline pins plant like vulns."""
     services_path = comp_dir / "box_services.json"
     vulns_path = comp_dir / "box_vulns.json"
     if not services_path.exists() and not vulns_path.exists():
-        # A fresh competition has no pins yet: generate_nakon_config() writes both files
-        # later in the pipeline, AFTER the gates run (see deploy_lib.prepare). There is
-        # nothing to validate here yet, so report "no pins" instead of crashing.
+        # A fresh competition's pins are generated after these gates; None means "no pins to check".
         return (None, None, None)
     services = json.loads(services_path.read_text()) if services_path.exists() else {}
     vulns = json.loads(vulns_path.read_text()) if vulns_path.exists() else {}
@@ -348,12 +250,8 @@ def catalog_gate(comp_dir):
 
 
 def remote_access_gate(plan):
-    """Headscale remote-access gate: the env contract is present and the headscale host is
-    reachable. The subnet-overlap refusal lives in remote_access_ops.setup_remote_access.
-
-    Raise SystemExit on the two refusal conditions; silent pass otherwise. Runs before
-    any Proxmox mutation (remote access ships with every deploy, so a dead headscale host
-    should stop a deploy at the gate, not mid-phase-3)."""
+    """Headscale env contract present and the host reachable. Remote access ships with every
+    deploy, so a dead host stops it at the gate, before any Proxmox mutation."""
     from net import remote_access_ops
 
     identifiers = sorted({str(t["identifier"])
@@ -363,7 +261,6 @@ def remote_access_gate(plan):
     if not identifiers:
         return
     remote_access_ops._headscale_env()  # SystemExit naming the missing vars
-    # cheap liveness probe: `headscale health` via the container
     try:
         reachable = remote_access_ops.hs_cli("health", timeout=30, check=False).returncode == 0
     except (subprocess.TimeoutExpired, OSError):
@@ -382,8 +279,7 @@ def run_preflight(plan):
     """The single pre-Proxmox-mutation entry point."""
     if compfile_flag(plan.comp_dir / "Compfile", "remote_access", 1):
         remote_access_gate(plan)
-    # The one proof that the object is free of itself, before any gate proves the CLUSTER is
-    # free of others: no vmid in two of this run's bands, no team block over one.
+    # Self-collision first: no vmid in two of this run's bands, no team block over one.
     check_placement(plan.placement)
     for share in plan.shares:
         share.raw_vms = share.fetch_vms()

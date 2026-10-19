@@ -1,19 +1,4 @@
-"""tlaloc as the range's red team — deploy, seed, verdict, destroy (phase 7).
-
-What this module owns:
-
-* the competition's ``red.*`` block (parse, validate, render into
-  ``/etc/tlaloc/config.yaml`` — the file red01 actually reads);
-* red01 itself, through ``red.red01_ops``: clone, network, engine rules, destroy.
-  Red is a range component owned by this tree, not a sibling checkout;
-* staging the agent onto red01 (``/opt/tlaloc`` — staged, never installed: the
-  systemd unit is what puts it on the import path), the config contract, the C2
-  payload freeze and the day-0 seed;
-* the after-action verdict: ``tlaloc report`` is run on the box and every state
-  artifact is pulled into ``<comp>/red/`` before the VM is destroyed.
-
-Every failure here is a deploy failure. A range with no red team is not a range.
-"""
+"""tlaloc as the range's red team — deploy, seed, verdict, destroy (phase 7)."""
 
 import io
 import json
@@ -36,23 +21,16 @@ STATE_DIR = "/var/lib/tlaloc"
 INTEL_DIR = "/var/lib/tlaloc/intel"
 UNIT = "tlaloc.service"
 UNIT_SRC = TLALOC_REPO / "systemd" / "tlaloc.service"
-# red01 hosts Mythic, and a beacon-sized disk cannot: the C2's images filled a 9.8G
-# disk, Docker never started and the channel had nowhere to call home.
+# red01 hosts Mythic; the C2 images overran a beacon-sized disk and Docker never started.
 DEFAULT_RED_DISK_GB = 60
 
-# Keys that belong in tlaloc's own config vs. keys the engine consumes.
 CONFIG_KEYS = ("assume_breach", "depth", "duration_min", "ladder", "caps",
                "windows", "budget")
 TAKEDOWN_MODES = ("stop", "stop_mask", "stop_rename", "stop_break_config",
                   "stop_rename_config", "block_port", "recon")
 
 
-# --------------------------------------------------------------------------- #
-# the Compfile red block
-# --------------------------------------------------------------------------- #
-
 def compfile_lines(comp_dir):
-    """{key: value} for every `key value` line in the Compfile (last wins)."""
     out = {}
     try:
         text = (Path(comp_dir) / "Compfile").read_text()
@@ -88,7 +66,6 @@ def _set_dotted(target, dotted, value):
 
 
 def red_block(comp_dir):
-    """The competition's red.* block as a dict (yaml pointer over dotted keys)."""
     block = {}
     lines = compfile_lines(comp_dir)
     if "red_yaml" in lines:
@@ -101,10 +78,8 @@ def red_block(comp_dir):
     for key, value in lines.items():
         if key.startswith("red."):
             _set_dotted(block, key[len("red."):], _coerce(value))
-    # Operator override for a range kept up past its scheduled length (a scrim
-    # left running for human blue testing goes quiet once red.duration_min has
-    # elapsed: the loop exits cleanly and the re-arm reports it as "could not
-    # start"). Editing the competition for this would change what gets graded.
+    # A range kept up past red.duration_min goes quiet — the loop exits cleanly — and the
+    # Compfile is graded input, so the extension comes from the environment.
     over = os.environ.get("TEZ_TLALOC_DURATION_MIN")
     if over:
         try:
@@ -128,7 +103,6 @@ def compfile_value(comp_dir, key):
 
 
 def validate_red_block(block):
-    """Per-field problems for a competition's red block ([] means deployable)."""
     problems = []
     mode = block.get("assume_breach", "full")
     if mode not in ("full", "light", "off"):
@@ -173,12 +147,7 @@ def validate_red_block(block):
 def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
                   red_ip=None, quotient_url=None, clef_url=None, c2_url=None,
                   c2_operation=None, llm=None):
-    """The body of /etc/tlaloc/config.yaml for this competition.
-
-    Only values the deploy knows are written: everything else stays at tlaloc's
-    documented defaults, so the pushed file is a diff against DEFAULTS and
-    `tlaloc verify-config` can diff it back per field.
-    """
+    """The body of /etc/tlaloc/config.yaml — a diff against tlaloc's DEFAULTS."""
     block = block if block is not None else red_block(comp_dir)
     comp_dir = Path(comp_dir).resolve()
     cfg = {
@@ -202,8 +171,7 @@ def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
     if c2_url:
         cfg.setdefault("c2", {}).update({"enabled": True, "base_url": c2_url,
                                          "operation": c2_operation or cfg["run"]["comp"]})
-    # Coverage runs: `red.c2_implant_spread full` in the Compfile registers every
-    # implant surface on every box instead of the per-plant draw.
+    # red.c2_implant_spread full: every implant surface on every box, not the per-plant draw.
     spread = str(block.get("c2_implant_spread") or "").strip()
     if spread:
         cfg.setdefault("c2", {})["implant_spread"] = spread
@@ -213,7 +181,6 @@ def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
 
 
 def write_config(comp_dir, path=None, **kwargs):
-    """Render + write the competition's tlaloc config; returns the path."""
     import yaml
     target = Path(path) if path else Path(comp_dir) / ".tlaloc-config.yaml"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -224,7 +191,6 @@ def write_config(comp_dir, path=None, **kwargs):
 
 
 def contract_fields(runner=None):
-    """The fields red01 reads, straight from tlaloc (`verify-config --print-contract`)."""
     runner = runner or _default_runner
     proc = runner([local_python(), "-m", "tlaloc", "verify-config",
                    "--print-contract"], cwd=str(TLALOC_REPO), capture_output=True,
@@ -236,10 +202,6 @@ def contract_fields(runner=None):
     except ValueError:
         return []
 
-
-# --------------------------------------------------------------------------- #
-# command builders (pure — the tests assert these, the runner executes them)
-# --------------------------------------------------------------------------- #
 
 def _default_runner(cmd, **kwargs):
     kwargs.setdefault("capture_output", True)
@@ -254,7 +216,6 @@ def ssh_argv(ssh_key, red_ip, remote, timeout=30):
 
 
 def stage_command(comp_dir):
-    """Stage the package + intel on red01 (staged, never installed)."""
     comp_dir = Path(comp_dir).resolve()
     return (
         f"sudo -n mkdir -p {INSTALL_DIR} {INTEL_DIR} {STATE_DIR} && "
@@ -263,18 +224,9 @@ def stage_command(comp_dir):
 
 
 def seed_command():
-    """The day-0 seed, run ON red01 from the install dir.
-
-    `cd /opt/tlaloc` is not cosmetic: the package is staged, so `python3 -m
-    tlaloc` from the login dir dies with "No module named tlaloc". `--comp` is the
-    pushed intel dir: without it the agent loads blind intel (no boxes, nothing to
-    seed) while the deploy still reports a successful seed.
-    """
-    # /etc/tlaloc/c2.env carries the Mythic operator password (the unit reads it
-    # through EnvironmentFile). A bare manual seed has no such environment, so its
-    # C2 client cannot authenticate and every "channel: no callback" verdict is a
-    # blind spot rather than a fact — live 2026-10-18: the seed reported no callback
-    # on all six boxes while Mythic held all six channels.
+    """cd and --comp are load-bearing: the package is staged, and blind intel still exits 0."""
+    # Source c2.env — the unit gets the Mythic operator password through EnvironmentFile; a
+    # bare seed cannot authenticate, so its "no callback" verdicts are blind spots.
     return (f"cd {INSTALL_DIR} && sudo -n bash -c 'set -a; . /etc/tlaloc/c2.env; "
             f"set +a; python3 -m tlaloc --config {CONFIG_PATH} --comp {INTEL_DIR} seed'")
 
@@ -285,7 +237,6 @@ def plant_command():
 
 
 def report_command():
-    """Write the after-action report + restore table on the box (idempotent)."""
     return (f"cd {INSTALL_DIR} && sudo -n python3 -m tlaloc "
             f"--config {CONFIG_PATH} --comp {INTEL_DIR} report")
 
@@ -310,8 +261,7 @@ def _env_pairs(body):
 
 def comp_prep_command(comp_dir, transports=("http", "webhook")):
     comp_dir = Path(comp_dir).resolve()
-    # --state-dir: c2-prep runs on the OPERATOR, where the config's VM path
-    # (/var/lib/tlaloc) is unwritable; build_context mkdirs it.
+    # --state-dir: c2-prep runs on the operator, where the config's VM path is unwritable.
     return [local_python(), "-m", "tlaloc", "--comp", str(comp_dir),
             "--config", str(comp_dir / ".tlaloc-config.yaml"),
             "--state-dir", str(comp_dir / ".tlaloc-state"), "c2-prep",
@@ -321,10 +271,6 @@ def comp_prep_command(comp_dir, transports=("http", "webhook")):
 def unit_stop_command():
     return f"sudo -n systemctl disable --now {UNIT} || true"
 
-
-# --------------------------------------------------------------------------- #
-# the phase-7 entry point
-# --------------------------------------------------------------------------- #
 
 def _ssh_run(ssh_key, red_ip, remote, *, runner=None, timeout=900, input=None):
     runner = runner or _default_runner
@@ -342,7 +288,6 @@ def _tail(proc, n=300):
 
 
 def require_frozen_payloads(comp_dir):
-    """A C2-enabled deploy needs comp-prep's manifest and the files it names."""
     payloads = Path(comp_dir) / "red" / "payloads"
     manifest_path = payloads / "manifest.json"
     try:
@@ -367,7 +312,6 @@ def require_frozen_payloads(comp_dir):
 
 
 def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600, c2=False):
-    """Push /opt/tlaloc + the unit file to red01, then its nakon intel."""
     comp_dir = Path(comp_dir).resolve()
     if c2:
         require_frozen_payloads(comp_dir)
@@ -401,8 +345,7 @@ def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600, c2=False
                       input=source.read_bytes(), text=False, timeout=timeout)
         if proc.returncode != 0:
             raise RuntimeError(f"pushing {name} failed: {_tail(proc)}")
-    # The Compfile's red_yaml target is an input the seed re-reads from the intel
-    # dir; staging the Compfile without it fails the seed on red01.
+    # The seed re-reads the Compfile's red_yaml target from the intel dir; unstaged it fails.
     red_yaml = compfile_value(comp_dir, "red_yaml")
     if red_yaml:
         source = comp_dir / red_yaml
@@ -413,9 +356,8 @@ def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600, c2=False
                       input=source.read_bytes(), text=False, timeout=timeout)
         if proc.returncode != 0:
             raise RuntimeError(f"pushing {red_yaml} failed: {_tail(proc)}")
-    # The FROZEN payloads travel too: the planter reads them from
-    # <intel>/red/payloads/manifest.json, and a channel with no local payload cannot
-    # plant anything (live: every implant failed with "no manifest entry").
+    # The planter reads payloads from <intel>/red/payloads/manifest.json; with no local
+    # payload a channel cannot plant anything.
     payloads = comp_dir / "red" / "payloads"
     if (payloads / "manifest.json").exists():
         archive = subprocess.run(["tar", "-czf", "-", "-C", str(payloads.parent), "payloads"],
@@ -434,8 +376,7 @@ def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600, c2=False
 
 
 def push_config(ssh_key, red_ip, config_text, *, runner=None, timeout=120):
-    # `tee` reads stdin: without the rendered config every deploy wrote a 0-byte file
-    # and red01 ran on tlaloc's defaults while the contract check named every field.
+    # tee reads stdin: a 0-byte config still "succeeds" and leaves red01 on tlaloc's defaults.
     remote = (f"sudo -n mkdir -p /etc/tlaloc && "
               f"sudo -n tee {CONFIG_PATH} >/dev/null && sudo -n chmod 600 {CONFIG_PATH}")
     proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout,
@@ -446,7 +387,7 @@ def push_config(ssh_key, red_ip, config_text, *, runner=None, timeout=120):
 
 
 def push_llm_env(ssh_key, red_ip, api_key, *, runner=None, timeout=120):
-    """The LLM credential rides a 0600 root-owned env file the agent reads at start."""
+    """The LLM key rides a separate root-owned env file the agent reads at start."""
     remote = (f"sudo mkdir -p /etc/tlaloc && printf 'TLALOC_LLM_API_KEY=%s\\n' "
               f"'{api_key}' | sudo tee /etc/tlaloc/env >/dev/null && "
               f"sudo chmod 600 /etc/tlaloc/env")
@@ -474,7 +415,7 @@ def seed_via_red01(ssh_key, red_ip, *, runner=None, timeout=5400):
 
 
 def start_unit(ssh_key, red_ip, *, runner=None, timeout=60):
-    """Start the loop after the seed: enable-only left red stopped until someone logged in."""
+    """Start it after the seed: enable-only leaves the loop stopped until someone logs in."""
     remote = f"sudo -n systemctl start {UNIT} && sudo -n systemctl is-active {UNIT}"
     proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout)
     if getattr(proc, "returncode", 1) != 0:
@@ -484,13 +425,7 @@ def start_unit(ssh_key, red_ip, *, runner=None, timeout=60):
 
 def verify_config_contract(ssh_key, red_ip, *, intended=None, runner=None,
                            timeout=180):
-    """Fetch the pushed config back and diff it against what red01 must read.
-
-    The pushed file is a DIFF against tlaloc's documented defaults, so a field
-    absent from it is not a defect by itself. A defect is a field the deploy MEANT
-    to set that the pushed file does not carry — that field's feature is dead on
-    the VM while every local test stays green.
-    """
+    """Fail when the pushed config dropped a field the deploy meant to set."""
     proc = _ssh_run(ssh_key, red_ip, f"sudo -n cat {CONFIG_PATH}", runner=runner,
                     timeout=timeout)
     if getattr(proc, "returncode", 1) != 0:
@@ -507,7 +442,6 @@ def verify_config_contract(ssh_key, red_ip, *, intended=None, runner=None,
 
 
 def _load_intended(intended):
-    """The config the deploy meant to push (a dict, a path, or None -> only defaults)."""
     if intended is None:
         return {}
     if isinstance(intended, dict):
@@ -515,7 +449,7 @@ def _load_intended(intended):
     try:
         import yaml
         return yaml.safe_load(Path(intended).read_text()) or {}
-    except Exception:                                  # unreadable -> defaults only
+    except Exception:
         return {}
 
 
@@ -535,11 +469,7 @@ def _team_identifiers(team_keys):
 
 def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                         mythic_runner=None, llm=None, llm_key=None):
-    """[7/8] Deploy red01, install the C2, seed the agent, prove the config.
-
-    Every step raises on failure. A competition with no working red team is a
-    failed deploy, not a degraded range.
-    """
+    """[7/8] Deploy red01, install the C2, seed, prove the config — every step raises."""
     from infra.ownership import Ownership
     from red import gaia_ops, red01_ops
     comp_dir = Path(getattr(ctx, "comp_dir"))
@@ -558,11 +488,8 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     ownership = Ownership(getattr(ctx, "comp_name", ""), getattr(ctx, "run_id", ""))
     run_id = getattr(ctx, "run_id", "")
     cfg_path = comp_dir / ".tlaloc-config.yaml"
-    # The decision model is configured per competition, never left to the
-    # placeholder in config.DEFAULTS A missing endpoint does not degrade — it
-    # silently turns every decision into a deterministic fallback while the run
-    # log still looks healthy — so refuse the deploy here, exactly like a missing
-    # red team.
+    # A missing decision-model endpoint does not degrade: every decision silently falls back
+    # while the run log looks healthy, so refuse the deploy rather than run a hollow red.
     from estate import config as estate_config
     clef_url = (block.get("clef_url")
                 or (estate_config.active().knobs.clef_url or "").strip())
@@ -612,9 +539,8 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                 "the competition has no C2 callback port (`firewall_dnat <port>-><ip>` "
                 "or `red.c2_callback_port` in its Compfile) — the frozen payloads would "
                 "dial nothing and the channel could never check in")
-        # A fresh operator per deploy: Gaia's `user create` on a name that already
-        # exists prints a password that does not authenticate, so a resume against the
-        # same account would freeze payloads as nobody (caught live: 403 from /auth).
+        # Gaia's `user create` on an existing name prints a password that does not
+        # authenticate, so a resume would freeze payloads as nobody: mint one per deploy.
         agent_user = f"tlaloc-{secrets.token_hex(3)}"
         mythic_result = gaia_ops.prepare_mythic(
             comp_dir, box_ip=plan["box"], ssh_user=RED_USER, ssh_key=ssh_key,
@@ -626,8 +552,6 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
             raise RuntimeError(f"the Mythic step failed — no C2 on red01 ({detail})")
         if mythic_result.get("c2"):
             gaia_ops.apply_c2_to_config(cfg_path, mythic_result["c2"])
-        # c2-prep runs on the operator and authenticates as the operator this deploy
-        # just minted; the password never leaves this process.
         env = dict(os.environ)
         env.update(_env_pairs((mythic_result or {}).get("env") or ""))
         prep = (runner or _default_runner)(comp_prep_command(comp_dir),
@@ -636,8 +560,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         if getattr(prep, "returncode", 1) != 0:
             raise RuntimeError(f"c2-prep (payload freeze) failed: {_tail(prep)}")
 
-    # The segment rules are not optional: red01 must be able to reach the teams even
-    # when the competition runs without a C2 (the DNAT is skipped, the FORWARD trio is not).
+    # Without a C2 the DNAT is skipped but not the FORWARD trio: red01 must still reach teams.
     print("  red rules   : installing the red-segment rules on the engine...")
     red01_ops.install_engine_rules(
         getattr(ctx, "scoring_ip", "") or "", ssh_key,
@@ -686,11 +609,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
 
 def destroy_tlaloc_red(comp_dir, *, ownership, engine_ip="", engine_user="sysadmin",
                        env=None, runner=None, ssh_key=None, red_ip=None):
-    """Capture red's verdict, stop the unit, then remove exactly this run's red01.
-
-    Order matters: the report + restore table must be generated and pulled while
-    the box still exists, and the unit must stop before the VM disappears.
-    """
+    """Stop the unit with its verdict captured; only then destroy this run's red01."""
     from red import red01_ops
     runner = runner or _default_runner
     env = env if env is not None else os.environ
@@ -714,16 +633,11 @@ def destroy_tlaloc_red(comp_dir, *, ownership, engine_ip="", engine_user="sysadm
     return {"ok": True, "removed": removed}
 
 
-# --------------------------------------------------------------------------- #
-# verdict + evidence
-# --------------------------------------------------------------------------- #
-
 VERDICT_FILES = ("restore-table.json", "report.md", "report-secrets.md", "world.json",
                  "events.jsonl")
 
 
 def _seeded_boxes(manifest_path):
-    """Count boxes the seed manifest says were planted (a stage landed on them)."""
     try:
         data = json.loads(Path(manifest_path).read_text())
     except (OSError, ValueError):
@@ -733,7 +647,6 @@ def _seeded_boxes(manifest_path):
 
 
 def pull_manifest(ssh_key, red_ip, comp_dir, *, runner=None):
-    """Fetch the seed manifest the agent wrote into its intel dir."""
     dest = Path(comp_dir) / "red"
     dest.mkdir(parents=True, exist_ok=True)
     target = dest / "manifest.json"
@@ -747,7 +660,6 @@ def pull_manifest(ssh_key, red_ip, comp_dir, *, runner=None):
 
 
 def pull_evidence(ssh_key, red_ip, dest, *, runner=None, timeout=300):
-    """Tar the agent's whole state dir off red01 into `dest` (before destroy)."""
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     remote = f"sudo -n tar -czf - -C {STATE_DIR} ."
@@ -769,7 +681,6 @@ def pull_evidence(ssh_key, red_ip, dest, *, runner=None, timeout=300):
 
 
 def collect_evidence(red_state_dir, evidence_dir, *, copy=None):
-    """Copy already-pulled verdict files into an evidence tree."""
     import shutil
     copy = copy or shutil.copy2
     evidence_dir = Path(evidence_dir)
@@ -785,11 +696,7 @@ def collect_evidence(red_state_dir, evidence_dir, *, copy=None):
 
 
 def red_verdict(evidence_dir, *, engine="tlaloc"):
-    """The machine-readable red verdict the dashboard consumes.
-
-    `coverage` is the ENGINE's job (it reads the scoreboard); this assembles what
-    only red knows: what was planted, what was taken down, how to undo it.
-    """
+    """The red verdict the dashboard consumes; coverage is the engine's job, not this."""
     evidence_dir = Path(evidence_dir)
     table_path = evidence_dir / "restore-table.json"
     verdict = {"engine": engine, "generated_at": _now(), "entries": 0,
@@ -820,7 +727,6 @@ def write_verdict(evidence_dir, *, engine="tlaloc", out=None):
 
 
 def status(comp_dir):
-    """What the engine knows about this competition's red setup."""
     from red import red01_ops
     block = red_block(comp_dir)
     return {"engine": "tlaloc", "block": block,
@@ -834,12 +740,8 @@ def _now():
 
 
 def _guest_grow_script():
-    """Extend the root filesystem into whatever space the hypervisor just added.
-
-    Every write needs `sudo -n` (red01's ssh user is not root), and the partition
-    is found through LVM (`pvs`), not by walking up from the root device: on an LV
-    root `lsblk -no PKNAME /dev/dm-N` is empty.
-    """
+    # sudo -n throughout: the ssh user is not root. The partition comes from pvs, not from
+    # lsblk PKNAME of the root device — that is empty on an LV root.
     return (
         "set -x; ROOT=$(findmnt -no SOURCE /); "
         "PV=$(sudo -n pvs --noheadings -o pv_name 2>/dev/null | head -1 | tr -d ' '); "
@@ -857,7 +759,6 @@ def _guest_grow_script():
 
 def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
                     runner=None, timeout=600):
-    """Grow red01's disk to the Mythic floor (hypervisor resize + guest grow)."""
     from infra.client import proxmox_api, wait_for_proxmox_task
     runner = runner or _default_runner
     target = int(target_gb or red_disk_gb(comp_dir))
@@ -875,8 +776,8 @@ def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
         raise RuntimeError(f"vmid {vmid} has no scsi0/virtio0/sata0 disk")
     current_gb = _disk_gb(config.get(disk))
     if not current_gb or current_gb < target:
-        # PUT with an ABSOLUTE size: the API rejects a relative size, and the guest
-        # grow must wait for PVE's resize task or growpart still sees the old disk.
+        # The API wants an absolute size, and the guest grow must wait for PVE's resize task
+        # or growpart still sees the old disk.
         res = proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
                           data={"disk": disk, "size": f"{target}G"})
         upid = (res or {}).get("data") if isinstance(res, dict) else None
@@ -897,7 +798,6 @@ def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
 
 
 def _disk_gb(value):
-    """`scsi0: vmdata:vm-2099-disk-0,size=10G` -> 10."""
     import re
     match = re.search(r"size=(\d+(?:\.\d+)?)([GMT])", str(value or ""))
     if not match:
@@ -907,7 +807,6 @@ def _disk_gb(value):
 
 
 def _gb_from_df(line):
-    """A `df -h /` row -> the size in GB (e.g. '59G')."""
     import re
     match = re.search(r"\s(\d+(?:\.\d+)?)([GMT])\s", str(line))
     if not match:
