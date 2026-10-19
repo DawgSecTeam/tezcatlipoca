@@ -114,6 +114,11 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
             time.sleep(2 * (attempt + 1))
     print(f"    {vm_name} cloned from base image (vmid {vmid})")
 
+    # The base image's root is ~10 GB; the compose build fills it and the build dies
+    # (live: run-b789543d phase 2). Size the disk before the bootstrap grows the fs.
+    from estate.apply import ENGINE_DISK_GB, ensure_disk_size
+    ensure_disk_size(node, vmid, ENGINE_DISK_GB)
+
     start_vm(node, vmid)
     build_ip = mgmt_ip
     if not build_ip:

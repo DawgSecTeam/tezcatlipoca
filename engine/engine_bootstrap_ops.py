@@ -59,6 +59,10 @@ def _patch_quotient_injects_cmd():
 
 
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
+    # Grow the root to the disk we sized before the packages/Docker/Quotient build.
+    from engine.engine_identity_ops import _GROW_ROOT_CMD
+    _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120,
+                    step="grow engine root filesystem")
     _run_engine_cmd(ctx, (
         # unattended-upgrades holds the dpkg/archives locks past Lock::Timeout and re-fires
         # mid-upgrade; stopping the units alone let apt-daily-upgrade spawn apt-get between
