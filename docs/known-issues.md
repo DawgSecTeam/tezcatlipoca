@@ -1,8 +1,11 @@
-# Known issues
+### `defender-disabled-win` fails on images where the engine already removed Defender
 
-Temporary writepad, not a ledger: every entry has a concrete next action and is drained each run cycle.
-
-## Open
+The golden bootstrap removes Defender (the competition images ship it gone), so the vulndb step
+`defender-disabled-win` finds no `Set-MpPreference` cmdlet and aborts the win02 golden with
+CommandNotFoundException (live: scrim-one, 2026-10-19). scrim-one and scrim-one-light drop the
+step — the vulnerability is already true. Other comps that still list it: crimson-relay,
+practice-4box-2026-09, redtest-2box-2026-10, and cov-full-a/b/c. Either the step should no-op
+when the cmdlets are absent (vulndb) or those comps must drop it.
 
 ### A retired range's kept templates cannot be reclaimed until the competition deploys again
 
