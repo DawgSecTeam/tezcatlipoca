@@ -19,3 +19,24 @@ def test_a_windows_takedown_falls_back_to_the_channel(tmp_path):
     assert result.ok, result.detail
     assert "via C2" in result.detail
     assert any("tlaloc-impact" in t["command"] for t in ctx.c2.tasks)
+
+
+def test_a_dead_channel_reports_the_c2_reason(tmp_path):
+    from tlaloc.c2 import FakeMythic
+    from tlaloc.effects import execute
+    from tlaloc.errors import C2Error
+
+    ssh = FakeSSH().on(lambda c: c.get("windows") is True, rc="raise")
+    ctx = make_ctx(tmp_path / "state", ssh=ssh)
+    ctx.world.add_foothold("192.168.1.10", "Administrator", "pw", "root",
+                           windows=True)
+
+    class Dead(FakeMythic):
+        def task(self, *a, **kw):
+            raise C2Error("c2 disabled (c2.enabled / c2.base_url)")
+
+    ctx.c2 = Dead({})
+    result = execute("takedown", {"ip": "192.168.1.10", "service": "smb",
+                                  "mode": "stop"}, ctx)
+    assert not result.ok
+    assert "C2 tasking failed" in result.detail and "c2 disabled" in result.detail

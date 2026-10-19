@@ -298,14 +298,19 @@ class Takedown(Effect):
         key = box_id_for(ctx, ip)
         try:
             outcome = c2.task(key, stop, timeout=120)
-        except Exception:
-            return None
+        except Exception as exc:
+            return Result(False, f"C2 tasking failed for {key}: "
+                                 f"{type(exc).__name__}: {exc}")
         if not outcome.get("task_id") or not outcome.get("ok"):
-            return None
+            # Surface the reason: a silent None reads as an SSH problem and hides a
+            # disabled/misconfigured channel (live: cde-2026 DC takedowns).
+            return Result(False, f"C2 tasking failed for {key}: "
+                                 f"{outcome.get('detail') or 'no task created'}")
         try:
             status = c2.task(key, check, timeout=120)
-        except Exception:
-            return None
+        except Exception as exc:
+            return Result(False, f"C2 status task failed for {key}: "
+                                 f"{type(exc).__name__}: {exc}")
         output = str(status.get("output") or "").strip()
         if expect not in output:
             return Result(False, f"{label} still reporting {output[:80]!r} on {ip} "
