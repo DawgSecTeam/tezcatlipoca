@@ -64,6 +64,7 @@ _SPEC = {
     "knobs.build_mode": "node",
     "knobs.build_operator_iface": "",
     "knobs.build_bootstrap_ip": "",
+    "knobs.box_cloud_init_timeout": 600,
 }
 
 _TRUE = ("1", "true", "yes", "on")
