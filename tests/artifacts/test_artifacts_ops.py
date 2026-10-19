@@ -569,3 +569,18 @@ class ScpRetry(unittest.TestCase):
         self.assertEqual(got[0].stat().st_mode & 0o777, 0o600)
         self.assertEqual(sleeps, [10], "exactly one inter-round pause")
 
+
+    def test_an_overwritten_destination_is_a_success(self):
+        # The harness pulls red's report before teardown, so the collector's scp
+        # overwrites an existing file: counting only NEW names as fetched recorded a
+        # present report as unreachable (live run-8f91036c).
+        from artifacts_lib import transport as ao
+        d = Path(tempfile.mkdtemp())
+        dest = d / "report.md"
+        dest.write_text("old body")
+        with patch.object(ao.subprocess, "run", self._fake_run(0, str(dest))), \
+                patch.object(ao.time, "sleep"):
+            got = ao._scp_files({"key": "/k", "user": "sysadmin",
+                                 "host": "10.0.0.198"}, "/tmp/ba/report.md", d)
+        self.assertEqual([p.name for p in got], ["report.md"])
+        self.assertEqual(dest.read_text(), "report body")

@@ -8,6 +8,7 @@ verify-competition.py, scrim-report.py and every `python3 -m badauto` (red) call
 would have failed later in the run instead of at its start.
 """
 
+import os
 import sys
 import tempfile
 import unittest
@@ -62,6 +63,21 @@ class StageDeploySpawn(unittest.TestCase):
         cmd = self._spawn(executable="/usr/bin/python3")
         self.assertEqual(cmd[0], local_python())
         self.assertEqual(cmd[0], "/usr/bin/python3")
+
+
+class RedClock(unittest.TestCase):
+    def test_the_runs_duration_is_exported_as_reds_event_clock(self):
+        # red's pushed clock is the scrim's --duration-min: the deploy child inherits
+        # the env, and the in-process re-stage reads it too (the comp profile is not
+        # the authority, so a scrim and its comp cannot disagree).
+        with mock.patch.dict("os.environ", {}, clear=False):
+            staging.set_red_clock(SimpleNamespace(duration_min=45))
+            self.assertEqual(os.environ["TEZ_TLALOC_DURATION_MIN"], "45")
+
+    def test_a_missing_duration_leaves_the_env_alone(self):
+        with mock.patch.dict("os.environ", {"TEZ_TLALOC_DURATION_MIN": "60"}):
+            staging.set_red_clock(SimpleNamespace())
+            self.assertEqual(os.environ["TEZ_TLALOC_DURATION_MIN"], "60")
 
 
 class RedSpawns(unittest.TestCase):

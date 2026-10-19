@@ -606,3 +606,33 @@ if __name__ == "__main__":
     unittest.main()
 
 
+
+
+class InjectPrompt(unittest.TestCase):
+    def _brief(self, due_off, close_off):
+        now = time.time()
+        payload = [{"ID": 3, "Title": "Breach notification",
+                    "DueTime": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                             time.gmtime(now + due_off * 60)),
+                    "CloseTime": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                               time.gmtime(now + close_off * 60)),
+                    "Submissions": []}]
+        with mock.patch.object(inject_sync.quotient_api, "qget",
+                               return_value=SimpleNamespace(stdout=json.dumps(payload))), \
+                mock.patch.object(inject_sync.quotient_api, "jar_path",
+                                  return_value=Path("/tmp/j.jar")):
+            return inject_sync.inject_brief({"RUN_DIR": "/tmp"}, "team1")
+
+    def test_an_overdue_inject_says_so_and_stays_urgent(self):
+        # 33 minutes overdue used to render "due in 207min" (the local reading, hours
+        # ahead) and never entered the urgent branch.
+        text = self._brief(-33, 15)
+        self.assertIn("OVERDUE by 33min", text)
+        self.assertIn("OPEN (overdue)", text)
+        self.assertIn("TASK #1", text)
+
+    def test_a_closed_inject_is_not_urgent(self):
+        text = self._brief(-60, -30)
+        self.assertIn("closed", text)
+        self.assertIn("CLOSED (missed)", text)
+        self.assertNotIn("TASK #1", text)

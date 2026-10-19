@@ -45,7 +45,8 @@ def _scp_files(ssh, remote, dest_dir, timeout=120):
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     user, host, common, jump = _ssh_options(ssh)
-    before = {p.name for p in dest_dir.iterdir() if p.is_file()}
+    before = {p.name: (p.stat().st_mtime_ns, p.stat().st_size)
+              for p in dest_dir.iterdir() if p.is_file()}
     last_error = ""
     routes = ([], (["-o", jump] if jump else []))
     for round_no in (1, 2):
@@ -56,13 +57,23 @@ def _scp_files(ssh, remote, dest_dir, timeout=120):
             except subprocess.TimeoutExpired:
                 last_error = f"scp timed out after {timeout}s"
                 continue
-            fetched = [p for p in dest_dir.iterdir() if p.is_file() and p.name not in before]
+            changed = [p for p in dest_dir.iterdir() if p.is_file()
+                       and before.get(p.name) != (p.stat().st_mtime_ns, p.stat().st_size)]
             lowered = (proc.stderr or proc.stdout or "").lower()
-            if proc.returncode == 0 and fetched:
-                for path in fetched:
-                    os.chmod(path, 0o600)
-                return sorted(fetched)
-            for path in fetched:
+            if proc.returncode == 0:
+                # rc=0 is the truth. A destination that already existed (the harness
+                # pulled it before teardown) is overwritten in place, so "no NEW names"
+                # is not a failure — that reading recorded a present report as unreachable.
+                if not changed and not any(ch in remote for ch in "*?["):
+                    cand = dest_dir / Path(remote).name
+                    if cand.is_file():
+                        changed = [cand]
+                if changed:
+                    for path in changed:
+                        os.chmod(path, 0o600)
+                    return sorted(changed)
+                raise FileNotFoundError(f"{remote} on {host}")
+            for path in changed:
                 path.unlink(missing_ok=True)
             last_error = (proc.stderr or proc.stdout or "").strip()
             if "no such file" in lowered or "not found" in lowered:

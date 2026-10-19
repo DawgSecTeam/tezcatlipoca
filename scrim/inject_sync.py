@@ -94,22 +94,40 @@ def inject_brief(creds, team):
     now = time.time()
     lines = []
 
-    def due_in_min(due):
+    def minutes_until(stamp):
         try:
-            naive = time.strptime(due[:19], "%Y-%m-%dT%H:%M:%S")
+            naive = time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")
         except ValueError:
             return None
-        for cand in (calendar.timegm(naive) - now, time.mktime(naive) - now):
-            if -15 * 60 <= cand <= 12 * 3600:
-                return cand / 60
-        return None
+        # The engine writes UTC; a naive local timestamp is the only other reading.
+        # Taking the first plausible one read an inject 33 minutes overdue as
+        # "due in 207min" (the local reading, hours ahead) and hid the miss.
+        cands = [c for c in (calendar.timegm(naive) - now, time.mktime(naive) - now)
+                 if -12 * 3600 <= c <= 12 * 3600]
+        return min(cands, key=abs) / 60 if cands else None
 
     for i in sorted(injects, key=lambda x: x.get("DueTime") or ""):
         subs = len(i.get("Submissions") or [])
-        due_in = due_in_min(i.get("DueTime") or "")
-        when = f"due in {due_in:.0f}min" if due_in is not None else f"due {(i.get('DueTime') or '')[11:16]}"
-        state = "submitted ✓" if subs else "OPEN"
-        urgent = (not subs) and due_in is not None and 0 <= due_in <= 30
+        due_in = minutes_until(i.get("DueTime") or "")
+        close_in = minutes_until(i.get("CloseTime") or "")
+        closed = close_in is not None and close_in < 0
+        if subs:
+            state = "submitted ✓"
+        elif closed:
+            state = "CLOSED (missed)"
+        elif due_in is not None and due_in < 0:
+            state = "OPEN (overdue)"
+        else:
+            state = "OPEN"
+        if closed:
+            when = "closed"
+        elif due_in is None:
+            when = f"due {(i.get('DueTime') or '')[11:16]}"
+        elif due_in < 0:
+            when = f"OVERDUE by {-due_in:.0f}min"
+        else:
+            when = f"due in {due_in:.0f}min"
+        urgent = (not subs) and not closed and due_in is not None and due_in <= 30
         lines.append(f"  #{i.get('ID')} {i.get('Title')} — {when} — {state}"
                      + ("  << TASK #1: submit before close" if urgent else ""))
     return "\n".join(lines)

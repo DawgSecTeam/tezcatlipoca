@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -128,7 +129,15 @@ def creds_from_files(comp):
     }
 
 
+def set_red_clock(args):
+    # red's pushed clock is this run's event window; the deploy child inherits the env.
+    minutes = getattr(args, "duration_min", None)
+    if minutes:
+        os.environ["TEZ_TLALOC_DURATION_MIN"] = str(int(minutes))
+
+
 def stage_deploy(args, comp):
+    set_red_clock(args)
     # --comp-dir is the whole point of the dashboard's per-run workspace: the comp lives OUTSIDE
     # the engine tree there, so a bare `--competition <dir name>` resolved under the comps root,
     # found nothing, and scaffolded a NEW competition called "comp" instead of reusing this one

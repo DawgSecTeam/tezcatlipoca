@@ -15,6 +15,7 @@ from scrim import fire_test
 from scrim import procs
 from scrim import red_link
 from scrim import red_tunnel
+from scrim import staging
 from scrim import test_folder
 from scrim.core import log
 from multinode.placement_record import read_placement
@@ -143,6 +144,7 @@ class _PipelineCtx:
 def stage_red(args, comp, creds, run_dir):
     """Deploy red01 + its C2 + the day-0 seed, then prove red can act."""
     from red import tlaloc_ops
+    staging.set_red_clock(args)
     _resolve_red_vmid(args, comp)
     # The placement is authoritative once written; passing it avoids re-reading and re-selecting.
     _resolve_red_ip(args, comp, read_placement(comp))
