@@ -38,6 +38,7 @@ from redeploy import redeploy_reset_ops  # noqa: E402
 from redeploy.redeploy_context import RedeployContext  # noqa: E402
 
 from common.constants import ownership_tags  # noqa: E402
+from common import pam_bundle  # noqa: E402
 from infra.ownership import clone_marker  # noqa: E402
 
 LINUX_BOX = {"name": "web01", "template": "ubuntu-2204-web", "cpu": 2, "memory_mb": 2048}
@@ -74,7 +75,7 @@ def _rctx(ctx=None, node="pve", comp_dir=None, state=None, teams=None, boxes=Non
 
 class LadderTests(unittest.TestCase):
     def _run(self, targets, snapshots, verdicts, rollback_ok=None, rebuild_ok=None,
-             rollback_raise_on=(), probe_calls=None):
+             rollback_raise_on=(), probe_calls=None, comp_dir=None, patch_capture=True):
         calls = {"rollback": [], "rebuild": [], "probe": [], "prepare": 0}
 
         def fake_rollback(batch, _rctx, snapshot, _cfg, _bundle, reconfigure=False):
@@ -105,16 +106,21 @@ class LadderTests(unittest.TestCase):
             calls["prepare"] += 1
             return ("cfg", "bundle")
 
-        with patch.object(redeploy_reset_ops, "mode_rollback", side_effect=fake_rollback), \
+        # The PAM capture resolves the run's artifact folder and reaches the guest agent; a
+        # ladder test that stubs a pam-trap verdict must touch neither.
+        capture_patch = (patch.object(redeploy_reset_ops, "_capture_pam_bundle")
+                         if patch_capture else nullcontext())
+        with capture_patch, \
+             patch.object(redeploy_reset_ops, "mode_rollback", side_effect=fake_rollback), \
              patch.object(redeploy_reset_ops, "mode_rebuild", side_effect=fake_rebuild), \
              patch.object(redeploy_reset_ops, "probe_box_health", side_effect=fake_probe), \
              patch.object(redeploy_reset_ops, "list_snapshots", side_effect=fake_snaps), \
              patch.object(redeploy_reset_ops, "prepare_nakon_assets", side_effect=fake_prepare), \
              patch.object(redeploy_reset_ops, "scored_ports_for", return_value={}):
             # mode_reset returns (fixed, levels); the ladder tests assert on `fixed`.
-            out = redeploy_reset_ops.mode_reset(targets, _rctx(ctx=CTX, comp_dir=Path("competitions/x"),
-                                                          state={"box_password": "pw"}, boxes=[],
-                                                          difficulty="easy"))[0]
+            out = redeploy_reset_ops.mode_reset(targets, _rctx(
+                ctx=CTX, comp_dir=comp_dir or Path("competitions/x"),
+                state={"box_password": "pw"}, boxes=[], difficulty="easy"))[0]
         if probe_calls is not None:
             self.assertEqual(calls["probe"], probe_calls)
         return out, calls
@@ -187,6 +193,43 @@ class LadderTests(unittest.TestCase):
         verdicts = {T1["vm_name"]: [("unhealthy", "a")] * 3}
         with self.assertRaises(SystemExit):
             self._run([T1], {T1["vmid"]: ["tz-base", "tz-ready"]}, verdicts)
+
+
+# The ladder may be the only place the trap is ever seen: capture the live disk's evidence
+# before the next rung replaces it, over the guest agent (SSH is dead), and never let a
+# failed capture change the escalation.
+class PamCaptureHookTests(unittest.TestCase):
+    def _verdicts(self):
+        return {T1["vm_name"]: [("pam-trap", "preauth"), ("healthy", "ports")]}
+
+    def test_pam_trap_captures_a_bundle_before_escalating(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(pam_bundle, "guest_agent_exec_root",
+                          return_value=(0, "section output", "")) as p_exec:
+            out, calls = LadderTests()._run(
+                [T1], {T1["vmid"]: ["tz-base", "tz-ready"]}, self._verdicts(),
+                rollback_ok=[T1["vm_name"]], comp_dir=Path(tmp), patch_capture=False)
+            bundles = list((Path(tmp) / ".automated-tests").rglob("bundle.json"))
+            manifests = [json.loads(p.read_text()) for p in bundles]
+        self.assertEqual(out, [T1])
+        self.assertEqual([c["snapshot"] for c in calls["rollback"]], ["tz-ready", "tz-base"])
+        self.assertEqual(len(manifests), 1)
+        self.assertTrue(p_exec.called)
+        metadata = manifests[0]["metadata"]
+        self.assertEqual(metadata["vmid"], T1["vmid"])
+        self.assertEqual(metadata["team"], "team1")
+        self.assertEqual(metadata["verdict"], "pam-trap")
+
+    def test_a_failed_capture_does_not_change_the_ladder(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(redeploy_reset_ops, "capture_pam_bundle",
+                          side_effect=RuntimeError("guest agent lost")):
+            out, calls = LadderTests()._run(
+                [T1], {T1["vmid"]: ["tz-base", "tz-ready"]}, self._verdicts(),
+                rollback_ok=[T1["vm_name"]], comp_dir=Path(tmp), patch_capture=False)
+        self.assertEqual(out, [T1])
+        self.assertEqual([c["snapshot"] for c in calls["rollback"]], ["tz-ready", "tz-base"])
+        self.assertEqual(calls["rebuild"], [])
 
 
 # PVE rolls a disk back only to its MOST RECENT snapshot (caught live:

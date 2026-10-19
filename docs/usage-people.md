@@ -112,7 +112,7 @@ box login, and the event name are read or minted from the competition dir (`coll
 `credentials.txt` — a stale value elsewhere cannot override them. The box list caps at 10 types
 (`MAX_BOXES_PER_TEAM`); a `disk_gb` below the template's fails the clone (Proxmox can't shrink).
 
-Not in any config file: the Quotient `admin` and `scoring` passwords and the inject/postgres/redis passwords, minted per run into `credentials.txt`. `scoring` is a second admin for automation (unattended verify, harnesses) so scheduled logins don't evict an operator's `admin` session. Boxes are chosen per event: the picker queries tagged templates and saves `boxes.json`, which a reuse replays.
+Not in any config file: the Quotient `admin` and `scoring` passwords and the inject/postgres/redis passwords, minted per run into `credentials.txt`. `scoring` is a second admin for automation (unattended verify, harnesses) — least privilege and a separate audit trail; the old "one session per account" eviction claim did not reproduce on the 2026-10-18 live engine. Boxes are chosen per event: the picker queries tagged templates and saves `boxes.json`, which a reuse replays.
 
 Teams are only counted, not picked: `collect_teams()` names them `team1…`, identifiers `101…`, with fresh passwords every run.
 

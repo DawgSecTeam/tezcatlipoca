@@ -28,6 +28,13 @@ then drive the rest with `type`. Env knobs:
   TEZ_VYOS_STORAGE    disk storage     (default hdd)
   TEZ_VYOS_BRIDGE     NIC bridge       (default vmbr0)
   TEZ_VYOS_PW         the vyos admin password set at install and typed at login
+  TEZ_BUILD_MODE      scratch-VM SSH transport: node (default), operator or direct
+  TEZ_BUILD_OPERATOR_IFACE  operator-mode NIC sharing the scratch bridge's L2
+  TEZ_BUILD_BOOTSTRAP_IP    direct-mode guest address (typed at the console)
+
+The transport flags are also `--mode`, `--operator-iface` and `--bootstrap-ip` after the
+command. Direct mode restores the deploy-contract eth1 address 192.168.1.1/24 at the
+console before `seal`.
 """
 
 import base64
@@ -46,6 +53,7 @@ load_dotenv(".env")
 from net.firewall_ops import generate_vyos_commands, generate_vyos_lan_commands  # noqa: E402
 from infra.client import proxmox_api, wait_for_proxmox_task  # noqa: E402
 from estate import config
+from tools import build_ssh  # noqa: E402
 
 VMID = int((config.active().knobs.vyos_vmid or 959))
 NAME = "vyos-provision"
@@ -56,7 +64,7 @@ ISO_STORAGE = config.active().knobs.vyos_iso_storage
 STORAGE = (config.active().knobs.vyos_storage or "hdd")
 BRIDGE = config.active().knobs.vyos_bridge
 PW = (config.active().knobs.vyos_pw or "tez-vyos-build")
-BOOTSTRAP_LAN = "192.168.1.1"
+BOOTSTRAP_LAN = build_ssh.CONTRACT_IP
 PUBKEY_FILE = Path("proxmox.pub")
 # A throwaway team id for `check` (no collision with anything real; undone before seal)
 CHECK_TID = "200"
@@ -102,25 +110,14 @@ def console_screenshot(out_path):
                           config.require("proxmox.api_token"), node(), VMID, out_path)
 
 
-def _node_ssh(cmd, timeout=30):
-    node_host = config.require("proxmox.endpoint").split("//")[1].split(":")[0]
-    return subprocess.run(
-        ["ssh", "-i", str(Path("proxmox").resolve()), "-o", "BatchMode=yes",
-         "-o", "ConnectTimeout=10", f"root@{node_host}", cmd],
-        capture_output=True, text=True, timeout=timeout)
-
-
 def _guest_argv():
-# SSH argv to the guest through the node (node-side alias on BRIDGE), no remote
-#     command: the CLI session arrives on stdin, forced-PTY (-tt — the 2026.03 CLI ignores
-#     piped stdin without a tty; one-shot `ssh vyos@host 'show ...'` does NOT reach the
-#     CLI on this build).
-    proxy = f"ssh -i {Path('proxmox').resolve()} -o BatchMode=yes -W %h:%p root@{node_host()}"
-    return ["ssh", "-tt", "-i", str(Path("proxmox").resolve()), "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-            # without TERM the CLI throws a "Press RETURN" prompt that eats script lines
-            "-o", "SetEnv=TERM=xterm",
-            "-o", f"ProxyCommand={proxy}", f"vyos@{BOOTSTRAP_LAN}"]
+# SSH argv to the guest over the selected transport, no remote command: the CLI session
+#     arrives on stdin, forced-PTY (-tt — the 2026.03 CLI ignores piped stdin without a
+#     tty; one-shot `ssh vyos@host 'show ...'` does NOT reach the CLI on this build).
+    return build_ssh.guest_argv(
+        build_ssh.options(), node=node_host(), key=Path("proxmox").resolve(), user="vyos",
+        # without TERM the CLI throws a "Press RETURN" prompt that eats script lines
+        extra=("-tt", "-o", "SetEnv=TERM=xterm"))
 
 
 def _strip_ansi(text):
@@ -275,18 +272,20 @@ def reboot_into_disk():
 
 
 def provision():
-# Console-typed bootstrap contract: eth1 = 192.168.1.1/24, SSH on, serial getty,
+# Console-typed bootstrap contract: eth1 = 192.168.1.1/24 (direct mode types the
+#     bootstrapped address instead; `seal` restores the contract), SSH on, serial getty,
 #     deploy key in vyos's config (system_login.py regenerates authorized_keys from the
 #     config at boot — a file-based key is wiped on the first reboot), and NO hw-id pins:
 #     VyOS stamps each configured interface's MAC as `hw-id` and pins the interface NAME
 #     to it at boot, so a clone with fresh MACs gets bumped to eth2/eth3 and the config
 #     fails to apply. Unpinned names assign in PCI order on every clone (live-found
 #     caught live). Assumes the installed system's login prompt.
+    addr = build_ssh.guest_ip(build_ssh.options())
     print("logging in and typing the provision config")
     type_line("vyos", after_s=2)             # login:
     type_line(PW, after_s=3)                 # Password:
     type_line("configure", after_s=2)
-    type_line(f"set interfaces ethernet eth1 address {BOOTSTRAP_LAN}/24", after_s=1)
+    type_line(f"set interfaces ethernet eth1 address {addr}/24", after_s=1)
     type_line("set service ssh port 22", after_s=1)
     type_line("set system console device ttyS0 speed 115200", after_s=1)
     type_line("set system host-name vyos-provision", after_s=1)
@@ -305,28 +304,18 @@ def provision():
     type_line("commit", after_s=4)
     type_line("save", after_s=4)
     type_line("exit", after_s=2)
-    print("typed; verify with `shot`, then `check-key` (needs the node-side alias)")
-
-
-def alias(add=True):
-    verb = "add" if add else "del"
-    r = _node_ssh(f"ip addr {verb} 192.168.1.2/24 dev {BRIDGE} 2>/dev/null; echo done",
-                  timeout=15)
-    if r.returncode != 0:
-        raise SystemExit(f"alias {verb} failed: {r.stderr.strip()[:200]}")
+    print("typed; verify with `shot`, then `check-key` (same transport)")
 
 
 def check_key():
-# Proof the deploy's SSH path works: alias on the node bridge, then the deploy key
-#     answers on the bootstrap address (piped CLI: one-shot commands don't reach it).
-    alias(add=True)
-    try:
+# Proof the deploy's SSH path works: hold the hop alias (node/operator), then the deploy
+#     key answers on the bootstrap address (piped CLI: one-shot commands don't reach it).
+    with build_ssh.aliased(build_ssh.options(), node=node_host(), bridge=BRIDGE,
+                           key=Path("proxmox").resolve()):
         rc, out = _guest_ssh("show version | grep Version\nexit\n", timeout=60)
         print(out.strip()[-400:])
         if rc != 0 or "Version:" not in out:
             raise SystemExit(f"deploy-key CLI session failed rc={rc}: {out.strip()[-300:]}")
-    finally:
-        alias(add=False)
 
 
 def check():
@@ -335,8 +324,9 @@ def check():
 #     commit canary, confirm eth naming, then delete everything pass A created so the
 #     sealed template carries only the bootstrap contract. Pass B is NOT run here — it
 #     moves eth1 off the bootstrap address; its syntax is a subset of pass A's.
-    alias(add=True)
-    try:
+    addr = build_ssh.guest_ip(build_ssh.options())
+    with build_ssh.aliased(build_ssh.options(), node=node_host(), bridge=BRIDGE,
+                           key=Path("proxmox").resolve()):
         rc, eth = _guest_ssh("show interfaces | grep eth\nexit\n", timeout=60)
         for nic in ("eth0", "eth1"):
             if nic not in eth:
@@ -367,23 +357,37 @@ def check():
         rc, out = _guest_ssh(undo, timeout=120)
         if rc != 0 or "vyos-provision" not in out:
             raise SystemExit(f"check cleanup failed (rc={rc}):\n{out[-2000:]}")
-        rc, eth1 = _guest_ssh(f"show interfaces ethernet eth1 | grep {BOOTSTRAP_LAN}\nexit\n",
+        rc, eth1 = _guest_ssh(f"show interfaces ethernet eth1 | grep {addr}\nexit\n",
                               timeout=30)
-        if BOOTSTRAP_LAN not in eth1:
+        if addr not in eth1:
             raise SystemExit(f"eth1 lost its bootstrap address during check:\n{eth1[-1000:]}")
-        print(f"cleanup committed; eth1 still {BOOTSTRAP_LAN} — template state intact")
-    finally:
-        alias(add=False)
+        print(f"cleanup committed; eth1 still {addr} — template state intact")
+
+
+def _restore_contract():
+    # direct mode put the bootstrap address on eth1; the template must boot as
+    # 192.168.1.1 for phase 5.
+    print("restoring the deploy-contract eth1 address at the console")
+    type_line("configure", after_s=2)
+    type_line(f"set interfaces ethernet eth1 address {BOOTSTRAP_LAN}/24", after_s=1)
+    type_line("commit", after_s=4)
+    type_line("save", after_s=4)
+    type_line("exit", after_s=2)
 
 
 def seal():
     n = node()
     st = proxmox_api("GET", f"/nodes/{n}/qemu/{VMID}/status/current")["data"]["status"]
     if st == "running":
+        if build_ssh.options().mode == "direct":
+            _restore_contract()
         # console-typed: `poweroff` asks "Are you sure ...? [y/N]" and the expect-style
         # CLI feeder cannot see a y/N prompt, so answer both lines at the VGA console
         type_line("poweroff", after_s=3)
         type_line("Yes", after_s=2)
+    elif build_ssh.options().mode == "direct":
+        raise SystemExit(f"vmid {VMID} is stopped; direct mode must restore 192.168.1.1/24 "
+                         "at the console before sealing")
     wait_status("stopped", 300, "poweroff after provisioning")
     proxmox_api("PUT", f"/nodes/{n}/qemu/{VMID}/config", data={"tags": "template"})
     up = proxmox_api("POST", f"/nodes/{n}/qemu/{VMID}/template")

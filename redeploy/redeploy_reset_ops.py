@@ -4,6 +4,7 @@ import json
 import time
 
 from common.constants import SNAP_BASE, SNAP_READY
+from common.pam_bundle import capture_pam_bundle
 from infra.guest_exec import wait_for_guest_agent
 from infra.lifecycle import list_snapshots
 from common.ssh_ops import classify_ssh_failure, ssh_on_gateway
@@ -67,6 +68,32 @@ def ports_closed_from_engine(ctx, ip, ports, per_port_timeout=3):
 
 RESET_PROBE_ATTEMPTS = 3
 RESET_PROBE_GAP_S = 20
+# Per-section budget: an agent that dies mid-capture must not hold an escalation for minutes.
+PAM_BUNDLE_TIMEOUT_S = 20
+
+
+def _capture_pam_bundle(comp_dir, node, t, detail, *, run_id=None, teams=None, boxes=None):
+# The reset ladder cannot reproduce the trap on demand, so the live occurrence is the only
+#     evidence: capture it before the next rung destroys the disk. It lands in the run's
+#     artifacts evidence folder (not comp_dir/evidence, which teardown does not archive).
+#     Non-fatal by construction.
+    from artifacts_lib.lifecycle import test_folder_for_teardown
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    try:
+        path, _manifest = test_folder_for_teardown(
+            comp_dir, run_id=run_id, teams=teams, boxes=boxes, node=node,
+            script="redeploy-competition.py")
+        dest = path / "evidence" / "pam-trap" / f"{stamp}-{t['team_key']}-{t['box_name']}"
+        result = capture_pam_bundle(
+            t.get("node") or node, t["vmid"], dest, timeout=PAM_BUNDLE_TIMEOUT_S,
+            metadata={"source": "redeploy --mode reset", "team": t["team_key"],
+                      "box": t["box_name"], "vm_name": t["vm_name"], "verdict": "pam-trap",
+                      "detail": detail})
+    except (Exception, SystemExit) as e:             # noqa: BLE001 - must not change reset
+        print(f"    WARNING: PAM support-bundle capture failed ({type(e).__name__}) — "
+              f"reset continues")
+        return
+    print(f"    PAM support bundle: {dest} ({result['captured']} section(s))")
 
 
 def probe_box_health(ctx, t, ports, node):
@@ -140,6 +167,9 @@ def mode_reset(targets, rctx):
                 levels[t["vm_name"]] = level_label
             elif verdict == "pam-trap":
                 print(f"    {name}: PAM PLANTED-BOX TRAP — {detail}")
+                _capture_pam_bundle(comp_dir, node, t, detail,
+                                    run_id=rctx.state.get("run_id"),
+                                    teams=rctx.teams, boxes=rctx.boxes)
                 escalate.append(t)
             else:
                 print(f"    {name}: unhealthy ({detail})")

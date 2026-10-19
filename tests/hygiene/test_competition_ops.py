@@ -2,7 +2,8 @@
 
 Offline: the HTTP layer is a fake session; the filesystem is a tmpdir comp dir.
 What is pinned: start flips the clock + engine and creates the DEFERRED injects as
-the `scoring` account (never `admin` — one session per account); freeze/resume treat
+the `scoring` account (never `admin` — automation uses its own least-privilege
+identity; same-account eviction did not reproduce); freeze/resume treat
 the engine's stale-transition 400 as "already in state"; end records `ended` only on
 a clean capture+pause; every action logs in as `scoring`.
 """

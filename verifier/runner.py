@@ -78,7 +78,8 @@ def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url):
         base_url, admin_session, teams, args.strict_services, expected_names))
     run.add(isolation.check_isolation(ctx, teams, boxes))
     run.add(firewall.check_firewall_in_path(ctx, comp_dir, teams))
-    run.add(portal.check_portal_gate(ctx, comp_dir, teams, admin_password))
+    run.add(portal.check_portal_gate(ctx, comp_dir, teams, admin_password,
+                                     getattr(args, "portal_concurrency", 1)))
     try:
         run.add(remote_access.check_remote_access(comp_dir, teams, ctx))
     except CheckError as e:

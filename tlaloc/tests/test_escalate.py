@@ -109,6 +109,14 @@ def test_suid_shell_escape_becomes_a_routable_label(tmp_path):
     assert any("one-shot" in n for n in result.data["notes"])
 
 
+def test_an_escape_shell_prefix_keeps_a_multiword_command_together():
+    fh = {"kind": "root", "escalation": "escape:/usr/bin/bash -p -c"}
+    assert root_cmd("mkdir -p /usr/local/lib/x", fh) == \
+        "/usr/bin/bash -p -c 'mkdir -p /usr/local/lib/x'"
+    fh = {"kind": "root", "escalation": "capexec:/usr/lib/.an1d"}
+    assert root_cmd("mkdir -p /x", fh) == "/usr/lib/.an1d mkdir -p /x"
+
+
 def test_a_suid_binary_that_does_not_return_root_is_not_a_label(tmp_path):
     ssh = FakeSSH()
     ssh.on("find / -xdev -perm -4000", out="/usr/bin/bash\n")

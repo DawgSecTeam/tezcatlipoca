@@ -1,9 +1,8 @@
 """Portal logins are Quotient's own logins, read from the event.conf Quotient reads.
 
-The portal never authenticates by logging into Quotient: Quotient allows ONE session per
-account (quotient/setup.py _admin_accounts), so a portal login that did would evict the team's
-scoreboard session. Instead it reads the same /opt/quotient/config/event.conf (mounted
-read-only) and compares against its [[team]] and [[admin]] entries. The file is re-read when its
+The portal never authenticates by logging into Quotient: it reads the same
+/opt/quotient/config/event.conf (mounted read-only), so a portal login cannot touch any
+operator/team session, and compares against its [[team]] and [[admin]] entries. The file is re-read when its
 mtime changes, so a password an operator rotates in Quotient's config is picked up without a
 portal restart.
 

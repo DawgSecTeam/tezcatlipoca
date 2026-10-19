@@ -65,3 +65,20 @@ def round_loop_state(engine_payload, now=None, freshness_seconds=None) -> dict:
 def is_stale(engine_payload, now=None, freshness_seconds=None) -> bool:
     return round_loop_state(engine_payload, now=now,
                             freshness_seconds=freshness_seconds)["state"] == STALE
+
+
+# The two POSTs verify's --fix-round-loop has always issued, in order.
+HEAL_POSTS = (("/api/competition/start", {"started": True}),
+              ("/api/engine/pause", {"pause": False}))
+
+
+def heal_actions(engine_payload, now=None):
+    """The POST actions that restart a stale loop; [] unless it is stale AND started.
+
+    An unstarted competition (pre-T0 hold) and a deliberate pause are never resurrected:
+    the classifier already separates a real current round from the reboot signature."""
+    if not isinstance(engine_payload, dict) or not engine_payload.get("competition_started"):
+        return []
+    if round_loop_state(engine_payload, now=now)["state"] != STALE:
+        return []
+    return list(HEAL_POSTS)

@@ -4,7 +4,7 @@ Blue teams log in with their **Quotient team credentials** and get a **browser c
 VM's own screen, through Proxmox) on each of their team's boxes. Opt-in per competition, deployed
 on the scoring engine, non-fatal to the deploy: a portal that can't start is recorded as a
 degradation and the range carries on, but verify's `degradations` gate reports it as a failure.
-Unproven paths: [known-issues.md](known-issues.md).
+Remaining unproven paths (tunnel, multi-node, gate-open): [known-issues.md](known-issues.md).
 
 ## Turning it on
 
@@ -150,13 +150,15 @@ ssh -i proxmox -L 8443:127.0.0.1:8443 <vm_user>@<engine_ip>    # then http://127
   copies it to `competitions/<id>/portal-access.log`, and artifact collection carries it into
   `.automated-tests/<run-id>/`.
 
-**After a box rebuild**: Proxmox's destroy path removes that VM's ACL entries, so re-apply:
+**After a box rebuild**: Proxmox's VM-destroy path removes that VM's ACL entries, so re-apply:
 
 ```bash
 python3 portal-access.py <comp> resync
 ```
 
-PUTs are idempotent. If it reports a token was re-created, re-run
+Confirmed live 2026-10-18 (portal-smoke): rebuilding `team1/lnx01` removed exactly
+`/vms/<that vmid>` while the other three ACLs stayed; `resync` put all four back and reused
+the recorded token. PUTs are idempotent. If it reports a token was re-created, re-run
 `create-competition.py --competition <comp> --from-phase 8 --yes` so the engine's `portal.json`
 picks up the new secret.
 
@@ -204,5 +206,22 @@ noVNC release tarball's integrity hash; it doesn't check the copies for drift.
 `verify-competition.py` runs the `portal` gate when the Compfile enables it, probing the engine's
 `127.0.0.1` listener the way cloudflared reaches it: health; a team login sees exactly its own
 boxes; the gate (423 while closed); a cross-team console request refused (403); an admin login;
-per node, one console relayed far enough to read the `RFB 003.` greeting; that relay id refused on
-reuse. Offline coverage: `tests/portal/test_portal_*.py`, `tests/portal/test_pve_console_ops.py`.
+per node in `portal.json`'s `nodes`, one console relayed far enough to read the `RFB 003.`
+greeting (a node with no box sample is a named FAIL); that relay id refused on reuse.
+
+When `portal.json` has a `public_host` (the tunnel started), the probe also goes through
+`https://<public_host>` from the engine: public `/healthz`, a team login, and one admin console
+relay. A broken tunnel is a FAIL row, not a crash; with no tunnel there is no tunnel row.
+
+`--portal-concurrency N` (default 1) opens up to N console relays at once, across team boxes, so
+`pveproxy` is exercised at event-size concurrency instead of one console at a time. The default
+keeps the normal verify's sequential per-node pass. Live 2026-10-18 (portal-smoke, single node,
+2 teams × 2 boxes): `--portal-concurrency 4` opened all four relays (each `101` + `RFB 003.008`),
+the gate stayed closed (`423`), cross-team was refused (`403`), relay IDs were single-use, the
+rebuild drill removed/reapplied only the rebuilt VM's ACL, and a full destroy removed
+`tezcon-<comp>-<engine-run-id>@pve` and every ACL on the node. A second one-box run proved the
+gate-open path (`open: True`, team gate `200`, console relay). A third one-box run proved the
+public Cloudflare path through a quick tunnel: `tunnel healthz 200`, `tunnel team login 200`, and
+a tunnel console relay (`wss 101` + `RFB 003.008`). The deploy-side named-tunnel start (token +
+hostname/ownership) and multi-node remain unproven. Offline coverage:
+`tests/portal/test_portal_*.py`, `tests/portal/test_pve_console_ops.py`.

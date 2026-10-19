@@ -32,6 +32,9 @@ username = "sysadmin"
 # Static mgmt IP for the engine; empty keeps the built-in default (constants.py).
 # mgmt_ip = "10.0.0.250"
 # mgmt_gw = "10.0.0.1"
+# Band automatic selection scans when no address is set (START-END; empty keeps the
+# built-in 10.0.0.251-10.0.0.254). Only used when every running guest answers its agent.
+# mgmt_ip_band = "10.0.0.251-10.0.0.254"
 
 # Multi-node: nodes.json references each host's API token BY ENV-VAR NAME, so give each
 # additional host its own variable and point the record at it. See docs/multi-node.md.

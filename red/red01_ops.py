@@ -380,11 +380,19 @@ def firewall_script(*, team_identifiers, callback_port, callback_host="",
         port = int(callback_port)
         for dst in dnat_destinations(team_identifiers, callback_host):
             for proto in ("tcp", "udp"):
+                # Docker publishes Quotient on 0.0.0.0:80 and inserts its own
+                # `-m addrtype --dst-type LOCAL -j DOCKER` jump at PREROUTING 1; an appended
+                # DNAT rule is shadowed and the team gateway:80 reaches the scoreboard, not
+                # red01. Keep ours at position 1 (re-insert after a Docker restart).
+                rule = (f"-d {dst}/32 -p {proto} -m {proto} --dport {port} "
+                        f"-j DNAT --to-destination {red_ip}:{port}")
                 lines += [
-                    f"iptables -t nat -C PREROUTING -p {proto} -d {dst} --dport {port} "
-                    f"-j DNAT --to-destination {red_ip}:{port} 2>/dev/null || "
-                    f"iptables -t nat -A PREROUTING -p {proto} -d {dst} --dport {port} "
-                    f"-j DNAT --to-destination {red_ip}:{port}",
+                    f"if ! iptables -t nat -S PREROUTING | grep '^-A' | head -1 | "
+                    f"grep -q -- '{rule}'; then "
+                    f"while iptables -t nat -D PREROUTING -p {proto} -d {dst} --dport {port} "
+                    f"-j DNAT --to-destination {red_ip}:{port} 2>/dev/null; do :; done; "
+                    f"iptables -t nat -I PREROUTING 1 -p {proto} -d {dst} --dport {port} "
+                    f"-j DNAT --to-destination {red_ip}:{port}; fi",
                     f"iptables -C FORWARD -p {proto} -d {red_ip} --dport {port} -j ACCEPT "
                     f"2>/dev/null || iptables -I FORWARD 1 -p {proto} -d {red_ip} "
                     f"--dport {port} -j ACCEPT",

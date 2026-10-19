@@ -127,9 +127,10 @@ def expected_service_names(box_services: dict, boxes: list) -> set:
     return names
 
 
-# Quotient allows ONE session per account: a scheduled login on `admin` would kill the
-# operator's/harness's cookie, so automation gets the separate `scoring` account (optional —
-# a caller without a scoring password gets the single `admin` entry)
+# `scoring` is automation-only: least privilege and a separate audit trail. The old
+# one-session-per-account rationale was NOT reproduced on the 2026-10-18 live engine
+# (a second same-account login left the first cookie valid), so it is not the reason.
+# Optional — a caller without a scoring password gets the single `admin` entry.
 def _admin_accounts(ctx):
     accounts = [{"name": "admin", "pw": ctx["quotient_admin_password"]}]
     scoring_pw = ctx.get("quotient_scoring_password")
@@ -156,12 +157,11 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
             "Jitter": 10,
             "Points": 5,
         },
-        # TWO admin accounts, deliberately . Quotient allows ONE session per
-        # account: a second login on the same account kills the first cookie. `scoring` is
-        # for automation that has to authenticate on its own schedule — the round-loop
-        # watchdog, an unattended verify — so it can never evict the operator's or the
-        # harness's `admin` session. Its password is minted per competition like every
-        # other secret (never a fixed literal) and lands in credentials.txt.
+        # TWO admin accounts, deliberately: `scoring` is for automation that
+        # authenticates on its own schedule (round-loop watchdog, unattended verify).
+        # The 2026-10-18 live probe did NOT reproduce same-account eviction, so the
+        # rationale is least privilege and a clean audit trail, not avoiding eviction.
+        # Its password is minted per competition like every other secret.
         "admin": _admin_accounts(ctx),
         "team":  [
             {"name": team_key, "pw": passwords[team_key]}
@@ -298,8 +298,8 @@ def engine_paused(host: str, ctx: dict):
 
 
 # a resume re-runs safely (dedup on titles), so the deploy only records injects_created
-# when nothing failed. username defaults to the operator's `admin`; automation that
-# must not evict that session (competition-ops start) passes the `scoring` account.
+# when nothing failed. username defaults to the operator's `admin`; automation passes the
+# `scoring` account for least privilege (same-account eviction did not reproduce live).
 def create_injects(host: str, admin_password: str, injects: list, username: str = "admin") -> tuple:
     if not injects:
         return 0, []

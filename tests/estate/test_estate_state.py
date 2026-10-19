@@ -133,6 +133,22 @@ class TheDocumentIsTheOnlyWriter(unittest.TestCase):
         self.assertEqual(document.section("teardown")["done"], {"red01": {}})
 
 
+    def test_a_red_identity_write_survives_the_deploy_state_save(self):
+        # record_identity() writes `red` straight to the file while the deploy context holds
+        # its own document copy; the final save used to drop it, so teardown skipped red01.
+        from deploy_lib.context import DeployContext
+        from red import red01_ops
+
+        ctx = DeployContext(comp_dir=self.comp)
+        ctx.document()
+        red01_ops.record_identity(self.comp, None, vmid=1671, ip="10.0.0.195",
+                                  node="proxmox")
+        ctx.state["last_phase"] = 7
+        ctx.save_state()
+
+        self.assertEqual(state.EstateState.load(self.comp).data["red"],
+                         {"vmid": 1671, "ip": "10.0.0.195", "node": "proxmox"})
+
     def test_a_placement_write_survives_the_deploy_state_save(self):
         # The planner writes `placement` straight to the file while the deploy context holds
         # its own copy of the document from load_prior_deploy_state, so saving that copy back

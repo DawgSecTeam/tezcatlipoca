@@ -186,6 +186,36 @@ def _convert_goldens(node, targets, ownership_tag_str, golden_hashes):
             raise r
 
 
+def set_fedora_selinux_permissive(targets, ctx):
+# Fedora's qemu-guest-agent domain is confined while SELinux enforces (dnf/systemctl denied),
+# so make the golden permissive before it is sealed. The SSH channel lands unconfined, which
+# is also why this runs before the agent-dependent setup. Debian/Ubuntu are left alone.
+    fedora = [t for t in targets if "fedora" in t["box"]["template"].lower()]
+    if not fedora:
+        return
+    print(f"  Setting SELinux permissive on {len(fedora)} Fedora golden box(es)...")
+    cmd = ("sudo sed -i 's/^SELINUX=.*/SELINUX=permissive/' /etc/selinux/config && "
+           "grep -q '^SELINUX=permissive' /etc/selinux/config && "
+           "(sudo setenforce 0 2>/dev/null || true) && getenforce")
+
+    def _one(t):
+        r = ssh_via_gateway(ctx, t["ip"], cmd, timeout=120,
+                            user=ctx.get("box_username", "ubuntu"))
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"could not set SELinux permissive on Fedora golden {t['vm_name']} "
+                f"({t['ip']}): rc={r.returncode} "
+                f"{(r.stderr or r.stdout or '').strip()[:160]}")
+        with PRINT_LOCK:
+            print(f"    {t['vm_name']}: /etc/selinux/config SELINUX=permissive "
+                  f"(current: {(r.stdout or '').strip()})")
+
+    results = run_concurrent(fedora, _one, max_workers=4)
+    for _t, r in zip(fedora, results):
+        if isinstance(r, Exception):
+            raise r
+
+
 def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_password,
                      golden_config_path, key, scoring_user, scoring_ip, jobs=1,
                      golden_hashes=None, unbooted=frozenset(),
@@ -304,6 +334,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
 
     wait_for_boxes_ssh(ctx, work, timeout=300)
     wait_for_cloud_init(ctx, work, timeout=240)
+    set_fedora_selinux_permissive(linux_targets, ctx)
     setup_ubuntu_auth(linux_targets, ctx)
     if linux_targets:
         print("  Expanding guest root filesystems (LVM layouts need pvresize+lvextend)...")

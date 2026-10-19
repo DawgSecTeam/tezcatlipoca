@@ -21,8 +21,9 @@ import requests
 from config.config_ops import write_text_atomic
 
 
-# Quotient allows ONE session per account, so the shared login uses the `scoring` automation
-# account: a lifecycle or capture login on `admin` would evict the operator's browser session.
+# The shared login uses the `scoring` automation account for least privilege and a clean
+# audit trail. A 2026-10-18 live probe did NOT reproduce same-account cookie eviction, so
+# avoiding eviction is no longer the stated reason.
 def login_scoring(base_url, password):
     session = requests.Session()
     r = session.post(f"{base_url}/api/login",

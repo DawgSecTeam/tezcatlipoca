@@ -96,9 +96,13 @@ def can_root(fh):
 
 
 def root_cmd(cmd, fh):
-    """Wrap a command for the foothold's escalation label. Escape wrappers
-    break on arbitrary quoting — free-form commands must not ride them (the
-    improvise effect runs free-form unprivileged or via sudo, per label)."""
+    """Wrap a command for the foothold's escalation label.
+
+    A shell prefix ends in `-c` and takes its command as ONE quoted argument; a
+    bare binary prefix takes it as argv. Free-form text still does not ride
+    these labels (improvise runs unprivileged or via sudo) — this is only about
+    keeping the routed command intact.
+    """
     if fh.get("windows"):
         return cmd  # SYSTEM label is not routable; admin rides the session
     # A multi-line shell script cannot ride a bare prefix (`sudo -n if ...` is a
@@ -113,6 +117,8 @@ def root_cmd(cmd, fh):
         return f"echo '{pw}' | sudo -S -p '' {cmd}"
     if esc.startswith("escape:") or esc.startswith("capexec:"):
         wrapper = esc.split(":", 1)[1]
+        if wrapper.endswith(" -c"):
+            return f"{wrapper} {shlex.quote(cmd)}"
         return f"{wrapper} {cmd}"
     if fh.get("kind") == "root":
         return cmd

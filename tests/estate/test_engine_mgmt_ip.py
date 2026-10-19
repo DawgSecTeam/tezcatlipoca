@@ -53,14 +53,19 @@ class _Cluster:
                               for ip in self.answers.get(vmid, [])]}]}}
 
 
-def _gate(vms, api, ip, engine_vmid=2400, node="proxmox", ours_tags=None, explicit=None):
+def _gate(vms, api, ip, engine_vmid=2400, node="proxmox", ours_tags=None, explicit=None,
+          auto=False):
     # A previous test may have activated a per-node override on the process config.
     from estate import config
     config.reset()
     env = dict(os.environ)
     env.pop("TEZ_ENGINE_MGMT_IP", None)
+    env.pop("TEZ_ENGINE_MGMT_IP_IS_DEFAULT", None)
+    env.pop("TEZ_ENGINE_MGMT_IP_IS_AUTO_SELECTED", None)
     if explicit is not None:
         env["TEZ_ENGINE_MGMT_IP"] = explicit
+    if auto:
+        env["TEZ_ENGINE_MGMT_IP_IS_AUTO_SELECTED"] = "1"
     with patch.object(preflight_mgmt_ip, "proxmox_api", api), patch.dict(os.environ, env, clear=True):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             preflight_mgmt_ip.engine_mgmt_ip_gate(node, vms, engine_vmid, ip, ours_tags=ours_tags)
@@ -99,6 +104,71 @@ class UnverifiableIsNotFree(unittest.TestCase):
         self.assertIn("TEZ_ENGINE_MGMT_IP", message)      # names the remedy
 
 
+
+
+class EngineIpSelection(unittest.TestCase):
+# The engine band's unattended selector mirrors red01's: lowest address nobody answers or
+# claims, and NO selection at all while a running guest cannot be asked.
+
+    def setUp(self):
+        from estate import config
+        config.reset()
+        config.active().activate({"engine.mgmt_ip_band": ""})
+        self.addCleanup(config.reset)
+
+    def _config(self):
+        from estate import config
+        return config.active()
+
+    def _select(self, vms, api, claimed=(), skip=(), ours=None):
+        with patch.object(preflight_mgmt_ip, "proxmox_api", api):
+            return preflight_mgmt_ip.select_engine_ip(vms, claimed, skip, ours)
+
+    def test_skips_claimed_and_agent_reported_addresses(self):
+        vms = [_vm(1100, "pve", "squatter")]
+        api = _Cluster({1100: ["10.0.0.251", "10.0.0.252"]})
+        ip, unchecked = self._select(vms, api, claimed={"10.0.0.253"})
+        self.assertEqual(ip, "10.0.0.254")
+        self.assertEqual(unchecked, [])
+
+    def test_no_selection_when_a_running_guest_is_unverifiable(self):
+        vms = [_vm(1100, "pve", "agentless")]
+        ip, unchecked = self._select(vms, _Cluster({}, agentless=[1100]))
+        self.assertIsNone(ip)
+        self.assertEqual(len(unchecked), 1)
+        self.assertIn("1100", unchecked[0])
+
+    def test_two_concurrent_runs_get_distinct_addresses(self):
+        api = _Cluster({})
+        first, _ = self._select([], api)
+        second, _ = self._select([], api, claimed={first})
+        self.assertEqual((first, second), ("10.0.0.251", "10.0.0.252"))
+
+    def test_default_and_red01_addresses_are_excluded_even_in_an_override(self):
+        config = self._config()
+        config.activate({"engine.mgmt_ip_band": "10.0.0.240-10.0.0.251"})
+        ip, unchecked = self._select([], _Cluster({}))
+        self.assertEqual(ip, "10.0.0.251")
+        self.assertEqual(unchecked, [])
+
+
+class AutoSelectedIsNotAnOperatorPin(unittest.TestCase):
+# An auto-selected address was proven free when chosen, but it is not an operator pin:
+# an incomplete gate scan must still refuse it.
+
+    def test_auto_selected_ip_is_refused_when_a_guest_is_unverifiable(self):
+        vms = [_vm(1100, "pve", "quotient-engine")]
+        with self.assertRaises(SystemExit) as ctx:
+            _gate(vms, _Cluster({}, agentless=[1100]), "10.0.0.251",
+                  explicit="10.0.0.251", auto=True)
+        self.assertIn("cannot verify", str(ctx.exception))
+
+    def test_operator_pin_still_warns_and_proceeds(self):
+        vms = [_vm(1100, "pve", "quotient-engine")]
+        out = _gate(vms, _Cluster({}, agentless=[1100]), "10.0.0.251",
+                    explicit="10.0.0.251")
+        self.assertIn("UNVERIFIED", out)
+        self.assertIn("set explicitly", out)
 
 
 class SelfCollisionsAreNotForeign(unittest.TestCase):

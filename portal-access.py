@@ -10,9 +10,9 @@ Team consoles stay closed (HTTP 423) until access is opened; admins always bypas
 white-team view in the portal flips the same switch (docs/portal.md).
 
 `resync` re-applies this run's console-token ACLs (one per team VM). Proxmox's VM-destroy path
-removes that VM's ACL entries (not yet observed on this estate — confirm on the first rebuild
-drill), so a box rebuilt by redeploy-competition.py can lose its console until this (or a
-re-run of phase 8) puts the ACL back. The PUTs are idempotent, so running it needlessly is
+removes that VM's ACL entries (confirmed live 2026-10-18: a rebuilt box lost exactly its own
+`/vms/<vmid>` ACL while the others stayed), so a box rebuilt by redeploy-competition.py can
+lose its console until this (or a re-run of phase 8) puts the ACL back. The PUTs are idempotent, so running it needlessly is
 harmless."""
 
 import argparse

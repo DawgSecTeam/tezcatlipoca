@@ -23,6 +23,7 @@ _SPEC = {
     "engine.username": "sysadmin",
     "engine.mgmt_ip": "",
     "engine.mgmt_gw": "",
+    "engine.mgmt_ip_band": "",
     "headscale.url": "",
     "headscale.ssh_host": "",
     "headscale.ssh_user": "",
@@ -60,6 +61,9 @@ _SPEC = {
     "knobs.vyos_storage": "",
     "knobs.vyos_bridge": "vmbr0",
     "knobs.vyos_pw": "",
+    "knobs.build_mode": "node",
+    "knobs.build_operator_iface": "",
+    "knobs.build_bootstrap_ip": "",
 }
 
 _TRUE = ("1", "true", "yes", "on")

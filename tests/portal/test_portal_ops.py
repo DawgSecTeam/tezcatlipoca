@@ -1,8 +1,12 @@
 """Portal deploy side (portal_ops): portal.json, tunnel ownership, bundle, phase-8 hook."""
 
+import base64
 import contextlib
 import io
 import json
+import re
+import socket
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -37,6 +41,9 @@ def _targets():
 NODES = {"pve": {"pve_node": "proxmox", "endpoint": "https://203.0.113.10:8006",
                  "token_env": "T", "tls_fingerprint": "", "vmids": []}}
 TOKENS = {"pve": {"user": "u@pve", "token_id": "u@pve!portal", "secret": "s3"}}
+
+PROBE_TEAMS = {"team1": {"identifier": "101", "password": "pw1"},
+               "team2": {"identifier": "102", "password": "pw2"}}
 
 
 def _config(**kw):
@@ -95,6 +102,134 @@ class TunnelDecision(unittest.TestCase):
         verdict, why = portal_ops.tunnel_decision("h", "c", "r", "t", fetch=lambda u: theirs)
         self.assertEqual(verdict, "skip")
         self.assertIn("other", why)
+
+
+def _probe_config(nodes=("pve-a", "pve-b"), public_host=""):
+    return {"comp": "probe", "public_host": public_host, "nodes": {n: {} for n in nodes},
+            "teams": {"team1": {"boxes": [{"name": "web01", "node": "pve-a"},
+                                          {"name": "web02", "node": "pve-a"},
+                                          {"name": "db01", "node": "pve-b"}]},
+                      "team2": {"boxes": [{"name": "fw01", "node": "pve-a"}]}}}
+
+
+class ProbeArgs(unittest.TestCase):
+    def test_public_host_is_carried_only_when_the_tunnel_is_up(self):
+        self.assertEqual(
+            portal_ops.check_args("probe", PROBE_TEAMS, "admin",
+                                  _probe_config(public_host="portal.example"))["public_host"],
+            "portal.example")
+        self.assertEqual(portal_ops.check_args("probe", PROBE_TEAMS, "admin",
+                                               _probe_config())["public_host"], "")
+
+    def test_every_node_contributes_a_sample(self):
+        args = portal_ops.check_args("probe", PROBE_TEAMS, "admin", _probe_config())
+        self.assertEqual({s["node"] for s in args["node_samples"]}, {"pve-a", "pve-b"})
+        self.assertEqual(args["missing_nodes"], [])
+        self.assertEqual(len(args["relay_targets"]), 2)  # default 1: per-node pass unchanged
+
+    def test_a_node_without_a_box_is_reported_not_skipped(self):
+        args = portal_ops.check_args("probe", PROBE_TEAMS, "admin",
+                                     _probe_config(nodes=("pve-a", "pve-b", "pve-c")))
+        self.assertEqual(args["missing_nodes"], ["pve-c"])
+
+    def test_concurrency_adds_boxes_up_to_n(self):
+        args = portal_ops.check_args("probe", PROBE_TEAMS, "admin", _probe_config(),
+                                     concurrency=3)
+        self.assertEqual(args["concurrency"], 3)
+        self.assertEqual(len(args["relay_targets"]), 3)
+        self.assertEqual({s["node"] for s in args["node_samples"]}, {"pve-a", "pve-b"})
+        self.assertEqual(len({(t["team"], t["box"]) for t in args["relay_targets"]}), 3)
+
+
+class CheckPortalArgs(unittest.TestCase):
+    def _args_sent(self, config, **kw):
+        seen = {}
+
+        def run_engine(cmd):
+            seen["cmd"] = cmd
+            return 0, "[]"
+
+        self.assertEqual(portal_ops.check_portal(run_engine, "probe", PROBE_TEAMS,
+                                                 "admin", config, **kw), [])
+        blob = re.search(r"tez-portal-check\.py (\S+);", seen["cmd"]).group(1)
+        return json.loads(base64.b64decode(blob))
+
+    def test_script_gets_public_host_and_concurrency(self):
+        args = self._args_sent(_probe_config(public_host="portal.example"), concurrency=4)
+        self.assertEqual((args["public_host"], args["concurrency"]), ("portal.example", 4))
+        args = self._args_sent(_probe_config())
+        self.assertEqual((args["public_host"], args["concurrency"]), ("", 1))
+
+    def test_cli_exposes_the_concurrency_knob(self):
+        from verifier.cli import build_parser
+
+        self.assertEqual(build_parser().parse_args(["comp"]).portal_concurrency, 1)
+        self.assertEqual(
+            build_parser().parse_args(["comp", "--portal-concurrency", "8"]).portal_concurrency,
+            8)
+
+    def test_gate_forwards_concurrency_to_the_probe(self):
+        from verifier import portal as v_portal
+
+        with tempfile.TemporaryDirectory() as tmp:
+            comp_dir = Path(tmp)
+            (comp_dir / "Compfile").write_text("portal 1\n")
+            (comp_dir / "portal.json").write_text("{}")
+            seen = {}
+
+            def fake_check(*a, **kw):
+                seen.update(kw)
+                return []
+
+            with patch.object(v_portal, "portal_enabled", return_value=True), \
+                    patch.object(v_portal, "check_portal", side_effect=fake_check):
+                result = v_portal.check_portal_gate(None, comp_dir, {}, "pw", concurrency=7)
+        self.assertEqual(seen["concurrency"], 7)
+        self.assertTrue(result.passed)
+
+
+class ProbeScript(unittest.TestCase):
+    """Drive the generated engine probe against a refused loopback port (no live portal)."""
+
+    def _refused_port(self):
+        s = socket.socket()
+        self.addCleanup(s.close)
+        s.bind(("127.0.0.1", 0))  # bound, never listening: connect is refused immediately
+        return s.getsockname()[1]
+
+    def _args(self, **kw):
+        args = {"comp": "probe", "port": self._refused_port(),
+                "teams": [{"team": "team1", "password": "pw", "boxes": ["web01"]}],
+                "admin_password": "admin", "public_host": "", "node_samples": [],
+                "relay_targets": [], "missing_nodes": [], "concurrency": 1}
+        args.update(kw)
+        return args
+
+    def _run(self, args):
+        blob = base64.b64encode(json.dumps(args).encode()).decode()
+        proc = subprocess.run([sys.executable, "-c", portal_ops._CHECK_SCRIPT, blob],
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+
+    def test_no_tunnel_means_no_tunnel_rows(self):
+        rows = self._run(self._args())
+        self.assertIn("healthz", [r["check"] for r in rows])
+        self.assertFalse([r for r in rows if r["check"].startswith("tunnel")])
+
+    def test_a_broken_tunnel_is_fail_rows_not_a_crash(self):
+        args = self._args(public_host=f"127.0.0.1:{self._refused_port()}",
+                          relay_targets=[{"node": "pve-a", "team": "team1", "box": "web01"}])
+        tunnel = [r for r in self._run(args) if r["check"].startswith("tunnel")]
+        self.assertEqual([r["check"] for r in tunnel],
+                         ["tunnel healthz", "tunnel team login", "tunnel console relay"])
+        self.assertFalse(any(r["ok"] for r in tunnel))
+
+    def test_a_node_without_a_sample_is_a_named_fail_row(self):
+        rows = self._run(self._args(missing_nodes=["pve-c"]))
+        row = next(r for r in rows if r["check"] == "console pve-c")
+        self.assertFalse(row["ok"])
+        self.assertIn("pve-c", row["detail"])
 
 
 class Bundle(unittest.TestCase):

@@ -31,6 +31,12 @@ def persist_state(ctx):
     placement = estate_state.EstateState.load(ctx.comp_dir).data.get("placement")
     if placement is not None:
         document.data["placement"] = placement
+    # Same lost-update hazard for red01: record_identity() writes the `red` section after
+    # this context loaded its document copy, and the final save dropped it — teardown then
+    # said "this run recorded no red01" and only the tag sweep removed the VM.
+    red = estate_state.EstateState.load(ctx.comp_dir).data.get("red")
+    if red:
+        document.data["red"] = red
     document.save()
 
 @dataclass
@@ -74,9 +80,9 @@ class DeployContext:
     teams: dict = field(default_factory=dict)
     number_of_teams: int = 0
     admin_password: str = ""
-    # A SECOND admin account, for automation only — see build_event_conf. Quotient
-    # allows one session per ACCOUNT, so a watchdog that logs in as `scoring` cannot
-    # evict the operator's/harness's `admin` cookie.
+    # A SECOND admin account, for automation only — see build_event_conf. The
+    # one-session-per-account claim did not reproduce on the 2026-10-18 live engine;
+    # `scoring` stays for least privilege and a separate audit trail.
     scoring_password: str = ""
     postgres_password: str = ""
     redis_password: str = ""

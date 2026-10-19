@@ -78,6 +78,28 @@ def test_loop_runs_cycles_through_the_gate_and_writes_reports(tmp_path):
     assert "Restore table" in Path(reports["report"]).read_text()
 
 
+def test_pressure_budget_falls_through_a_refused_candidate(tmp_path):
+    """A protected candidate must not absorb the budget (live: ssh did every cycle)."""
+    from tlaloc.decide import Decision
+    from tlaloc.policy import make_candidate
+    ctx, policy, decider = live_ctx(tmp_path)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    ssh_candidate = make_candidate("takedown", {"ip": "192.168.1.10",
+                                                 "service": "ssh", "mode": "stop"},
+                                   99, "our own access path")
+    nginx_candidate = make_candidate("takedown", {"ip": "192.168.1.10",
+                                                   "service": "nginx", "mode": "stop"},
+                                     50, "a scored service")
+    loop = Loop(ctx, policy=policy, decider=decider, sensors=ctx.sensors,
+                sleeper=lambda _s: None)
+    extra = loop._extra_pressure(1, [ssh_candidate, nginx_candidate],
+                                 Decision("next_effect", "hold"))
+    assert [holder.chosen["params"]["service"] for holder in extra] == ["nginx"]
+    kinds = [event["kind"] for event in ctx.log.read()]
+    assert "pressure_candidate_rejected" in kinds
+
+
 def test_loop_halts_on_the_kill_switch(tmp_path):
     ctx, policy, decider = live_ctx(tmp_path, ssh=scripted_takedown_ssh())
     ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root")
@@ -173,6 +195,12 @@ def _fake_effects():
         effect.calls = []
         made[effect_id] = effect
     return made
+
+
+def test_seed_off_reports_zero_steps_for_the_cli(tmp_path):
+    ctx, _policy, _decider = live_ctx(tmp_path, breach="off")
+    outcome = seed_mod.seed_range(ctx)
+    assert outcome["mode"] == "off" and outcome["steps"] == 0
 
 
 def test_seed_full_walks_every_stage_and_writes_the_manifest(tmp_path):

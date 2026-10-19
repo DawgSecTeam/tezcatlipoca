@@ -37,9 +37,9 @@ def write_credentials_file(ctx):
         cred_lines.append(f"Portal:  {portal.get('portal_url')}  (team + admin logins "
                           "above; team consoles open when an admin opens access)")
     if ctx.scoring_password:
-        cred_lines.append("# automation account: a SECOND admin, so a scheduled login "
-                          "(round-loop watchdog, unattended verify) never evicts the "
-                          "operator's admin session — Quotient allows one per account")
+        cred_lines.append("# automation account: a SECOND admin for scheduled logins "
+                          "(round-loop watchdog, unattended verify) — least privilege "
+                          "and a separate audit trail")
         cred_lines.append(f"scoring  {ctx.scoring_password}")
     if ctx.packet_pw:
         cred_lines.append("# box credentials below are the packet-published defaults "

@@ -10,7 +10,7 @@ from verifier import context
 from verifier.model import CheckError, gate_fail, gate_pass, gate_skip
 
 
-def check_portal_gate(ctx, comp_dir, teams, admin_password):
+def check_portal_gate(ctx, comp_dir, teams, admin_password, concurrency=1):
 # GateResult: SKIP when the comp runs no portal; FAIL on any failed probe row; SKIP when the
 #     engine can't be reached (an unrun check is not a pass).
     if not portal_enabled(comp_dir):
@@ -32,7 +32,7 @@ def check_portal_gate(ctx, comp_dir, teams, admin_password):
 
     try:
         rows = check_portal(run_engine, competition_name(comp_dir), teams, admin_password,
-                            config)
+                            config, concurrency=concurrency)
     except CheckError as e:
         print(f"  SKIP  — could not reach the engine to probe the portal ({e})")
         return gate_skip("portal", "engine unreachable")

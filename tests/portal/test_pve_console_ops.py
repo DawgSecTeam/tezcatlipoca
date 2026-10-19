@@ -32,6 +32,7 @@ class FakePVE:
         self.users = {u: {} for u in (users or [])}
         self.acls = set()
         self.calls = []
+        self.user_deletes = []
         self.n = 0
 
     def __call__(self, endpoint, token, method, path, **kw):
@@ -73,6 +74,7 @@ class FakePVE:
             return {"data": {"value": toks[tid], "full-tokenid": f"{user}!{tid}"}}
         if method == "DELETE" and path.startswith("/access/users/"):
             user = path.rsplit("/", 1)[-1]
+            self.user_deletes.append((endpoint, user))
             if user not in self.users:
                 raise _err(500, f"delete user failed: user '{user}' does not exist")
             del self.users[user]
@@ -84,6 +86,12 @@ class FakePVE:
 NODES = {"pve": {"pve_node": "proxmox", "endpoint": "https://203.0.113.10:8006",
                  "token_env": "TOK", "tls_fingerprint": "", "vmids": [1210, 1211, 1220]}}
 ENV = {"TOK": "deploy@pam!x=y"}
+NODES_MULTI = {
+    "a": {"pve_node": "proxmox", "endpoint": "https://a:8006", "token_env": "TA",
+          "tls_fingerprint": "", "vmids": [1210]},
+    "b": {"pve_node": "proxmox", "endpoint": "https://b:8006", "token_env": "TB",
+          "tls_fingerprint": "", "vmids": [1220]}}
+ENV_MULTI = {"TA": "deploy@pam!a=b", "TB": "deploy@pam!c=d"}
 USER = "tezcon-probe-run-abc@pve"
 
 
@@ -104,6 +112,17 @@ class Mint(unittest.TestCase):
                                             env=ENV)
         self.assertEqual(second["pve"]["secret"], first["pve"]["secret"])
         self.assertEqual(pve.n, 1)  # no second token creation
+
+    def test_reapplying_acls_after_a_box_rebuild_is_idempotent(self):
+        pve = FakePVE()
+        first, _ = pco.mint_console_tokens("probe", "run-abc", NODES, api=pve, env=ENV)
+        pve.acls.clear()  # a rebuilt VM comes back without its ACLs
+        second, _ = pco.mint_console_tokens("probe", "run-abc", NODES, previous=first, api=pve,
+                                            env=ENV)
+        self.assertEqual(second["pve"]["secret"], first["pve"]["secret"])
+        self.assertEqual(pve.n, 1)
+        self.assertEqual(pve.acls,
+                         {(f"/vms/{v}", "TezConsole", USER) for v in (1210, 1211, 1220)})
 
 
     def test_missing_privileges_degrade_without_touching_access(self):
@@ -130,6 +149,21 @@ class Revoke(unittest.TestCase):
     def test_already_absent_is_clean(self):
         self.assertEqual(pco.revoke_console_tokens("probe", "run-abc", NODES, api=FakePVE(),
                                                    env=ENV), [])
+
+    def test_revokes_the_exact_user_on_every_node(self):
+        pve = FakePVE()
+        pco.mint_console_tokens("probe", "run-abc", NODES_MULTI, api=pve, env=ENV_MULTI)
+        self.assertEqual(pco.revoke_console_tokens("probe", "run-abc", NODES_MULTI, api=pve,
+                                                   env=ENV_MULTI), [])
+        self.assertEqual(sorted(pve.user_deletes),
+                         [("https://a:8006", USER), ("https://b:8006", USER)])
+
+    def test_an_absent_user_is_clean_on_every_node(self):
+        pve = FakePVE()
+        self.assertEqual(pco.revoke_console_tokens("probe", "run-abc", NODES_MULTI, api=pve,
+                                                   env=ENV_MULTI), [])
+        self.assertEqual(sorted(pve.user_deletes),
+                         [("https://a:8006", USER), ("https://b:8006", USER)])
 
 
 

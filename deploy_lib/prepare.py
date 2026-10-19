@@ -1,5 +1,7 @@
 """prepare(): everything deploy() must do before phase 1, as one ordered, testable step."""
 
+import os
+
 from config.config_prompts import confirm_deploy
 
 from deploy_lib.configs import generate_stage_configs_and_hashes
@@ -13,6 +15,23 @@ from deploy_lib.targets import enumerate_deploy_targets
 from deploy_lib.estate_inputs import build_estate_inputs, engine_mgmt_ip_from_env
 
 
+def _select_engine_mgmt_ip(ctx):
+# Scan every hosting node the placement covers; skip this run's own engine/jumps and claim
+#     the gateway + jump addresses so an auto-selected engine never takes one of them.
+    from infra import collisions
+    from common.constants import DEFAULT_ENGINE_MGMT_GW
+    from estate import config
+    claimed = {config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW}
+    skip = {ctx.engine_vmid}
+    nodes = [config.active().proxmox.node]
+    if ctx.placement:
+        nodes = [rec["node"] for rec in ctx.placement["nodes"].values()]
+        claimed |= {s["jump_mgmt_ip"] for s in ctx.placement.get("satellites") or []}
+        skip |= {s["jump_vmid"] for s in ctx.placement.get("satellites") or []}
+    return collisions.select_engine_ip(
+        collisions.scan_vms_for(nodes), claimed, skip, ctx.comp_tags)
+
+
 def _resolve_engine_mgmt_ip(ctx, override):
 # The engine's management address, resolved once: the flag, else the engine node record's,
 #     else the profile's, else the marked default. The record used to be applied AFTER
@@ -21,7 +40,21 @@ def _resolve_engine_mgmt_ip(ctx, override):
     from estate import config
     from multinode.placement_record import engine_record
     record = engine_record(ctx.placement) if ctx.placement else None
-    ip = engine_mgmt_ip_from_env(override or (record.engine_mgmt_ip if record else ""))
+    recorded = ((record.engine_mgmt_ip if record else "")
+                or ((ctx.placement or {}).get("engine_mgmt_ip") or ""))
+    ip = override or recorded
+    # Auto-select only on a fresh deploy where nobody chose an address. An incomplete
+    # agent scan makes every candidate a guess, so the default is kept and the preflight
+    # refuses (the decision beside ENGINE_MGMT_BAND).
+    if (override is None and not recorded and not ctx.resuming
+            and not config.active().is_set("engine.mgmt_ip")):
+        selected, _unchecked = _select_engine_mgmt_ip(ctx)
+        if selected:
+            ip = selected
+            # Marked so engine_mgmt_ip_gate cannot read this as an operator pin.
+            os.environ["TEZ_ENGINE_MGMT_IP_IS_AUTO_SELECTED"] = "1"
+            print(f"  Engine mgmt IP: {selected} (auto-selected — agent scan complete)")
+    ip = engine_mgmt_ip_from_env(ip)
     gw = (config.active().engine.mgmt_gw or (record.engine_mgmt_gw if record else "")
           or DEFAULT_ENGINE_MGMT_GW)
     config.active().activate({"engine.mgmt_gw": gw})

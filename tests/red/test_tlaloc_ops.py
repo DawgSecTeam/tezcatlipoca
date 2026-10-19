@@ -219,6 +219,7 @@ class PlantTests(unittest.TestCase):
             "stage_red01": {"return_value": {"ok": True}},
             "push_config": {"return_value": {"ok": True}},
             "install_unit": {"return_value": {"ok": True}},
+            "start_unit": {"return_value": {"ok": True}},
             "verify_config_contract": verify_config_contract or {"return_value": {"ok": True}},
             "seed_via_red01": seed_via_red01 or {"return_value": {"ok": True}},
             "pull_manifest": {"return_value": {
@@ -245,6 +246,17 @@ class PlantTests(unittest.TestCase):
         manifest.write_text(json.dumps(
             {"boxes": {"192.168.101.2": {"stages": [{"stage": "access"}]}}}))
 
+    def test_assume_breach_off_skips_the_seed_and_manifest(self):
+        self.comp = compfile(self.tmp.name + "off", "red.assume_breach off\nred.c2 off\n"
+                                    "red.clef_url http://clef.test\n")
+        self.ctx = FakeCtx(self.comp)
+        self._patch()
+        out = to.plant_assume_breach(self.ctx, ssh_key="/k", runner=self.runner)
+        to.seed_via_red01.assert_not_called()
+        to.pull_manifest.assert_not_called()
+        to.start_unit.assert_called_once()
+        self.assertIsNone(out["manifest"])
+
     def test_it_provisions_red01_and_records_the_identity(self):
         self._patch()
         out = to.plant_assume_breach(self.ctx, ssh_key="/k", runner=self.runner)
@@ -262,6 +274,7 @@ class PlantTests(unittest.TestCase):
         to.stage_red01.assert_called_once()
         to.push_config.assert_called_once()
         to.seed_via_red01.assert_called_once()
+        to.start_unit.assert_called_once()
 
     def test_an_invalid_red_block_fails_before_anything_is_created(self):
         comp = compfile(self.tmp.name + "bad", "red.assume_breach maybe\n")
@@ -358,6 +371,55 @@ class PlantTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"TEZ_TLALOC_DURATION_MIN": "480"}):
             block = to.red_block(self.comp)
         self.assertEqual(float(block["duration_min"]), 480.0)
+class PayloadManifestGuardTests(unittest.TestCase):
+    """A C2-enabled stage must not silently ship an empty payload matrix."""
+
+    def test_c2_enabled_with_no_manifest_names_comp_prep(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = compfile(tmp)
+            with self.assertRaises(RuntimeError) as cm:
+                to.stage_red01("/k", "10.0.0.241", comp, c2=True)
+        self.assertIn("comp-prep", str(cm.exception))
+        self.assertIn("tlaloc c2-prep", str(cm.exception))
+
+    def test_an_empty_manifest_is_not_a_staged_channel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = compfile(tmp)
+            payloads = comp / "red" / "payloads"
+            payloads.mkdir(parents=True)
+            (payloads / "manifest.json").write_text(json.dumps({"boxes": {}}))
+            with self.assertRaises(RuntimeError) as cm:
+                to.stage_red01("/k", "10.0.0.241", comp, c2=True)
+        self.assertIn("lists no boxes", str(cm.exception))
+        self.assertIn("comp-prep", str(cm.exception))
+
+    def test_a_missing_referenced_payload_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = compfile(tmp)
+            payloads = comp / "red" / "payloads"
+            payloads.mkdir(parents=True)
+            (payloads / "manifest.json").write_text(json.dumps(
+                {"boxes": {"web01-1:http": {"file": "web01-1-http.bin"}}}))
+            with self.assertRaises(RuntimeError) as cm:
+                to.stage_red01("/k", "10.0.0.241", comp, c2=True)
+        self.assertIn("web01-1-http.bin", str(cm.exception))
+        self.assertIn("comp-prep", str(cm.exception))
+
+    def test_a_complete_manifest_is_accepted_and_staged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = compfile(tmp)
+            payloads = comp / "red" / "payloads"
+            payloads.mkdir(parents=True)
+            (payloads / "web01-1-http.bin").write_bytes(b"\x7fELF")
+            (payloads / "manifest.json").write_text(json.dumps(
+                {"boxes": {"web01-1:http": {"file": "web01-1-http.bin"}}}))
+            runner = mock.Mock(return_value=Completed(0))
+            with mock.patch.object(to.subprocess, "run",
+                                   return_value=Completed(0, b"")):
+                out = to.stage_red01("/k", "10.0.0.241", comp, runner=runner,
+                                     c2=True)
+        self.assertTrue(out["ok"])
+        self.assertTrue(runner.called)
 
 
 class VerdictTests(unittest.TestCase):

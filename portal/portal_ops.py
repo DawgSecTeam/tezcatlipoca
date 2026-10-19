@@ -2,8 +2,8 @@
 
 The portal itself (portal/) is a FastAPI app the engine runs as a second docker compose project
 at /opt/tez-portal, next to Quotient. Students log in with their Quotient team credentials (read
-from Quotient's own event.conf — never by logging into Quotient, which allows one session per
-account) and get a Proxmox web console on their team's boxes. docs/portal.md is the design doc.
+from Quotient's own event.conf, never by logging into Quotient) and get a Proxmox web
+console on their team's boxes. docs/portal.md is the design doc.
 
 Opt-in: Compfile `portal 1`. Everything here is NON-FATAL to the deploy — a portal that cannot
 start records a degradation and the range is still a range.
@@ -312,21 +312,23 @@ def access_state(tf_ctx):
 # Runs ON the engine (stdlib only — the engine's python3 has no websockets/requests), against
 # the portal's 127.0.0.1 listener. Prints one JSON list of {check, ok, detail}.
 _CHECK_SCRIPT = r'''
-import base64, json, os, socket, sys, urllib.error, urllib.request
+import base64, json, os, socket, ssl, sys, threading, urllib.error, urllib.request
 A = json.loads(base64.b64decode(sys.argv[1]))
 PORT = A["port"]
 BASE = f"http://127.0.0.1:{PORT}"
+PUBLIC = f"https://{A['public_host']}" if A.get("public_host") else ""
 out = []
 def rec(check, ok, detail=""):
     out.append({"check": check, "ok": bool(ok), "detail": str(detail)[:200]})
-def req(path, body=None, cookie=None):
+def req(path, body=None, cookie=None, base=None):
     data = None if body is None else json.dumps(body).encode()
-    r = urllib.request.Request(BASE + path, data=data, method="GET" if body is None else "POST")
-    if body is not None:
-        r.add_header("Content-Type", "application/json")
-    if cookie:
-        r.add_header("Cookie", cookie)
     try:
+        r = urllib.request.Request((base or BASE) + path, data=data,
+                                   method="GET" if body is None else "POST")
+        if body is not None:
+            r.add_header("Content-Type", "application/json")
+        if cookie:
+            r.add_header("Cookie", cookie)
         with urllib.request.urlopen(r, timeout=30) as resp:
             return resp.status, resp.headers, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as e:
@@ -335,13 +337,19 @@ def req(path, body=None, cookie=None):
         except ValueError:
             payload = {}
         return e.code, e.headers, payload
-def login(user, pw):
-    st, h, _ = req("/api/login", {"username": user, "password": pw, "display": "verify"})
+    except (OSError, ValueError) as e:
+        return 0, {}, {"detail": str(e)}
+def login(user, pw, base=None):
+    st, h, _ = req("/api/login", {"username": user, "password": pw, "display": "verify"},
+                   base=base)
     return st, (h.get("Set-Cookie", "").split(";", 1)[0] if st == 200 else None)
-def ws_greeting(path, cookie):
-    s = socket.create_connection(("127.0.0.1", PORT), timeout=20)
+def ws_greeting(path, cookie, host="127.0.0.1", port=PORT, tls=False):
+    s = socket.create_connection((host, port), timeout=20)
+    if tls:
+        s = ssl.create_default_context().wrap_socket(s, server_hostname=host)
     key = base64.b64encode(os.urandom(16)).decode()
-    s.sendall((f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\nUpgrade: websocket\r\n"
+    host_header = host if port == 443 else f"{host}:{port}"
+    s.sendall((f"GET {path} HTTP/1.1\r\nHost: {host_header}\r\nUpgrade: websocket\r\n"
                f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
                f"Sec-WebSocket-Protocol: binary\r\nCookie: {cookie}\r\n\r\n").encode())
     buf = b""
@@ -372,8 +380,34 @@ def ws_greeting(path, cookie):
 st, _, hz = req("/healthz")
 rec("healthz", st == 200 and hz.get("comp") == A["comp"], f"{st} {hz}")
 gate_open = bool(hz.get("open"))
+for node in A.get("missing_nodes") or []:
+    rec(f"console {node}", False, f"no team box sample on node {node}")
 teams = A["teams"]
 first = teams[0]
+if PUBLIC:
+    st, _, pub_hz = req("/healthz", base=PUBLIC)
+    rec("tunnel healthz", st == 200 and pub_hz.get("comp") == A["comp"], f"{st} {pub_hz}")
+    st, _ = login(first["team"], first["password"], base=PUBLIC)
+    rec("tunnel team login", st == 200, f"{first['team']} via {A['public_host']}: HTTP {st}")
+    target = (A.get("relay_targets") or [None])[0]
+    if target:
+        st, pub_admin = login("admin", A["admin_password"], base=PUBLIC)
+        if st != 200:
+            rec("tunnel console relay", False, f"admin login HTTP {st}")
+        else:
+            st, _, minted = req("/api/console", {"team": target["team"], "box": target["box"]},
+                                cookie=pub_admin, base=PUBLIC)
+            if st != 200:
+                rec("tunnel console relay", False, f"mint HTTP {st} {minted.get('detail', '')}")
+            else:
+                try:
+                    ws_status, greeting = ws_greeting(minted["ws_path"], pub_admin,
+                                                      host=A["public_host"], port=443, tls=True)
+                    detail = f"wss {ws_status} greeting {greeting[:12]!r}"
+                except OSError as e:
+                    ws_status, greeting, detail = "error", b"", f"relay: {e}"
+                rec("tunnel console relay",
+                    ws_status == "101" and greeting.startswith(b"RFB 003."), detail)
 st, team_cookie = login(first["team"], first["password"])
 rec("team login", st == 200, f"{first['team']}: HTTP {st}")
 if team_cookie:
@@ -391,50 +425,87 @@ if team_cookie:
 st, admin_cookie = login("admin", A["admin_password"])
 rec("admin login", st == 200, f"HTTP {st}")
 if admin_cookie:
-    for sample in A["node_samples"]:
-        label = f"console {sample['node']} ({sample['team']}/{sample['box']})"
-        st, _, minted = req("/api/console", {"team": sample["team"], "box": sample["box"]},
+    targets = A.get("relay_targets") or []
+    probes = {}
+    def probe(target):
+        label = f"console {target['node']} ({target['team']}/{target['box']})"
+        st, _, minted = req("/api/console", {"team": target["team"], "box": target["box"]},
                             cookie=admin_cookie)
         if st != 200:
-            rec(label, False, f"mint HTTP {st} {minted.get('detail', '')}")
-            continue
+            probes[label] = (None, False, f"mint HTTP {st} {minted.get('detail', '')}")
+            return
         try:
             ws_status, greeting = ws_greeting(minted["ws_path"], admin_cookie)
         except OSError as e:
-            rec(label, False, f"relay: {e}")
-            continue
-        rec(label, ws_status == "101" and greeting.startswith(b"RFB 003."),
-            f"ws {ws_status} greeting {greeting[:12]!r}")
-        try:
-            again, _ = ws_greeting(minted["ws_path"], admin_cookie)
-        except OSError:
-            again = "closed"
-        rec(f"relay id single-use ({sample['node']})", again != "101", f"reuse -> {again}")
+            probes[label] = (None, False, f"relay: {e}")
+            return
+        probes[label] = (minted["ws_path"],
+                         ws_status == "101" and greeting.startswith(b"RFB 003."),
+                         f"ws {ws_status} greeting {greeting[:12]!r}")
+    if A.get("concurrency", 1) > 1 and len(targets) > 1:
+        workers = [threading.Thread(target=probe, args=(t,)) for t in targets]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join()
+    else:
+        for t in targets:
+            probe(t)
+    for t in targets:
+        label = f"console {t['node']} ({t['team']}/{t['box']})"
+        ws_path, ok, detail = probes[label]
+        rec(label, ok, detail)
+        if ws_path:
+            try:
+                again, _ = ws_greeting(ws_path, admin_cookie)
+            except OSError:
+                again = "closed"
+            rec(f"relay id single-use ({t['node']} {t['team']}/{t['box']})",
+                again != "101", f"reuse -> {again}")
 print(json.dumps(out))
 '''
 
 
-def check_args(comp_name, teams, admin_password, portal_config):
+def check_args(comp_name, teams, admin_password, portal_config, concurrency=1):
 # The probe's input: per-team box names (from portal.json, the portal's own view), the
-#     team/admin credentials, and one sample box per console node.
-    t_list = []
-    samples = {}
+#     team/admin credentials, the public host when the tunnel is up, and one sample box per
+#     console node. Every node gets a sample (a node with none is a named FAIL); concurrency
+#     adds boxes beyond the per-node samples so N relays can open at once.
+    nodes = portal_config.get("nodes") or {}
+    t_list, first_box, extras = [], {}, []
     for team_key, data in (portal_config.get("teams") or {}).items():
         names = [b["name"] for b in data["boxes"]]
         t_list.append({"team": team_key, "password": teams[team_key]["password"],
                        "boxes": names})
         for b in data["boxes"]:
-            if b["node"] in (portal_config.get("nodes") or {}) and b["node"] not in samples:
-                samples[b["node"]] = {"node": b["node"], "team": team_key, "box": b["name"]}
+            if b["node"] in nodes:
+                sample = {"node": b["node"], "team": team_key, "box": b["name"]}
+                first_box.setdefault(b["node"], sample)
+                extras.append(sample)
+    samples = list(first_box.values())
+    targets = list(samples)
+    if concurrency > len(targets):
+        seen = {(t["team"], t["box"]) for t in targets}
+        for t in extras:
+            if len(targets) >= concurrency:
+                break
+            if (t["team"], t["box"]) not in seen:
+                targets.append(t)
+                seen.add((t["team"], t["box"]))
     return {"comp": comp_name, "port": LOCAL_PORT, "teams": t_list,
-            "admin_password": admin_password, "node_samples": list(samples.values())}
+            "public_host": portal_config.get("public_host") or "",
+            "admin_password": admin_password, "node_samples": samples,
+            "relay_targets": targets,
+            "missing_nodes": [n for n in nodes if n not in first_box],
+            "concurrency": concurrency}
 
 
-def check_portal(run_engine, comp_name, teams, admin_password, portal_config):
+def check_portal(run_engine, comp_name, teams, admin_password, portal_config, concurrency=1):
 # Run the probe on the engine. `run_engine(cmd) -> (rc, stdout)`. Returns the probe's
 #     result list, or raises RuntimeError when the probe could not run at all.
     args = base64.b64encode(json.dumps(
-        check_args(comp_name, teams, admin_password, portal_config)).encode()).decode()
+        check_args(comp_name, teams, admin_password, portal_config,
+                   concurrency)).encode()).decode()
     script = base64.b64encode(_CHECK_SCRIPT.encode()).decode()
     rc, out = run_engine(f"echo {script} | base64 -d > /tmp/tez-portal-check.py && "
                          f"python3 /tmp/tez-portal-check.py {args}; "

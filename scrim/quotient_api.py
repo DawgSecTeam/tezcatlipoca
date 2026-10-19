@@ -33,8 +33,9 @@ def jar_path(run_dir, account):
 
 
 # one re-entrant lock per Quotient account: the loops refresh per-team jars concurrently
-# and Quotient allows ONE session per account, so two refreshers invalidate each other's
-# cookie in a loop (the documented "three-round scoreboard mystery"). Re-entrant so a
+# and a login MAY invalidate the other refresher's cookie (the 2026-10-18 live probe did
+# not reproduce it; the lock stays so the behavior is safe either way — the documented
+# "three-round scoreboard mystery"). Re-entrant so a
 # helper refreshing while already holding the account lock (qget -> _qlogin) cannot
 # deadlock against itself.
 def jar_lock(account):

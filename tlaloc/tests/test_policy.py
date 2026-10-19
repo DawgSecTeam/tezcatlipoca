@@ -131,6 +131,27 @@ def test_candidates_are_deterministic_and_bounded(tmp_path):
             assert candidate["params"]["mode"] in policy.allowed_impact_modes()
 
 
+def test_pressure_targets_exclude_ssh_by_default(tmp_path):
+    ctx, policy = policy_for(tmp_path, hours=0.25)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    services = {c["params"]["service"] for c in policy.candidates(ctx)
+                if c["effect"] == "takedown"}
+    assert services == {"nginx"}, services
+
+
+def test_pressure_never_offers_ssh_even_when_takedown_is_opted_in(tmp_path):
+    # The effect still honours allow_ssh, but candidate generation never spends
+    # a cycle on red's own access path.
+    ctx, policy = policy_for(tmp_path, hours=0.25)
+    ctx.cfg["effects"]["allow_ssh_takedown"] = True
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    services = {c["params"]["service"] for c in policy.candidates(ctx)
+                if c["effect"] == "takedown"}
+    assert services == {"nginx"}, services
+
+
 def test_candidates_prefer_evicted_boxes_and_replants(tmp_path):
     ctx, policy = policy_for(tmp_path)
     ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",

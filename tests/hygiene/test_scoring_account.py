@@ -1,10 +1,10 @@
 """The dedicated `scoring` automation account.
 
-Why a second admin account exists: Quotient allows **ONE session per
-account** — every login kills that account's previous cookie. Automation that has to
-authenticate on its own schedule (the round-loop watchdog, an unattended verify) would
-therefore evict the operator's or the harness's `admin` session every time it ran. A
-separate account makes the two independent, because the rule is per account.
+Why a second admin account exists: automation that authenticates on its own schedule
+(the round-loop watchdog, an unattended verify) should use its own identity — least
+privilege and a separate audit trail. The old one-session-per-account rationale was
+not reproduced on the 2026-10-18 live engine (a second same-account login left the
+first cookie valid).
 
 `event.conf` seeds accounts as explicit per-role lists, and `inject` was already a
 second account of a different role — the model supports this. The password is minted

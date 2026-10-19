@@ -8,7 +8,7 @@ the full design; the load-bearing rules are:
     every mint resolves the box from the SESSION's team (a team session can never name another
     team), and relay ids are single-use and bound to the minting session.
   - The gate: team consoles stay closed (423) until an admin opens access; admins bypass it.
-  - Never log into Quotient (one session per account) — portal/auth.py reads event.conf.
+  - Never log into Quotient — portal/auth.py reads event.conf, so no session is touched.
 
 Environment (set by portal_ops in /opt/tez-portal/.env and compose.yaml):
   PORTAL_CONFIG      portal.json (boxes, nodes, console tokens)       default /config/portal.json

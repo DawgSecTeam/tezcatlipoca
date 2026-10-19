@@ -40,6 +40,7 @@ INTERNAL_ENV = {
     # Internal handoff within one process: deploy_lib/estate_inputs.py marks its
     # own DEFAULT export so the preflight cannot read it as an operator-set address.
     "TEZ_ENGINE_MGMT_IP_IS_DEFAULT": "deploy_lib/estate_inputs.py default marker (same process)",
+    "TEZ_ENGINE_MGMT_IP_IS_AUTO_SELECTED": "deploy_lib/prepare.py auto-selected marker (same process)",
     "ENGINE_IP": "scrim.env handoff written by run-agent-scrim.py",
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
     "JAR": "scrim.env handoff written by run-agent-scrim.py",

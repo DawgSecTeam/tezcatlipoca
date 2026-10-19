@@ -177,6 +177,75 @@ class PlacementAndLock(unittest.TestCase):
         self.assertEqual(order, [("resolve", 1), ("lock", 1)])
 
 
+class EngineMgmtIpAutoSelection(unittest.TestCase):
+# The engine's management address is selected only on a fresh deploy where neither the
+#     flag, the placement, nor the profile chose one — and never from an incomplete scan.
+
+    ENV = {"TEZ_SSH_PRIVATE_KEY_PATH": "/tmp/key", "TEZ_PROXMOX_NODE": "pve",
+           "TEZ_PROXMOX_ENDPOINT": "https://new:8006/"}
+
+    def _placement(self, engine_mgmt_ip=""):
+        from multinode.nodes_config import NodeRecord
+        record = NodeRecord(name="n1", endpoint="https://n1.lab:8006", node="pve1",
+                            datastore="ds", token_env="TOK",
+                            engine_mgmt_ip=engine_mgmt_ip)
+        return {"version": 2, "engine_vmid": 1234, "engine_node": "n1",
+                "nodes": {"n1": record.to_json()}, "slots": {"n1": 0}}
+
+    def test_prepare_persists_the_auto_selected_ip(self):
+        from deploy_lib.prepare import _record_placement_identities, _resolve_engine_mgmt_ip
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d)
+            ctx = _ctx(comp_dir=comp_dir, engine_vmid=1234,
+                       placement=self._placement())
+            config.reset()
+            self.addCleanup(config.reset)
+            with patch.dict(os.environ, self.ENV, clear=True), \
+                    patch("infra.collisions.scan_vms_for", return_value=[]):
+                ctx.engine_mgmt_ip = _resolve_engine_mgmt_ip(ctx, None)
+                marked = os.environ.get("TEZ_ENGINE_MGMT_IP_IS_AUTO_SELECTED")
+                _record_placement_identities(ctx)
+                dl_estate_inputs.build_estate_inputs(ctx, comp_dir)
+                placement = estate_state.EstateState.load(comp_dir).data["placement"]
+                flat_ip = estate_state.load_flat(comp_dir).get("engine_mgmt_ip")
+        self.assertEqual(ctx.engine_mgmt_ip, "10.0.0.251")
+        self.assertEqual(marked, "1")
+        self.assertEqual(placement["engine_mgmt_ip"], "10.0.0.251")
+        self.assertEqual(flat_ip, "10.0.0.251")
+
+    def test_an_incomplete_scan_keeps_the_default_and_leaves_no_auto_marker(self):
+        from deploy_lib.prepare import _resolve_engine_mgmt_ip
+        vm = {"vmid": 1100, "node": "pve1", "name": "agentless",
+              "status": "running", "template": 0, "tags": ""}
+        with tempfile.TemporaryDirectory() as d:
+            ctx = _ctx(comp_dir=Path(d), engine_vmid=1234,
+                       placement=self._placement())
+            config.reset()
+            self.addCleanup(config.reset)
+            with patch.dict(os.environ, self.ENV, clear=True), \
+                    patch("infra.collisions.scan_vms_for", return_value=[vm]), \
+                    patch("infra.collisions.proxmox_api",
+                          side_effect=RuntimeError("no agent")):
+                ip = _resolve_engine_mgmt_ip(ctx, None)
+                marked = os.environ.get("TEZ_ENGINE_MGMT_IP_IS_AUTO_SELECTED")
+        self.assertEqual(ip, DEFAULT_ENGINE_MGMT_IP)
+        self.assertIsNone(marked)
+
+    def test_a_profile_address_suppresses_selection(self):
+        from deploy_lib.prepare import _resolve_engine_mgmt_ip
+        env = dict(self.ENV, TEZ_ENGINE_MGMT_IP="10.0.0.5")
+        with tempfile.TemporaryDirectory() as d:
+            ctx = _ctx(comp_dir=Path(d), engine_vmid=1234,
+                       placement=self._placement())
+            config.reset()
+            self.addCleanup(config.reset)
+            with patch.dict(os.environ, env, clear=True), \
+                    patch("infra.collisions.select_engine_ip") as select:
+                ip = _resolve_engine_mgmt_ip(ctx, None)
+        self.assertEqual(ip, "10.0.0.5")
+        select.assert_not_called()
+
+
 class GoldenGatePosition(unittest.TestCase):
 # The frozen gate must fire after the hashes, before any Proxmox mutation.
 
@@ -377,6 +446,9 @@ class PrepareSequencer(unittest.TestCase):
                              side_effect=rec("mint")), \
                 dpatch("engine_mgmt_ip_from_env",
                              return_value="10.0.0.250"), \
+                patch("infra.collisions.scan_vms_for", return_value=[]), \
+                patch("infra.collisions.select_engine_ip",
+                      return_value=("10.0.0.251", [])), \
                 dpatch("resolve_placement",
                              side_effect=lambda *a, **k: order.append("resolve")
                              or ({"version": 2, "engine_vmid": 1234, "engine_node": "n1",

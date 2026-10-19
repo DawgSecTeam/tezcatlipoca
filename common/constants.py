@@ -20,6 +20,19 @@ SCORING_ENGINE_VMID = 1000
 DEFAULT_ENGINE_MGMT_IP = "10.0.0.250"
 DEFAULT_ENGINE_MGMT_GW = "10.0.0.1"
 
+# Automatic selection band for the engine's management address: the top four addresses of
+# the /24, immediately above red01's .240-.249 band and the contested .250 default (the live
+# engine has used .252, so the slice is already engine-known). A band lower in the /24 (e.g.
+# .200-.219) shares the general pool, where a physical host or DHCP lease is invisible to the
+# guest-agent scan — the top-of-/24 slice keeps that invisible-collision risk smallest.
+# Selection runs only when the guest-agent scan is COMPLETE (no unverifiable running guest),
+# and the selector also excludes the .250 default, red01's .240-.249 band and the legacy
+# .196-.199 defaults even if a band override spans them. DECISION: an incomplete scan keeps
+# the default and lets the preflight refuse — an unverifiable address is a guess, and a wrong
+# guess collides with a foreign engine. An explicit --engine-mgmt-ip / TEZ_ENGINE_MGMT_IP
+# always wins.
+ENGINE_MGMT_BAND = ("10.0.0.251", "10.0.0.254")
+
 SNAP_BASE = "tz-base"
 SNAP_READY = "tz-ready"
 

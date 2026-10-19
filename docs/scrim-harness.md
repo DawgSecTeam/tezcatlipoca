@@ -37,9 +37,9 @@ Design rules:
 
 ### Quotient sessions
 
-> Questionable: the whole design assumes Quotient allows one session per account; [known-issues.md](known-issues.md) records that this was not reproduced.
+> The 2026-10-18 live probe did not reproduce Quotient's one-session-per-account eviction. The harness still shares one jar per account and avoids ad-hoc logins: that is simpler and works either way.
 
-- Every login kills the account's previous cookie, so nobody logs in ad hoc. `./qlogin` runs only after `{"error":"Forbidden"}`. All clients share one jar per account (blues/monitor `/tmp/jar.team<n>`; capture `evidence/.jar-admin`); the newest login wins, so concurrent refreshes converge without locking.
+- Nobody logs in ad hoc; `./qlogin` runs only after `{"error":"Forbidden"}`. All clients share one jar per account (blues/monitor `/tmp/jar.team<n>`; capture `evidence/.jar-admin`); a re-login is harmless if eviction is not enforced, and still converges if it is.
 - `qget` re-logins into the shared jar and retries once on an error. `score.py` reads the Netscape jar (session cookie on the last non-comment line) and shells out to `./qlogin`; `submit-inject` resubmits after one `./qlogin`.
 - `_team_tid`: the services API keys on the engine's IDs (1, 2, …), not the subnet identifier (101, 102); the latter returns `Forbidden` even with a valid cookie.
 - `parsed_status` raises so callers choose; `status_text` renders a self-diagnosing line (`scoreboard unreachable (TypeName: msg)`).

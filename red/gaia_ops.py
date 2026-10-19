@@ -45,7 +45,10 @@ degradation and the agent runs with `c2.enabled` false — the channel stages th
 skip cleanly (logged) instead of taking down a deploy whose range is healthy.
 """
 
+import contextlib
+import fcntl
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -425,6 +428,28 @@ def checkout_commit(path, runner=None):
     return (getattr(proc, "stdout", "") or "").strip() or None
 
 
+def gaia_lock_path(box_ip):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(box_ip))
+    return Path.home() / ".tezcatlipoca" / "locks" / f"gaia-{safe}.lock"
+
+
+@contextlib.contextmanager
+def mythic_lock(box_ip):
+    """Serialize one C2 box's install/configure sequence across processes.
+
+    flock is released by the kernel on close/exit, so a failed or killed
+    installer cannot leave a stale lock behind.
+    """
+    path = gaia_lock_path(box_ip)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield path
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
                    gaia=None, comp_id=None, operation=None, callback_host=None,
                    callback_port=None, agent_user=AGENT_USER, log=print):
@@ -460,101 +485,108 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
         return result
 
     cwd = str(path)
-    if mythic_answering(box_ip, runner):
-        result["reached"].append("install (already running)")
-        result["gaia_output"]["install"] = "skipped: Mythic answered /health"
-    else:
-        proc = runner(install_argv(path, box_ip, ssh_user, key=ssh_key),
-                      cwd=cwd, timeout=INSTALL_TIMEOUT)
-        result["reached"].append("install")
-        result["gaia_output"]["install"] = _tail(proc, 2000)
-        if getattr(proc, "returncode", 1) != 0:
-            result["degradations"].append(f"gaia install: {_tail(proc)}")
+    # The pre-lock probe is the cheap resume check; the post-lock one is the race
+    # guard: a second process must re-decide after waiting, not install again.
+    answering = mythic_answering(box_ip, runner)
+    with mythic_lock(box_ip):
+        if not answering and mythic_answering(box_ip, runner):
+            answering = True
+        if answering:
+            result["reached"].append("install (already running)")
+            result["gaia_output"]["install"] = "skipped: Mythic answered /health"
+        else:
+            proc = runner(install_argv(path, box_ip, ssh_user, key=ssh_key),
+                          cwd=cwd, timeout=INSTALL_TIMEOUT)
+            result["reached"].append("install")
+            result["gaia_output"]["install"] = _tail(proc, 2000)
+            if getattr(proc, "returncode", 1) != 0:
+                result["degradations"].append(f"gaia install: {_tail(proc)}")
+                return result
+
+        creds = path / "mythic_admin_creds.txt"
+        try:
+            file_password = parse_admin_password(creds.read_text(encoding="utf-8"))
+        except OSError:
+            file_password = None
+
+        # The C2 box's own .env is the authority on its admin password. An install re-run
+        # against a Mythic that already has a database leaves the passwords disagreeing —
+        # and the handoff file lands on THIS host, so it can be the stale one. Live
+        # caught live: `POST /auth` answered 403 "Authentication Failed" for the creds
+        # file's password while the box's MYTHIC_ADMIN_PASSWORD returned 200 + an
+        # access_token, with the whole stack healthy — the step blamed a C2 that worked.
+        candidates = []
+        if file_password:
+            candidates.append(("mythic_admin_creds.txt", file_password))
+        env_password = box_admin_password(box_ip, ssh_user, ssh_key, runner=runner)
+        if env_password and env_password != file_password:
+            candidates.append(("the C2 box's /opt/Mythic/.env", env_password))
+        if not candidates:
+            result["degradations"].append(
+                "no admin password: install left no creds and the box has no "
+                "MYTHIC_ADMIN_PASSWORD")
             return result
 
-    creds = path / "mythic_admin_creds.txt"
-    try:
-        file_password = parse_admin_password(creds.read_text(encoding="utf-8"))
-    except OSError:
-        file_password = None
-
-    # The C2 box's own .env is the authority on its admin password. An install re-run
-    # against a Mythic that already has a database leaves the passwords disagreeing —
-    # and the handoff file lands on THIS host, so it can be the stale one. Live
-    # caught live: `POST /auth` answered 403 "Authentication Failed" for the creds
-    # file's password while the box's MYTHIC_ADMIN_PASSWORD returned 200 + an
-    # access_token, with the whole stack healthy — the step blamed a C2 that worked.
-    candidates = []
-    if file_password:
-        candidates.append(("mythic_admin_creds.txt", file_password))
-    env_password = box_admin_password(box_ip, ssh_user, ssh_key, runner=runner)
-    if env_password and env_password != file_password:
-        candidates.append(("the C2 box's /opt/Mythic/.env", env_password))
-    if not candidates:
-        result["degradations"].append(
-            "no admin password: install left no creds and the box has no "
-            "MYTHIC_ADMIN_PASSWORD")
-        return result
-
-    # AUTH FIRST — this is what unlocks everything after it. `user create` and
-    # `operation create` speak to Mythic through the API key `auth` writes into
-    # Gaia's .env; run either before it and Gaia prints the auth usage and exits
-    # non-zero (caught live: "gaia user create: rver ... -P, --port 7443
-    # ... -u, --user mythic_admin" was that usage dump, not an argument error).
-    authed_with = None
-    for source, candidate in candidates:
-        for attempt in range(AUTH_ATTEMPTS):
-            proc = runner(auth_argv(path, box_ip), cwd=cwd, timeout=SHORT_TIMEOUT,
-                          input=f"{candidate}\n")
-            if getattr(proc, "returncode", 1) == 0:
-                authed_with = (source, candidate)
+        # AUTH FIRST — this is what unlocks everything after it. `user create` and
+        # `operation create` speak to Mythic through the API key `auth` writes into
+        # Gaia's .env; run either before it and Gaia prints the auth usage and exits
+        # non-zero (caught live: "gaia user create: rver ... -P, --port 7443
+        # ... -u, --user mythic_admin" was that usage dump, not an argument error).
+        authed_with = None
+        for source, candidate in candidates:
+            for attempt in range(AUTH_ATTEMPTS):
+                proc = runner(auth_argv(path, box_ip), cwd=cwd, timeout=SHORT_TIMEOUT,
+                              input=f"{candidate}\n")
+                if getattr(proc, "returncode", 1) == 0:
+                    authed_with = (source, candidate)
+                    break
+                if attempt + 1 < AUTH_ATTEMPTS:
+                    time.sleep(AUTH_RETRY_SECONDS)
+            if authed_with:
                 break
-            if attempt + 1 < AUTH_ATTEMPTS:
-                time.sleep(AUTH_RETRY_SECONDS)
-        if authed_with:
-            break
-    result["reached"].append("auth")
-    result["gaia_output"]["auth"] = _tail(proc, 300)
-    if not authed_with:
-        result["degradations"].append(f"gaia auth: {_tail(proc)}")
-    else:
-        result["admin_password"] = authed_with[1]
-        if authed_with[0] != "mythic_admin_creds.txt":
-            result["password_source"] = authed_with[0]
-            # Do not hand the organizer a password the C2 rejects.
-            if rewrite_admin_password(creds, authed_with[1]) and log:
-                log(f"  mythic      : admin password came from {authed_with[0]} — "
-                    f"mythic_admin_creds.txt corrected")
+        result["reached"].append("auth")
+        result["gaia_output"]["auth"] = _tail(proc, 300)
+        if not authed_with:
+            result["degradations"].append(f"gaia auth: {_tail(proc)}")
+        else:
+            result["admin_password"] = authed_with[1]
+            if authed_with[0] != "mythic_admin_creds.txt":
+                result["password_source"] = authed_with[0]
+                # Do not hand the organizer a password the C2 rejects.
+                if rewrite_admin_password(creds, authed_with[1]) and log:
+                    log(f"  mythic      : admin password came from {authed_with[0]} — "
+                        f"mythic_admin_creds.txt corrected")
 
-    # The agent's own account, now that the key exists. Gaia prints
-    # "user:password"; and re-running for a competition that already has it is not
-    # an error (the account exists).
-    proc = runner(user_argv(path, [agent_user]), cwd=cwd, timeout=SHORT_TIMEOUT,
-                  input="")
-    result["reached"].append("user")
-    result["gaia_output"]["user"] = _tail(proc, 300)
-    agent_password = _password_from_creds(getattr(proc, "stdout", ""), agent_user)
-    # The operator's password is what c2-prep (and the agent) authenticate with; an
-    # admin-password stand-in logs in as nobody we created, and surfaced only as a 403
-    # from /auth. Gaia rotates it on every run, so no password means this step failed.
-    if not agent_password:
-        result["degradations"].append(
-            f"gaia user create returned no password for {agent_user}: {_tail(proc)}")
+        # The agent's own account, now that the key exists. Gaia prints
+        # "user:password"; and re-running for a competition that already has it is not
+        # an error (the account exists).
+        proc = runner(user_argv(path, [agent_user]), cwd=cwd, timeout=SHORT_TIMEOUT,
+                      input="")
+        result["reached"].append("user")
+        result["gaia_output"]["user"] = _tail(proc, 300)
+        agent_password = _password_from_creds(getattr(proc, "stdout", ""), agent_user)
+        # The operator's password is what c2-prep (and the agent) authenticate with; an
+        # admin-password stand-in logs in as nobody we created, and surfaced only as a 403
+        # from /auth. Gaia rotates it on every run, so no password means this step failed.
+        if not agent_password:
+            result["degradations"].append(
+                f"gaia user create returned no password for {agent_user}: {_tail(proc)}")
 
-    name = operation or comp_id or comp_dir.name
-    proc = runner(operation_argv(path, name), cwd=cwd, timeout=SHORT_TIMEOUT)
-    result["reached"].append("operation")
-    result["gaia_output"]["operation"] = _tail(proc, 300)
-    if getattr(proc, "returncode", 1) != 0:
-        result["degradations"].append(f"gaia operation create: {_tail(proc)}")
+        name = operation or comp_id or comp_dir.name
+        proc = runner(operation_argv(path, name), cwd=cwd, timeout=SHORT_TIMEOUT)
+        result["reached"].append("operation")
+        result["gaia_output"]["operation"] = _tail(proc, 300)
+        if getattr(proc, "returncode", 1) != 0:
+            result["degradations"].append(f"gaia operation create: {_tail(proc)}")
 
-    # An operator outside the operation sees a Hasura schema without the actions (no
-    # createPayload), which surfaced only as "field not found in mutation_root".
-    proc = runner(assign_argv(path, name, [agent_user]), cwd=cwd, timeout=SHORT_TIMEOUT)
-    result["reached"].append("assign")
-    result["gaia_output"]["assign"] = _tail(proc, 300)
-    if getattr(proc, "returncode", 1) != 0:
-        result["degradations"].append(f"gaia operation assign: {_tail(proc)}")
+        # An operator outside the operation sees a Hasura schema without the actions (no
+        # createPayload), which surfaced only as "field not found in mutation_root".
+        proc = runner(assign_argv(path, name, [agent_user]), cwd=cwd,
+                      timeout=SHORT_TIMEOUT)
+        result["reached"].append("assign")
+        result["gaia_output"]["assign"] = _tail(proc, 300)
+        if getattr(proc, "returncode", 1) != 0:
+            result["degradations"].append(f"gaia operation assign: {_tail(proc)}")
 
     result["api_key"] = parse_env_value(
         _read(path / ".env"), "MYTHIC_API_KEY")

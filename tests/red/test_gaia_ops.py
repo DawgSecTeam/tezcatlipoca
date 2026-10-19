@@ -6,6 +6,7 @@ the callback address the payloads will dial, and the degrade-and-continue
 contract — the parts that go wrong silently on a real deploy.
 """
 
+import contextlib
 import sys
 import tempfile
 import unittest
@@ -70,6 +71,28 @@ class Runner:
         return any(needle in " ".join(c["argv"]) for c in self.calls)
 
 
+class FakeLock:
+    """Stand-in for the per-box flock; records the window the real one would hold."""
+
+    def __init__(self):
+        self.state = {"locked": False, "entered": 0, "exited": 0}
+        self.boxes = []
+
+    def __call__(self, box_ip):
+        return self._hold(box_ip)
+
+    @contextlib.contextmanager
+    def _hold(self, box_ip):
+        self.boxes.append(box_ip)
+        self.state["locked"] = True
+        self.state["entered"] += 1
+        try:
+            yield None
+        finally:
+            self.state["locked"] = False
+            self.state["exited"] += 1
+
+
 class CommandShapeTest(unittest.TestCase):
     def test_install_command_matches_gaia_argparse(self):
         argv = g.install_argv("/tmp/gaia", "10.0.0.198", "sysadmin", key="k.pem")
@@ -85,6 +108,10 @@ class CommandShapeTest(unittest.TestCase):
         assert argv[2:] == ["auth", "-S", "10.0.0.198", "-P", "7443",
                             "-u", "mythic_admin", "-p"]
         assert "-k" not in argv
+
+    def test_the_install_lock_is_per_c2_box(self):
+        assert g.gaia_lock_path("10.0.0.198").name == "gaia-10.0.0.198.lock"
+        assert g.gaia_lock_path("10.0.0.198") != g.gaia_lock_path("10.0.0.199")
 
 
 
@@ -297,3 +324,81 @@ class ResumedInstall(unittest.TestCase):
         self.assertIn("install (already running)", result["reached"])
         self.assertFalse(any(len(c["argv"]) > 2 and c["argv"][1].endswith("gaia.py")
                              and "install" in c["argv"] for c in runner.calls))
+
+
+class LockedPrepareTest(unittest.TestCase):
+    """Two prepare_mythic processes on one C2 box must not race two installs."""
+
+    @staticmethod
+    def _gaia(tmp):
+        comp = comp_dir(tmp, "firewall_dnat 4470->10.0.0.198\n")
+        gaia = Path(tmp) / "gaia"
+        gaia.mkdir()
+        (gaia / "gaia.py").write_text("")
+        (gaia / "requirements.txt").write_text("mythic==0.2.11\n")
+        return comp, gaia
+
+    @staticmethod
+    def _prepare(comp, gaia, runner, lock, answering):
+        with mock.patch.object(g, "mythic_lock", lock), \
+                mock.patch.object(g, "mythic_answering", side_effect=answering):
+            return g.prepare_mythic(comp, box_ip="10.0.0.198", ssh_user="sysadmin",
+                                    ssh_key="/keys/deploy", runner=runner, gaia=gaia,
+                                    callback_host="http://172.31.2.1",
+                                    callback_port=4470, log=None)
+
+    def test_install_auth_user_operation_run_under_the_box_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp, gaia = self._gaia(tmp)
+            lock = FakeLock()
+            locked_at = []
+
+            class LockRecordingRunner(Runner):
+                def __call__(self, argv, **kwargs):
+                    locked_at.append(lock.state["locked"])
+                    return super().__call__(argv, **kwargs)
+
+            runner = LockRecordingRunner(gaia)
+            result = self._prepare(comp, gaia, runner, lock, lambda *a, **k: False)
+        assert result["ok"] is True, result["degradations"]
+        assert lock.state["entered"] == 1 and lock.state["exited"] == 1
+        assert lock.state["locked"] is False
+        assert lock.boxes == ["10.0.0.198"]
+        gaia_calls = [(call, held) for call, held in zip(runner.calls, locked_at)
+                      if len(call["argv"]) > 2
+                      and str(call["argv"][1]).endswith("gaia.py")]
+        assert gaia_calls and all(held for _, held in gaia_calls)
+        assert result["reached"] == ["install", "auth", "user", "operation", "assign"]
+
+    def test_a_second_process_rechecks_health_after_the_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp, gaia = self._gaia(tmp)
+            lock = FakeLock()
+            # the other process's handoff file survives on this host
+            (gaia / "mythic_admin_creds.txt").write_text("mythic_admin:first-pw\n")
+
+            def answering(box_ip, runner):
+                # the first probe (outside the lock) says "not yet"; the re-check
+                # after acquisition sees the process that held the lock finish.
+                return lock.state["locked"]
+
+            runner = Runner(gaia)
+            result = self._prepare(comp, gaia, runner, lock, answering)
+        assert result["ok"] is True, result["degradations"]
+        assert result["reached"][0] == "install (already running)"
+        installs = [c for c in runner.calls
+                    if len(c["argv"]) > 2 and str(c["argv"][1]).endswith("gaia.py")
+                    and c["argv"][2] == "install"]
+        assert not installs, "the second process must not run Gaia install"
+        assert "auth" in result["reached"]
+        assert lock.state["entered"] == 1 and lock.state["exited"] == 1
+        assert lock.state["locked"] is False
+
+    def test_the_lock_is_released_when_the_install_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp, gaia = self._gaia(tmp)
+            lock = FakeLock()
+            result = self._prepare(comp, gaia, Runner(gaia, fail_on="install"),
+                                   lock, lambda *a, **k: False)
+        assert result["ok"] is False
+        assert lock.state["exited"] == 1 and lock.state["locked"] is False

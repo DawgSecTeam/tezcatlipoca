@@ -61,9 +61,10 @@ Last LOG.md lines:
 
 {chr(10).join(scoring)}
 
-SCOREBOARD + INJECTS — Quotient allows ONE session per account, so NEVER log in
-directly (that kills the shared jar's session). Use the shipped helpers — they
-share the jar, re-login on rejection, and resolve the engine's INTERNAL team id
+SCOREBOARD + INJECTS — NEVER log in directly: the shared jar and helpers are the
+only supported path (a direct login may invalidate the shared session; the 2026-10-18
+probe did not reproduce eviction, but the jar is what the harness refreshes). Use the
+shipped helpers — they share the jar, re-login on rejection, and resolve the engine's INTERNAL team id
 themselves ($MY_TID is your SUBNET number; the services API rejects it with
 {{"error":"Forbidden"}} forever — caught live, both teams flew blind
 on it):

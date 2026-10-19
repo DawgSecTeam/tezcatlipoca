@@ -87,6 +87,8 @@ class Rules(unittest.TestCase):
         self.assertIn("--to-destination 10.200.0.10:80", s)
         self.assertIn("PREROUTING -p tcp", s)
         self.assertIn("PREROUTING -p udp", s)
+        self.assertIn("-I PREROUTING 1", s)
+        self.assertNotIn("-A PREROUTING", s)
 
     def test_the_c2_flow_is_exempted_from_the_team_snat(self):
         s = self._script()

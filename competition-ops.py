@@ -10,8 +10,9 @@ and the engine paused. This drives the engine afterwards:
   python3 competition-ops.py end    --comp-dir competitions/<id>
 
 Auth is always the `scoring` automation account (password from the estate state or
-credentials.txt): Quotient allows ONE session per account, and a lifecycle login on
-`admin` would evict the operator's browser session.
+credentials.txt): keep lifecycle automation off the operator's `admin` login for least
+privilege and a separate audit trail. (The old one-session-per-account claim did not
+reproduce on the 2026-10-18 live engine.)
 
 `start` also creates the deferred injects — their open/due/close windows anchor at
 creation time, so creating them at deploy time would open them before T0.

@@ -13,10 +13,14 @@ as NOT paused, the Go zero time in `current_round_time`, and a stale
 working — so an old UP is reported as a live UP.
 """
 
+import base64
+import re
+import subprocess
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
@@ -26,8 +30,9 @@ ZERO = "0001-01-01T00:00:00Z"
 NOW = datetime(2026, 10, 2, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _engine(running=True, current=ZERO, started_min_ago=0):
-    payload = {"running": running, "current_round_time": current}
+def _engine(running=True, current=ZERO, started_min_ago=0, competition_started=True):
+    payload = {"running": running, "current_round_time": current,
+               "competition_started": competition_started}
     if started_min_ago is not None:
         started = NOW - timedelta(minutes=started_min_ago)
         payload["last_round"] = {"StartTime": started.strftime("%Y-%m-%dT%H:%M:%SZ")}
@@ -106,6 +111,91 @@ class RoundLoopState(unittest.TestCase):
         result = round_loop.round_loop_state(_engine(started_min_ago=30),
                                              now=datetime(2026, 10, 2, 12, 0, 0))
         self.assertEqual(result["state"], round_loop.STALE)
+
+
+class HealActions(unittest.TestCase):
+# The unattended repair: only a STALE loop whose competition has already started.
+
+    def actions(self, payload):
+        return round_loop.heal_actions(payload, now=NOW)
+
+    def test_a_stale_started_loop_gets_the_two_posts_in_order(self):
+        self.assertEqual(
+            self.actions(_engine(started_min_ago=30)),
+            [("/api/competition/start", {"started": True}),
+             ("/api/engine/pause", {"pause": False})])
+
+    def test_a_stale_paused_engine_is_healed(self):
+    # The reboot signature: running=False, zero current time, stale last round.
+        self.assertEqual(len(self.actions(_engine(running=False, started_min_ago=30))), 2)
+
+    def test_an_unstarted_competition_is_never_started(self):
+    # A held pre-T0 range stays held, whatever the loop looks like.
+        for payload in (_engine(started_min_ago=30, competition_started=False),
+                        _engine(running=False, started_min_ago=30,
+                                competition_started=False),
+                        {"running": False, "current_round_time": ZERO}):
+            self.assertEqual(self.actions(payload), [])
+
+    def test_every_non_stale_state_is_left_alone(self):
+        current = (NOW - timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        payloads = [
+            _engine(running=False, current=current, started_min_ago=600),   # PAUSED
+            _engine(started_min_ago=1),                                    # PENDING
+            _engine(current=current, started_min_ago=90),                  # ADVANCING
+            None, "nope", {},                                              # UNKNOWN
+        ]
+        for payload in payloads:
+            self.assertEqual(self.actions(payload), [])
+
+
+class HealthcheckRoundLoopHeal(unittest.TestCase):
+# The install renders both the watchdog script and the canonical classifier it imports.
+
+    def test_healthcheck_script_calls_the_helper_and_keeps_the_existing_checks(self):
+        from engine.engine_health_ops import healthcheck_script
+        script = healthcheck_script()
+        self.assertIn("/usr/local/sbin/range-round-loop-heal.py", script)
+        for check in ("quotient-containers", "quotient-api", "isolation-rule", "nat-rule"):
+            self.assertIn(check, script)
+
+    def test_helper_reads_the_engine_config_and_applies_heal_actions(self):
+        from engine.engine_health_ops import round_loop_heal_script
+        script = round_loop_heal_script()
+        self.assertIn("/opt/quotient/config/event.conf", script)
+        self.assertIn("heal_actions", script)
+        self.assertIn("/api/login", script)
+        self.assertIn("/api/engine", script)
+        for line in script.splitlines():
+            if "log(" in line:
+                for secret in ("password", "username", "config"):
+                    self.assertNotIn(secret, line)
+
+    def test_install_writes_the_helper_and_the_canonical_classifier(self):
+        from engine import engine_health_ops
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0)
+
+        with patch.object(engine_health_ops.subprocess, "run", side_effect=fake_run):
+            engine_health_ops.install_range_healthcheck(
+                {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.10",
+                 "vm_username": "ubuntu"})
+        remote = calls[0][-1]
+        for path in ("/usr/local/sbin/range-healthcheck.sh",
+                     "/usr/local/sbin/range-round-loop-heal.py",
+                     "/usr/local/lib/tezcatlipoca/round_loop.py",
+                     "/etc/systemd/system/range-healthcheck.service",
+                     "/etc/systemd/system/range-healthcheck.timer"):
+            self.assertIn(path, remote)
+        blobs = re.findall(r"echo '([A-Za-z0-9+/=]+)' \| base64 -d", remote)
+        decoded = [base64.b64decode(blob).decode() for blob in blobs]
+        self.assertIn(engine_health_ops.round_loop_heal_script(), decoded)
+        self.assertIn(engine_health_ops.healthcheck_script(), decoded)
+        self.assertIn((_REPO / "engine" / "round_loop.py").read_text(encoding="utf-8"),
+                      decoded)
 
 
 class ParseRfc3339(unittest.TestCase):

@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 
 from infra.client import proxmox_api
+from common.constants import DEFAULT_ENGINE_MGMT_IP, ENGINE_MGMT_BAND
 from common.targets import vm_id_for
 from infra.ownership import MARKER, ownership_verdict, parse_vm_tags
 from estate import config
@@ -239,6 +240,46 @@ def select_red_ip(vms, claimed=(), skip_vmids=(), ours_tags=None):
     return None, unchecked
 
 
+def engine_mgmt_band():
+# The declared band, or the profile's engine.mgmt_ip_band override ("START-END").
+    raw = (config.active().engine.mgmt_ip_band or "").strip()
+    if not raw:
+        return ENGINE_MGMT_BAND
+    lo, _, hi = raw.partition("-")
+    if not (lo.strip() and hi.strip()):
+        raise SystemExit(f"  ERROR: engine.mgmt_ip_band {raw!r} is not a START-END range "
+                         f"(e.g. {ENGINE_MGMT_BAND[0]}-{ENGINE_MGMT_BAND[1]}).")
+    return lo.strip(), hi.strip()
+
+
+def _red_band_ips():
+    prefix, lo = RED01_IP_BAND[0].rsplit(".", 1)
+    hi = int(RED01_IP_BAND[1].rsplit(".", 1)[1])
+    return {f"{prefix}.{octet}" for octet in range(int(lo), hi + 1)}
+
+
+def select_engine_ip(vms, claimed=(), skip_vmids=(), ours_tags=None):
+    """The lowest free engine-band address, or (None, unchecked) when the scan is incomplete.
+
+    (None, []) means the band is exhausted; the caller keeps the default and the preflight
+    decides. An unverifiable guest makes every candidate a guess, so the whole selection is
+    skipped (see ENGINE_MGMT_BAND's decision comment)."""
+    takers, unchecked = running_guest_ips(vms, set(skip_vmids), ours_tags)
+    if unchecked:
+        return None, unchecked
+    # The default, red01's band and its legacy defaults are never engine candidates, even
+    # when a profile band override spans them.
+    taken = (set(takers) | set(claimed) | {DEFAULT_ENGINE_MGMT_IP}
+             | set(RED01_LEGACY_IPS) | _red_band_ips())
+    lo, hi = engine_mgmt_band()
+    prefix, start = lo.rsplit(".", 1)
+    for octet in range(int(start), int(hi.rsplit(".", 1)[1]) + 1):
+        ip = f"{prefix}.{octet}"
+        if ip not in taken:
+            return ip, unchecked
+    return None, unchecked
+
+
 def guest_ipv4s(vm):
     """IPv4 addresses a running guest reports through its agent, or None when it can't be asked."""
     try:
@@ -288,9 +329,10 @@ def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
             f"TEZ_ENGINE_MGMT_IP (or set it to '' for DHCP). The management network is "
             f"shared across nodes, so a guest on ANY node counts.")
     # "Explicitly set" means the OPERATOR set it — not that the code exported the default into the
-    # same variable seconds ago (deploy_lib.inputs).
+    # same variable seconds ago (deploy_lib.inputs), and not an address this run auto-selected.
     explicit = (bool((config.active().engine.mgmt_ip or "").strip())
-                and not os.environ.get("TEZ_ENGINE_MGMT_IP_IS_DEFAULT"))
+                and not os.environ.get("TEZ_ENGINE_MGMT_IP_IS_DEFAULT")
+                and not os.environ.get("TEZ_ENGINE_MGMT_IP_IS_AUTO_SELECTED"))
     if unchecked:
         listing = ", ".join(unchecked[:5]) + ("..." if len(unchecked) > 5 else "")
         if not explicit:

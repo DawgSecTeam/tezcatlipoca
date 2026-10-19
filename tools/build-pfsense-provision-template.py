@@ -18,14 +18,22 @@ override what's already set):
   tools/build-pfsense-provision-template.py shot OUT     # console PNG (verify by eye)
   tools/build-pfsense-provision-template.py seal         # halt, serial0, convert to template
 
+The scratch VM's SSH transport is `--mode`/`TEZ_BUILD_MODE` (flags follow the command):
+`node` (default) aliases 192.168.1.2 on the node bridge and hops through root@<node>;
+`operator` aliases it on a local NIC sharing that L2
+(`--operator-iface`/`TEZ_BUILD_OPERATOR_IFACE`); `direct` SSHes to
+`--bootstrap-ip`/`TEZ_BUILD_BOOTSTRAP_IP` with no alias and types that address at the
+console instead of 192.168.1.1. Direct mode restores 192.168.1.1/24 at the console before
+sealing so the template still matches phase 5.
+
 qemu-guest-agent retrofit — adds the FreeBSD qemu-guest-agent to the sealed
 `pfsense-provision` template WITHOUT touching the console: it full-clones the template to
-a scratch VM, reaches the guest's template SSH (192.168.1.1 on a node-side bridge alias,
-the host-level equivalent of phase 5's engine borrow), stages the .pkg dependency closure
-from pkg.freebsd.org offline-installation style (the range has no DNS/internet), installs,
-and reseals under the canonical name (the old template is renamed to a -agentless-bak).
-Firewall clones are created with the agent already enabled — this supplies the
-guest half:
+a scratch VM, reaches the guest's template SSH (192.168.1.1 through the selected
+transport, the host-level equivalent of phase 5's engine borrow), stages the .pkg
+dependency closure from pkg.freebsd.org offline-installation style (the range has no
+DNS/internet), installs, and reseals under the canonical name (the old template is renamed
+to a -agentless-bak). Firewall clones are created with the agent already enabled — this
+supplies the guest half:
 
   tools/build-pfsense-provision-template.py agent-clone   # clone NEWID -> QGA_VMID, agent=1, start
   tools/build-pfsense-provision-template.py agent-install # download pkgs, push+install, verify ping
@@ -46,11 +54,12 @@ load_dotenv(".env")
 
 from infra.client import proxmox_api, wait_for_proxmox_task  # noqa: E402
 from estate import config
+from tools import build_ssh  # noqa: E402
 
 SOURCE_VMID = 956
 NEWID = int((config.active().knobs.pfsense_provision_vmid or 957))
 NAME = "pfsense-provision"
-BOOTSTRAP_LAN = "192.168.1.1"
+BOOTSTRAP_LAN = build_ssh.CONTRACT_IP
 PUBKEY_FILE = Path("proxmox.pub")
 
 _KEYS = {".": "dot", "/": "slash", "-": "minus", "_": "shift-minus", ",": "comma",
@@ -74,7 +83,7 @@ def node():
     return config.active().proxmox.node
 
 
-def type_line(text, inter_key_s=0.04):
+def type_line(text, inter_key_s=0.04, vmid=NEWID):
     for ch in text:
         if ch.isdigit() or "a" <= ch <= "z":
             key = ch
@@ -84,9 +93,9 @@ def type_line(text, inter_key_s=0.04):
             key = _KEYS[ch]
         else:
             raise ValueError(f"no sendkey mapping for {ch!r}")
-        _monitor(NEWID, f"sendkey {key}")
+        _monitor(vmid, f"sendkey {key}")
         time.sleep(inter_key_s)
-    _monitor(NEWID, "sendkey ret")
+    _monitor(vmid, "sendkey ret")
     time.sleep(0.5)
 
 
@@ -104,7 +113,8 @@ def edit():
     import base64
     key_b64 = base64.b64encode(PUBKEY_FILE.read_bytes().strip() + b"\n").decode()
     cfg = "/cf/conf/config.xml"
-    lan = (f"<lan><enable></enable><if>vtnet1</if><ipaddr>{BOOTSTRAP_LAN}</ipaddr>"
+    addr = build_ssh.guest_ip(build_ssh.options())
+    lan = (f"<lan><enable></enable><if>vtnet1</if><ipaddr>{addr}</ipaddr>"
            f"<subnet>24</subnet></lan>")
     type_line("")
     time.sleep(1)
@@ -115,19 +125,36 @@ def edit():
     type_line(f"sed -i '' -e 's,<name>admin</name>,<name>admin</name>"
               f"<authorizedkeys>{key_b64}</authorizedkeys>,' {cfg}")
     type_line(f"sed -i '' -e 's,<system>,<system><enableserial></enableserial>,' {cfg}")
-    type_line(f"rm -f /tmp/config.cache; grep -c -e enableserial -e authorizedkeys -e {BOOTSTRAP_LAN} {cfg}")
+    type_line(f"rm -f /tmp/config.cache; grep -c -e enableserial -e authorizedkeys -e {addr} {cfg}")
     print("typed; check with `shot`")
+
+
+def _restore_contract(vmid=NEWID):
+    # direct mode put the bootstrap address in config.xml; the template must boot as
+    # 192.168.1.1 for phase 5. Menu key 8 is a no-op failure at an already-open shell.
+    addr = build_ssh.options().bootstrap_ip
+    type_line("8", vmid=vmid)
+    type_line(f"sed -i '' -e 's,<ipaddr>{addr}</ipaddr>,"
+              f"<ipaddr>{BOOTSTRAP_LAN}</ipaddr>,' /cf/conf/config.xml", vmid=vmid)
+    type_line(f"rm -f /tmp/config.cache; grep -c '<ipaddr>{BOOTSTRAP_LAN}</ipaddr>' "
+              "/cf/conf/config.xml", vmid=vmid)
+
+
+def _wait_stopped(n, vmid, what="VM"):
+    deadline = time.time() + 200
+    while time.time() < deadline:
+        if proxmox_api("GET", f"/nodes/{n}/qemu/{vmid}/status/current")["data"]["status"] == "stopped":
+            return
+        time.sleep(5)
+    raise SystemExit(f"{what} did not power off")
 
 
 def seal():
     n = node()
+    if build_ssh.options().mode == "direct":
+        _restore_contract()
     type_line("halt -p")
-    for _ in range(40):
-        time.sleep(5)
-        if proxmox_api("GET", f"/nodes/{n}/qemu/{NEWID}/status/current")["data"]["status"] == "stopped":
-            break
-    else:
-        raise SystemExit("VM did not power off")
+    _wait_stopped(n, NEWID)
     proxmox_api("PUT", f"/nodes/{n}/qemu/{NEWID}/config", data={"serial0": "socket", "tags": "template"})
     proxmox_api("POST", f"/nodes/{n}/qemu/{NEWID}/template")
     print(f"{NEWID} sealed as a template")
@@ -141,7 +168,6 @@ QGA_VMID = int((config.active().knobs.pfsense_qga_vmid or 958))
 QGA_WORK_NAME = "pfsense-provision-qga"
 QGA_BACKUP_NAME = "pfsense-provision-agentless-bak"
 QGA_BRIDGE = config.active().knobs.qga_bridge
-QGA_ALIAS_IP = "192.168.1.2"                    # aliased on QGA_BRIDGE for the node->guest SSH hop
 QGA_GUEST_STAGE = "/root/qga-stage"
 QGA_BOOT_BUDGET_S = 420
 QGA_PKG_BRANCH = config.active().knobs.qga_pkg_branch   # default: the guest's own ABI
@@ -153,18 +179,9 @@ def node_host():
     return config.require("proxmox.endpoint").split("//")[1].split(":")[0]
 
 
-def _node_ssh(cmd, timeout=30):
-    return subprocess.run(
-        ["ssh", "-i", str(Path("proxmox").resolve()), "-o", "BatchMode=yes",
-         "-o", "ConnectTimeout=10", f"root@{node_host()}", cmd],
-        capture_output=True, text=True, timeout=timeout)
-
-
 def _guest_argv(cmd):
-    proxy = f"ssh -i {Path('proxmox').resolve()} -o BatchMode=yes -W %h:%p root@{node_host()}"
-    return ["ssh", "-i", str(Path("proxmox").resolve()), "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-            "-o", f"ProxyCommand={proxy}", f"{FW_ADMIN}@{BOOTSTRAP_LAN}", cmd]
+    return build_ssh.guest_argv(build_ssh.options(), node=node_host(),
+                                key=Path("proxmox").resolve(), user=FW_ADMIN, command=cmd)
 
 
 def _guest_ssh(cmd, timeout=90):
@@ -190,10 +207,27 @@ def agent_clone():
     proxmox_api("POST", f"/nodes/{n}/qemu/{QGA_VMID}/status/start")
     print(f"cloned {NEWID} (pfsense-provision) -> {QGA_VMID} (agent=1, net0/net1 on "
           f"{QGA_BRIDGE}), started")
+    opts = build_ssh.options()
+    if opts.mode == "direct":
+        # The clone boots the sealed template's contract address 192.168.1.1; direct mode
+        # has no alias/hop to reach it, so move the LAN address at the console before
+        # agent-install waits on the bootstrap IP.
+        print(f"direct: moving the clone's LAN to {opts.bootstrap_ip} at the console")
+        time.sleep(90)
+        type_line("", vmid=QGA_VMID)
+        type_line("8", vmid=QGA_VMID)
+        type_line(f"sed -i '' -e 's,<ipaddr>{BOOTSTRAP_LAN}</ipaddr>,"
+                  f"<ipaddr>{opts.bootstrap_ip}</ipaddr>,' /cf/conf/config.xml",
+                  vmid=QGA_VMID)
+        type_line(f"rm -f /tmp/config.cache; grep -c '<ipaddr>{opts.bootstrap_ip}</ipaddr>' "
+                  "/cf/conf/config.xml", vmid=QGA_VMID)
+        type_line("reboot", vmid=QGA_VMID)
 
 
 def _wait_guest_ssh():
-    print(f"waiting for the guest's template SSH on {BOOTSTRAP_LAN} (through node {node_host()})")
+    opts = build_ssh.options()
+    print(f"waiting for the guest's template SSH on {build_ssh.guest_ip(opts)} "
+          f"({opts.mode} transport)")
     deadline = time.time() + QGA_BOOT_BUDGET_S
     while True:
         try:
@@ -202,10 +236,23 @@ def _wait_guest_ssh():
         except subprocess.TimeoutExpired:
             pass
         if time.time() >= deadline:
-            raise SystemExit(f"guest SSH never answered on {BOOTSTRAP_LAN} within "
+            raise SystemExit(f"guest SSH never answered on {build_ssh.guest_ip(opts)} within "
                              f"{QGA_BOOT_BUDGET_S}s — is the scratch VM running with "
-                             f"net1 on {QGA_BRIDGE} and the node alias in place?")
+                             f"net1 on {QGA_BRIDGE} and the {opts.mode} transport in place?")
         time.sleep(10)
+
+
+def _catalog_entries(path, names):
+    """The named entries from a FreeBSD packagesite.jsonl, in file order."""
+    found = {}
+    with Path(path).open() as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            obj = json.loads(line)
+            if obj.get("name") in names:
+                found[obj["name"]] = obj
+    return found
 
 
 def _resolve_packages(branch, want="qemu-guest-agent"):
@@ -305,61 +352,63 @@ def _safe_guest_name(fname):
 
 def agent_install():
     n = node()
-    _node_ssh(f"ip addr add {QGA_ALIAS_IP}/24 dev {QGA_BRIDGE} 2>/dev/null || true")
-    _wait_guest_ssh()
-    abi = _guest_ssh("pkg config abi").stdout.strip()
-    if not abi.startswith("FreeBSD:"):
-        raise SystemExit(f"guest 'pkg config abi' gave {abi!r} — is this really the "
-                         "pfsense-provision clone?")
-    branch = QGA_PKG_BRANCH or abi
-    if QGA_PKG_BRANCH and QGA_PKG_BRANCH != abi:
-        raise SystemExit(f"TEZ_QGA_PKG_BRANCH={QGA_PKG_BRANCH} != guest ABI {abi} — "
-                         "a mismatched-ABI package can break the appliance; align them")
-    print(f"guest ABI {abi}; resolving the dependency closure from {branch}")
-    packages = _resolve_packages(branch)
-    fnames = []
-    for name, relpath in packages:
-        fname = relpath.split("/")[-1]
-        dest = QGA_STAGE_DIR / fname
-        if not dest.exists():
-            subprocess.run(["curl", "-sSLf", "--globoff", "-o", str(dest),
-                            f"{FREEBSD_PKG_BASE}/{branch}/latest/{relpath}"], check=True)
-        fnames.append(fname)
-        print(f"  staged {name}: {fname} ({dest.stat().st_size} bytes)")
+    opts = build_ssh.options()
+    with build_ssh.aliased(opts, node=node_host(), bridge=QGA_BRIDGE,
+                           key=Path("proxmox").resolve()):
+        _wait_guest_ssh()
+        abi = _guest_ssh("pkg config abi").stdout.strip()
+        if not abi.startswith("FreeBSD:"):
+            raise SystemExit(f"guest 'pkg config abi' gave {abi!r} — is this really the "
+                             "pfsense-provision clone?")
+        branch = QGA_PKG_BRANCH or abi
+        if QGA_PKG_BRANCH and QGA_PKG_BRANCH != abi:
+            raise SystemExit(f"TEZ_QGA_PKG_BRANCH={QGA_PKG_BRANCH} != guest ABI {abi} — "
+                             "a mismatched-ABI package can break the appliance; align them")
+        print(f"guest ABI {abi}; resolving the dependency closure from {branch}")
+        packages = _resolve_packages(branch)
+        fnames = []
+        for name, relpath in packages:
+            fname = relpath.split("/")[-1]
+            dest = QGA_STAGE_DIR / fname
+            if not dest.exists():
+                subprocess.run(["curl", "-sSLf", "--globoff", "-o", str(dest),
+                                f"{FREEBSD_PKG_BASE}/{branch}/latest/{relpath}"], check=True)
+            fnames.append(fname)
+            print(f"  staged {name}: {fname} ({dest.stat().st_size} bytes)")
 
-    _guest_ssh(f"rm -rf {QGA_GUEST_STAGE} && mkdir -p {QGA_GUEST_STAGE}")
-    guest_names = [_safe_guest_name(f) for f in fnames]
-    script = _install_script(list(zip([n for n, _ in packages], guest_names)))
-    (QGA_STAGE_DIR / "install.sh").write_text(script)
-    for fname, guest_fname in list(zip(fnames, guest_names)):
-        with open(QGA_STAGE_DIR / fname, "rb") as fh:
-            subprocess.run(_guest_argv(f"cat > {QGA_GUEST_STAGE}/{guest_fname}"), stdin=fh, check=True)
-    with open(QGA_STAGE_DIR / "install.sh", "rb") as fh:
-        subprocess.run(_guest_argv(f"cat > {QGA_GUEST_STAGE}/install.sh"), stdin=fh, check=True)
+        _guest_ssh(f"rm -rf {QGA_GUEST_STAGE} && mkdir -p {QGA_GUEST_STAGE}")
+        guest_names = [_safe_guest_name(f) for f in fnames]
+        script = _install_script(list(zip([n for n, _ in packages], guest_names)))
+        (QGA_STAGE_DIR / "install.sh").write_text(script)
+        for fname, guest_fname in list(zip(fnames, guest_names)):
+            with open(QGA_STAGE_DIR / fname, "rb") as fh:
+                subprocess.run(_guest_argv(f"cat > {QGA_GUEST_STAGE}/{guest_fname}"), stdin=fh, check=True)
+        with open(QGA_STAGE_DIR / "install.sh", "rb") as fh:
+            subprocess.run(_guest_argv(f"cat > {QGA_GUEST_STAGE}/install.sh"), stdin=fh, check=True)
 
-    print("installing (pkg add in dependency order, then rc.conf.local)")
-    r = _guest_ssh(f"sh {QGA_GUEST_STAGE}/install.sh", timeout=600)
-    print(r.stdout.strip())
-    if r.returncode != 0:
-        raise SystemExit(f"install failed rc={r.returncode}: {(r.stderr or '').strip()[:300]}")
-    _guest_ssh(f"rm -rf {QGA_GUEST_STAGE}")
+        print("installing (pkg add in dependency order, then rc.conf.local)")
+        r = _guest_ssh(f"sh {QGA_GUEST_STAGE}/install.sh", timeout=600)
+        print(r.stdout.strip())
+        if r.returncode != 0:
+            raise SystemExit(f"install failed rc={r.returncode}: {(r.stderr or '').strip()[:300]}")
+        _guest_ssh(f"rm -rf {QGA_GUEST_STAGE}")
 
-    # Boot-path proof: an in-session `service onestart` dies with the SSH session's
-    # hangup (the rc script runs qemu-ga foreground under -d), so reboot and let
-    # rc.conf.local bring the agent up the way every future clone will see it.
-    print("rebooting the guest — rc.conf.local must start the agent at boot")
-    try:
-        _guest_ssh("nohup sh -c 'sleep 2; /sbin/reboot' >/dev/null 2>&1 &", timeout=15)
-    except subprocess.TimeoutExpired:
-        pass                                    # the session drops as the guest goes down
-    if not _agent_ping(n, budget_s=QGA_BOOT_BUDGET_S):
-        raise SystemExit("the guest agent never answered REST /agent/ping after the "
-                         "reboot — check `qm terminal` (rc.conf.local flags, vtcon port)")
-    _wait_guest_ssh()
-    r = _guest_ssh("pgrep -x qemu-ga >/dev/null && echo QGA_PROCESS_UP")
-    if "QGA_PROCESS_UP" not in (r.stdout or ""):
-        raise SystemExit("REST ping answered but no qemu-ga process found in the guest")
-    print(f"qemu-guest-agent live after reboot — REST ping + process both verified")
+        # Boot-path proof: an in-session `service onestart` dies with the SSH session's
+        # hangup (the rc script runs qemu-ga foreground under -d), so reboot and let
+        # rc.conf.local bring the agent up the way every future clone will see it.
+        print("rebooting the guest — rc.conf.local must start the agent at boot")
+        try:
+            _guest_ssh("nohup sh -c 'sleep 2; /sbin/reboot' >/dev/null 2>&1 &", timeout=15)
+        except subprocess.TimeoutExpired:
+            pass                                    # the session drops as the guest goes down
+        if not _agent_ping(n, budget_s=QGA_BOOT_BUDGET_S):
+            raise SystemExit("the guest agent never answered REST /agent/ping after the "
+                             "reboot — check `qm terminal` (rc.conf.local flags, vtcon port)")
+        _wait_guest_ssh()
+        r = _guest_ssh("pgrep -x qemu-ga >/dev/null && echo QGA_PROCESS_UP")
+        if "QGA_PROCESS_UP" not in (r.stdout or ""):
+            raise SystemExit("REST ping answered but no qemu-ga process found in the guest")
+        print(f"qemu-guest-agent live after reboot — REST ping + process both verified")
 
 
 def _vm_status(n, vmid):
@@ -386,8 +435,17 @@ def _halt_and_wait(n):
 
 def agent_seal():
     n = node()
-    _halt_and_wait(n)
-    _node_ssh(f"ip addr del {QGA_ALIAS_IP}/24 dev {QGA_BRIDGE} 2>/dev/null || true")
+    opts = build_ssh.options()
+    if opts.mode == "direct":
+        # restore the contract at the console, then halt there: the restore drops the
+        # direct-mode address the SSH halt would need.
+        _restore_contract(QGA_VMID)
+        type_line("halt -p", vmid=QGA_VMID)
+        _wait_stopped(n, QGA_VMID)
+    else:
+        with build_ssh.aliased(opts, node=node_host(), bridge=QGA_BRIDGE,
+                               key=Path("proxmox").resolve()):
+            _halt_and_wait(n)
     # Name is the resolution contract (deploy resolves templates by NAME); vmid is
     # convention. Swap names so `pfsense-provision` points at the retrofit, keep the
     # old provisioning template as a stopgap rollback. NEWID (957), NOT SOURCE_VMID —

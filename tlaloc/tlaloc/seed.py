@@ -59,7 +59,8 @@ def seed_range(ctx, *, depth=None, teams=None, dry_run=False, max_steps=None,
     cfg = ctx.cfg
     mode = cfg["red"].get("assume_breach", "full")
     if mode == "off":
-        return {"mode": "off", "boxes": {}, "note": "assume_breach off — nothing seeded"}
+        return {"mode": "off", "boxes": {}, "steps": 0,
+                "note": "assume_breach off — nothing seeded"}
     if mode == "light":
         depth = 2 if depth is None else min(int(depth), 2)
 

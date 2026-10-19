@@ -34,8 +34,10 @@ base image on which host: `infrastructure-status.md`.
   in `sudoers.d` vanishes if a `writable-sudoers` plant makes that dir 0777.
 - **Fedora + the guest agent is confined** (SELinux `virt_qemu_ga_t`): `dnf`/`rpm`/
   `systemctl` denied, `setenforce 0` denied. SSH as the cloud user lands `unconfined_t`
-  with real root — the working path. Keep Fedora out of agent-only lineups, or set
-  `/etc/selinux/config` permissive at template-build time.
+  with real root — the working path. The golden build now sets
+  `/etc/selinux/config` to `SELINUX=permissive` on Fedora goldens before sealing, so
+  clones boot permissive; a base template that still enforces is fine. Verify
+  `getenforce` on a clone after any template rebuild.
 - **Windows** ships all firewall profiles disabled, so firewall-rule effects do nothing
   until `Set-NetFirewallProfile -All -Enabled True` (`bootstrap_windows_box` does this,
   plus enabling `RemoteDesktop-UserMode-In-TCP/UDP`, since the DC template ships that rule
@@ -104,9 +106,11 @@ the deploy env; host and credentials: `infrastructure-status.md`;
 - **The management network is one flat L2 across hosts.** `TEZ_ENGINE_MGMT_IP` and the
   satellites' `nodes.json` `jump_mgmt_ip` are contested cluster-wide, not per host — the default
   `10.0.0.250` (engine) / `.249`, `.248`, … (satellite jumps) is whatever every competition gets
-  unless set otherwise. **Always set an explicit, checked `TEZ_ENGINE_MGMT_IP`** when anything else
-  is running on the estate; the preflight scans cluster-wide and refuses the default when it's
-  unverifiable.
+  unless set otherwise. A fresh deploy now auto-selects the lowest free address in
+  `10.0.0.251-10.0.0.254` **only when every running guest's agent answers**; if any guest is
+  unverifiable it keeps the default and the preflight refuses, naming the guests. **Set an
+  explicit, checked `TEZ_ENGINE_MGMT_IP`** on a busy estate, or make the agent-less co-tenants
+  verifiable first. The band is overridable with `engine.mgmt_ip_band = "START-END"`.
 - **netplan refuses world-readable configs** — the engine's team-NIC netplan files are
   mode `0600`.
 - **Docker re-syncs iptables on every container start/restart** (`FORWARD` → DROP, team

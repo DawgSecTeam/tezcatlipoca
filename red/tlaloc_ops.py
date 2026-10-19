@@ -341,9 +341,36 @@ def _tail(proc, n=300):
     return (((getattr(proc, "stderr", "") or "") + (getattr(proc, "stdout", "") or ""))[-n:])
 
 
-def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600):
+def require_frozen_payloads(comp_dir):
+    """A C2-enabled deploy needs comp-prep's manifest and the files it names."""
+    payloads = Path(comp_dir) / "red" / "payloads"
+    manifest_path = payloads / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"C2 is enabled but comp-prep left no readable frozen payload manifest "
+            f"at {manifest_path} — run comp-prep (`tlaloc c2-prep`) before the deploy"
+        ) from exc
+    boxes = (manifest.get("boxes") if isinstance(manifest, dict) else None) or {}
+    if not boxes:
+        raise RuntimeError(
+            f"comp-prep's manifest at {manifest_path} lists no boxes — the seed would "
+            f"plant nothing; re-run comp-prep (`tlaloc c2-prep`)")
+    missing = sorted(str(entry.get("file")) for entry in boxes.values()
+                     if not (payloads / str(entry.get("file") or "")).is_file())
+    if missing:
+        raise RuntimeError(
+            f"comp-prep's manifest references missing payload file(s) "
+            f"{', '.join(missing)} under {payloads} — re-run comp-prep "
+            f"(`tlaloc c2-prep`)")
+
+
+def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600, c2=False):
     """Push /opt/tlaloc + the unit file to red01, then its nakon intel."""
     comp_dir = Path(comp_dir).resolve()
+    if c2:
+        require_frozen_payloads(comp_dir)
     if not (TLALOC_REPO / "tlaloc" / "__init__.py").exists():
         raise RuntimeError(f"no tlaloc agent at {TLALOC_REPO}")
     if not UNIT_SRC.exists():
@@ -443,6 +470,15 @@ def seed_via_red01(ssh_key, red_ip, *, runner=None, timeout=5400):
     proc = _ssh_run(ssh_key, red_ip, seed_command(), runner=runner, timeout=timeout)
     if getattr(proc, "returncode", 1) != 0:
         raise RuntimeError(f"the day-0 seed failed on red01 {red_ip}: {_tail(proc)}")
+    return {"ok": True}
+
+
+def start_unit(ssh_key, red_ip, *, runner=None, timeout=60):
+    """Start the loop after the seed: enable-only left red stopped until someone logged in."""
+    remote = f"sudo -n systemctl start {UNIT} && sudo -n systemctl is-active {UNIT}"
+    proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout)
+    if getattr(proc, "returncode", 1) != 0:
+        raise RuntimeError(f"starting {UNIT} on {red_ip} failed: {_tail(proc)}")
     return {"ok": True}
 
 
@@ -609,7 +645,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         team_identifiers=team_identifiers,
         callback_port=callback_port, callback_host=callback_host or "",
         runner=runner)
-    stage_red01(ssh_key, red_ip, comp_dir, runner=runner)
+    stage_red01(ssh_key, red_ip, comp_dir, runner=runner, c2=bool(mythic))
     push_config(ssh_key, red_ip, cfg_path.read_text(), runner=runner)
     if mythic_result and mythic_result.get("env"):
         env_push = gaia_ops.push_env(ssh_key, red_ip, mythic_result["env"],
@@ -620,21 +656,31 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     if llm_key:
         push_llm_env(ssh_key, red_ip, llm_key, runner=runner)
     install_unit(ssh_key, red_ip, runner=runner)
-    seed_via_red01(ssh_key, red_ip, runner=runner)
-    manifest = pull_manifest(ssh_key, red_ip, comp_dir, runner=runner)
-    seeded = _seeded_boxes(manifest["path"])
-    if not seeded:
-        raise RuntimeError(
-            f"the day-0 seed left no planted box: the manifest at {manifest['path']} "
-            f"lists none (tlaloc's seed exits 0 even when every box fails)")
-    print(f"  tlaloc      : seed manifest proves {seeded} box(es) planted")
+    manifest = None
+    if block.get("assume_breach") != "off":
+        seed_via_red01(ssh_key, red_ip, runner=runner)
+        manifest = pull_manifest(ssh_key, red_ip, comp_dir, runner=runner)
+        seeded = _seeded_boxes(manifest["path"])
+        if not seeded:
+            raise RuntimeError(
+                f"the day-0 seed left no planted box: the manifest at {manifest['path']} "
+                f"lists none (tlaloc's seed exits 0 even when every box fails)")
+        print(f"  tlaloc      : seed manifest proves {seeded} box(es) planted")
+    else:
+        print("  tlaloc      : assume_breach off — no day-0 seed or manifest")
+    start_unit(ssh_key, red_ip, runner=runner)
+    print(f"  tlaloc      : loop started on red01 ({UNIT})")
     summary = {"engine": "tlaloc", "vmid": red_vmid, "red_ip": red_ip,
                "node": identity["node"], "config": str(cfg_path),
-               "manifest": manifest.get("path"), "at": _now()}
+               "manifest": manifest.get("path") if manifest else None, "at": _now()}
     ctx.state["red"] = summary
     ctx.save_state()
-    print(f"  tlaloc      : seeded on red01 {red_ip} — the range is owned before T0 "
-          f"(unit {UNIT}, state {STATE_DIR})")
+    if manifest:
+        print(f"  tlaloc      : seeded on red01 {red_ip} — the range is owned before T0 "
+              f"(unit {UNIT}, state {STATE_DIR})")
+    else:
+        print(f"  tlaloc      : red01 ready on {red_ip} (assume_breach off — no seed; "
+              f"unit {UNIT} started)")
     return summary
 
 
