@@ -133,15 +133,35 @@ Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMod
     if rc != 0:
         raise RuntimeError(f"vmid {vmid}: bootstrap script failed (rc={rc}): {err or out}")
     if features:
-        # Feature installs are staged until a restart, and the in-guest
-        # `Restart-Computer` was swallowed by the single-shot agent exec: the
-        # clone then inherited InstallPending features and the plan's module
-        # imports failed (live: ad01 ADDS, 2026-10-19). A VM cycle applies them.
-        from infra.lifecycle import start_vm, stop_vm
-        stop_vm(node, vmid)
-        time.sleep(3)
-        start_vm(node, vmid)
+        # Feature installs stay InstallPending until a real restart; the agent
+        # answers during the shutdown window, so wait for the BOOT TIME to change
+        # rather than for the first reply (live: ad01 inherited pending features).
+        before = _windows_boot_time(node, vmid)
+        try:
+            guest_agent_exec_windows(node, vmid, "Restart-Computer -Force", timeout=60)
+        except Exception:  # the agent drops the channel as the box goes down
+            pass
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            time.sleep(10)
+            now = _windows_boot_time(node, vmid)
+            if now and now != before:
+                break
+        else:
+            from infra.lifecycle import reboot_vm
+            reboot_vm(node, vmid)
         wait_for_guest_agent(node, vmid, timeout=600)
+
+
+def _windows_boot_time(node, vmid):
+    try:
+        rc, out, _ = guest_agent_exec_windows(
+            node, vmid,
+            "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToFileTimeUtc()",
+            timeout=60)
+    except Exception:
+        return None
+    return (out or "").strip() or None
 
 
 def dns_repoint_windows_box(node, vmid, dns_server, timeout=60):

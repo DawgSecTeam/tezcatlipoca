@@ -40,6 +40,10 @@ def start_vm(node, vmid, timeout=START_GRACE_S):
             raise
 
 
+def reboot_vm(node, vmid):
+    run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/status/reboot", timeout=120)
+
+
 def list_snapshots(node, vmid):
     """Proxmox lists a synthetic `current` snapshot; it is excluded."""
     try:
