@@ -7,6 +7,7 @@ The bisect config set is JSON:
    {"name": "security-limits",   "omit": "rm -f /etc/security/limits.conf"}]
 
 `omit` runs as root through the guest agent against the rolled-back failing snapshot.
+Teardown is `down --lab <lab-dir>/lab.json`, which refuses state lacking the lab's tags.
 """
 
 import argparse
