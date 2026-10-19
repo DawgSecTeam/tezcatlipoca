@@ -482,3 +482,35 @@ def test_the_linux_plant_adds_a_surface_beyond_the_unit(tmp_path):
         assert any(extra[0] in u for u in info["undo"]), info
         seen.update(info["mechanisms"])
     assert {"systemd", "cron_watch", "profile_hook"} <= seen, seen
+
+
+def test_task_persistence_launches_through_a_single_instance_stub(tmp_path):
+    """A bare /TR starts another copy on every re-plant: the live range ended up
+    with ten live agents per Windows box. Tasks run a stub that checks for the
+    image first, so the surfaces coalesce on one process."""
+    import base64
+    _manifest(tmp_path)
+    payload = tmp_path / "dc01.bin"
+    payload.write_bytes(b"MZ")
+    ssh = FakeSSH().on("schtasks /Create", rc=0, out="SUCCESS")
+    ssh.on("tasklist", rc=0, out="dc01-1.exe  1234  Services  0  10,000 K")
+    ctx = make_ctx(tmp_path / "state", ssh=ssh)
+    ctx.world.add_foothold("192.168.1.20", "Administrator", "pw", "admin", windows=True)
+    planter = Planter(ctx, comp_dir=tmp_path)
+
+    info = None
+    for seed in range(12):
+        ctx.rng.seed(seed)
+        info = planter._install_windows("192.168.1.20", "dc01-1", payload, "http")
+        if any(m.startswith("task_") for m in info["mechanisms"]):
+            break
+    else:
+        raise AssertionError("no seed drew a task launcher")
+
+    created = [c["cmd"] for c in ssh.calls if "schtasks /Create" in (c["cmd"] or "")]
+    assert created and '/TR "cmd /c' in created[-1]
+    decoded = [base64.b64decode(c["cmd"].split("-EncodedCommand ")[1].strip())
+               .decode("utf-16-le")
+               for c in ssh.calls if "-EncodedCommand" in (c["cmd"] or "")]
+    assert any("-run.cmd" in d and "tasklist" in d for d in decoded), "stub written"
+    assert any("-run.cmd" in u for u in info["undo"]), info["undo"]
