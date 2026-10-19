@@ -218,7 +218,7 @@ def iis_management_features(comp_dir, box_name):
     except (OSError, ValueError):
         return ()
     entries = services.get(box_name) or []
-    return ("Web-Mgmt-Tools",) if any("iis" in str(e).lower() for e in entries) else ()
+    return ("Web-Scripting-Tools",) if any("iis" in str(e).lower() for e in entries) else ()
 
 
 def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_password,

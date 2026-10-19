@@ -18,7 +18,7 @@ class Features(unittest.TestCase):
         d = Path(self._tmp())
         (d / "box_services.json").write_text(json.dumps(
             {"win02": [{"name": "IIS FTP"}], "dc01": ["ADDS"]}))
-        self.assertEqual(iis_management_features(d, "win02"), ("Web-Mgmt-Tools",))
+        self.assertEqual(iis_management_features(d, "win02"), ("Web-Scripting-Tools",))
         self.assertEqual(iis_management_features(d, "dc01"), ())
 
     def test_a_missing_or_broken_file_is_no_features(self):

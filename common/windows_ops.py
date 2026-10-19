@@ -132,6 +132,14 @@ Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMod
             wait_for_guest_agent(node, vmid, timeout=max(1, int(deadline - time.time())))
     if rc != 0:
         raise RuntimeError(f"vmid {vmid}: bootstrap script failed (rc={rc}): {err or out}")
+    if features:
+        # The IIS management feature is staged until a restart; the plan's
+        # `Import-Module WebAdministration` fails without it (live: win02 golden).
+        try:
+            guest_agent_exec_windows(node, vmid, "Restart-Computer -Force", timeout=60)
+        except Exception:  # the agent drops the channel as the box goes down
+            pass
+        wait_for_guest_agent(node, vmid, timeout=600)
 
 
 def dns_repoint_windows_box(node, vmid, dns_server, timeout=60):

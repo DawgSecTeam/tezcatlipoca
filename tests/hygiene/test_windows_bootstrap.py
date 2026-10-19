@@ -14,19 +14,23 @@ sys.path.insert(0, str(_REPO))
 from common import windows_ops
 
 
-def _capture_bootstrap_script(features=()):
-    captured = {}
+def _capture_bootstrap_calls(features=()):
+    calls = []
 
     def fake_exec(node, vmid, script, timeout=0):
-        captured["script"] = script
+        calls.append(script)
         return 0, "", ""
 
     with patch.object(windows_ops, "_wait_for_windows_setup_complete", return_value=True), \
          patch.object(windows_ops, "guest_agent_exec_windows", side_effect=fake_exec), \
-         patch.object(windows_ops, "wait_for_guest_agent", return_value=True):
+         patch.object(windows_ops, "wait_for_guest_agent", return_value=True) as wait:
         windows_ops.bootstrap_windows_box("n", 1, "192.168.125.3", "192.168.125.1",
                                           "192.168.125.2", "pw", features=features)
-    return captured["script"]
+    return calls, wait
+
+
+def _capture_bootstrap_script(features=()):
+    return _capture_bootstrap_calls(features)[0][0]
 
 
 
@@ -52,9 +56,14 @@ class DefenderPreferences(unittest.TestCase):
 
 class IisManagement(unittest.TestCase):
     def test_management_tools_install_when_requested(self):
-        script = _capture_bootstrap_script(features=("Web-Mgmt-Tools",))
-        self.assertIn("Install-WindowsFeature -Name @('Web-Mgmt-Tools')", script)
+        script = _capture_bootstrap_script(features=("Web-Scripting-Tools",))
+        self.assertIn("Install-WindowsFeature -Name @('Web-Scripting-Tools')", script)
         self.assertIn("-IncludeManagementTools", script)
+
+    def test_a_feature_install_reboots_before_returning(self):
+        calls, wait = _capture_bootstrap_calls(features=("Web-Scripting-Tools",))
+        self.assertTrue(any("Restart-Computer" in c for c in calls))
+        wait.assert_called_once()
 
     def test_no_feature_install_by_default(self):
         self.assertNotIn("Install-WindowsFeature", _capture_bootstrap_script())
