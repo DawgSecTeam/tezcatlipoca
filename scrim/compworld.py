@@ -57,7 +57,13 @@ def _verify_flags(comp):
     except OSError:
         src = None
     if src:
-        flags += ["--packet", src]
+        # packet_source is a path in the comp dir, but the verifier runs from the
+        # engine worktree; a bare "packet.yaml" resolved against the cwd (live:
+        # cde-2026 pre-T0 verify, "packet profile not found: packet.yaml").
+        packet = Path(src)
+        if not packet.is_absolute() and (comp / src).exists():
+            packet = comp / src
+        flags += ["--packet", str(packet)]
     try:
         vulns = core.read_comp_json(comp, "box_vulns.json")
         if not any(vulns.values()):
