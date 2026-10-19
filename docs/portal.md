@@ -3,141 +3,104 @@
 Blue teams log in with their **Quotient team credentials** and get a **browser console** (the
 VM's own screen, through Proxmox) on each of their team's boxes. Opt-in per competition, deployed
 on the scoring engine, non-fatal to the deploy: a portal that can't start is recorded as a
-degradation and the range carries on, but verify's `degradations` gate reports it as a failure.
-Remaining unproven paths (tunnel, multi-node, gate-open): [known-issues.md](known-issues.md).
+degradation and the range carries on — verify's `degradations` gate reports it as a failure.
+Remaining unproven paths (named tunnel, multi-node): [known-issues.md](known-issues.md).
 
 ## Turning it on
 
-Compfile keys (all optional except `portal`):
+Compfile keys (`portal/portal_ops.py` owns flags, defaults and semantics): `portal 1` deploys the
+portal at the end of phase 8; `portal_firewall_console 0` hides the in-path firewall's console
+from teams (they own their pfSense by default); `portal_scoreboard_url <url>` overrides the
+scoreboard link; `portal_hostname <host>` is printed in the competitor packet's *Web console*
+section (packet text only).
 
-| Key | Default | Effect |
-|---|---|---|
-| `portal 1` | `0` | Deploy the portal at the end of phase 8 |
-| `portal_firewall_console 0` | `1` | Hide the in-path firewall's console from teams (they own their pfSense by default) |
-| `portal_scoreboard_url <url>` | `http://<engine>` | The scoreboard link the portal shows |
-| `portal_hostname <host>` | — | Printed in the competitor packet's *Web console* section (packet text only) |
-
-Env vars (the tunnel pair goes in the event's own env file, never a practice worktree's):
-
-| Variable | Effect |
-|---|---|
-| `TEZ_PORTAL_TUNNEL_TOKEN` | Cloudflare tunnel token. Without it the portal is reachable only through `ssh -L` |
-| `TEZ_PORTAL_HOSTNAME` | The tunnel's stable public hostname, used for the ownership check |
-| `TEZ_PORTAL_OPEN=1` | Start with the gate open (practice runs). Default closed |
+Env: `TEZ_PORTAL_TUNNEL_TOKEN` (Cloudflare token — without it the portal is reachable only
+through `ssh -L`), `TEZ_PORTAL_HOSTNAME` (the tunnel's stable public name, used for the ownership
+check), `TEZ_PORTAL_OPEN=1` (start with the gate open, for practice runs). These are `_SPEC` keys
+`portal.tunnel_token` / `portal.hostname` / `portal.open` ([usage-people.md](usage-people.md#configure-the-event)).
+**The tunnel pair goes in the event's own env file, never a practice worktree's** — starting the
+tunnel claims the public hostname (below).
 
 ## How it works
 
-```
-student ─HTTPS─► Cloudflare (stable hostname) ─tunnel─► cloudflared ─┐      engine VM
-                                                                     ▼      /opt/tez-portal
-     portal (FastAPI/uvicorn; published 127.0.0.1:8443 only)
-      ├─ reads /opt/quotient/config/event.conf (ro) — the logins
-      ├─ reads portal.json (ro)                    — boxes, nodes, console tokens
-      ├─ state/access.json, state/access.log       — the gate and the audit trail
-      └─ WS /console/ws/<one-shot id> ── relay ──► wss://<node>:8006/…/vncwebsocket
-```
-
-| Piece | Where |
-|---|---|
-| Service (auth, broker, routes) | `portal/` (`app.py`, `auth.py`, `console.py`, `Dockerfile`, `compose.yaml`) |
-| UI | `portal/frontend/` (see [Frontend](#frontend)) |
-| Deploy side | `portal/portal_ops.py` |
-| Per-comp console token | `infra/console.py` |
-| Phase hook | end of `deploy_lib/phases/seed.py` (phase 8) |
-| Verify gate | `verifier/portal.py` (gate name `portal`) |
-| Preflight (advisory) | `infra/gates.py` |
-| Operator CLI | `portal-access.py` |
+The portal (FastAPI/uvicorn, `portal/`) is published on `127.0.0.1:8443` on the engine only —
+team subnets reach nothing; cloudflared dials out. It reads `/opt/quotient/config/event.conf`
+(read-only bind mount) and `portal.json` (boxes, nodes, console tokens), keeps gate state and the
+audit trail in `state/access.json` / `state/access.log`, and relays
+`WS /console/ws/<one-shot id>` to `wss://<node>:8006/…/vncwebsocket`. Deploy side:
+`portal/portal_ops.py`, hooked at the end of phase 8 (`deploy_lib/phases/seed.py`); verify gate
+`portal` (`verifier/portal.py`); operator CLI `portal-access.py`.
 
 ### Logins never touch Quotient
 
 The portal adds no Quotient sessions and doesn't need Quotient up to let a team in — it reads the
-same `event.conf` Quotient reads (bind-mounted read-only) and compares against its `[[team]]`/
-`[[admin]]` entries, re-reading on mtime change so a rotated password takes effect without a
-restart. Roles: **team** (its own boxes only), **admin**/white team (every team's boxes, plus the
-gate). `scoring` and `inject` are refused.
-
-Students may type a display name at login. Accounts are shared per team, so that name is the only
-per-student attribution, recorded in the access log.
+same `event.conf` Quotient reads and compares against its `[[team]]`/`[[admin]]` entries,
+re-reading on mtime change so a rotated password takes effect without a restart. Roles: **team**
+(its own boxes only), **admin**/white team (every team's boxes, plus the gate); `scoring` and
+`[[inject]]` accounts are refused. Accounts are shared per team, so the display name typed at
+login is the only per-student attribution — recorded in the access log.
 
 ### The dashboard's VPN panel
 
-When remote access is on ([remote-access.md](remote-access.md)), phase 8 folds the enrollment
-into `portal.json` (`vpn`: the login server plus each team's per-person keys, read from
-`remote-access/keys.json` and `TEZ_HEADSCALE_URL`), and `/api/me` hands a team session only its
-own people — a team never sees another team's keys, like boxes. The team view shows a **VPN
-setup** panel (install Tailscale, then each person's `tailscale up --login-server … --authkey …`
-command) above the **VM access** console grid, and the top bar links both the Quotient
-**Scoreboard** and its **Injects** page. With remote access off (or no `people.json` roster)
-there is no `vpn` field and no VPN section.
+With remote access on ([remote-access.md](remote-access.md)), phase 8 folds enrollment into
+`portal.json` (`vpn`: login server plus each team's per-person keys from
+`remote-access/keys.json`), and `/api/me` hands a team session only its own people — a team never
+sees another team's keys, like boxes. The team view shows a **VPN setup** panel above the console
+grid; no remote access (or no roster) means no panel.
 
 ### Isolation
 
-The console token can open a console on every team VM of this competition, so isolation is
-enforced server-side:
+The console token can open a console on every team VM of this competition, so scoping is enforced
+server-side (pinned by `tests/portal/test_portal_app.py`):
 
-- Box lookup comes from the session: `POST /api/console` resolves the box from the session's
-  team. A team naming another team gets 403, same as a nonexistent box, so a team learns nothing
-  about other lineups.
+- `POST /api/console` resolves the box from the session's team; another team gets 403, same as a
+  nonexistent box, so a team learns nothing about other lineups.
 - Relay ids are single-use and bound to the minting session; a leaked id is burned on first use.
-- The browser never holds the token — only the relay id and a VNC ticket useless without the
-  relay.
-- The portal listens on `127.0.0.1` only; nothing is reachable from team subnets. cloudflared
-  dials out.
-
-Pinned by `tests/portal/test_portal_app.py`.
+- The browser holds only the relay id and a VNC ticket useless without it — never the token.
+- The portal listens on `127.0.0.1` only.
 
 ### The console token
 
-`infra.console` mints one set per node the teams live on:
+`infra/console.py` mints one per-run user per node the teams live on: `tezcon-<comp>-<run_id>@pve`
+(`console_user()`), role `TezConsole` = `VM.Console` only (shared across competitions, never
+deleted), one ACL per team VM of this competition. The token can open no other VM, power-cycle
+nothing, read no config.
 
-| Object | Value |
-|---|---|
-| User | `tezcon-<comp>-<run_id>@pve` |
-| Token | `<user>!portal`, `privsep=0` |
-| Role | `TezConsole` = `VM.Console` only. Shared across competitions, never deleted |
-| ACLs | `/vms/<vmid>` → that user, one per team VM of this competition |
-
-The token can only open a console on this comp's team VMs — no power-cycle, no config read, no
-other VM.
-
-- **Storage**: the secret lives in the state document (`run.portal_console_tokens`); PVE only reveals
-  it at creation, so a vanished token is re-created.
-- **Permissions**: minting needs `User.Modify`, `Permissions.Modify`, `Realm.AllocateUser`, and
-  (for the first `TezConsole` creation on a node) `Sys.Modify`. Preflight warns when a node's
-  token lacks them; the portal then runs with logins and box lists but no consoles there.
-- **Teardown**: `destroy-competition.py` deletes exactly `tezcon-<comp>-<run_id>@pve` on every
-  node before the VMs go — exact name match, never a prefix. An absent user counts as clean, so
-  re-running destroy converges.
+- The secret lives only in the state document (`run.portal_console_tokens`); PVE reveals it at
+  creation only, so a vanished token is re-created.
+- Minting needs `User.Modify`, `Permissions.Modify`, `Realm.AllocateUser`, `Sys.Modify`
+  (`console.REQUIRED_PRIVS`). A node whose deploy token lacks them is skipped with a recorded
+  degradation (`mint_console_tokens` probes per node) and its portal runs with logins and box
+  lists but no consoles.
+- `destroy-competition.py` deletes exactly `tezcon-<comp>-<run_id>@pve` on every node before the
+  VMs go — exact name match, never a prefix. An absent user counts as clean, so re-running
+  destroy converges.
 
 ### The gate
 
-Team consoles answer 423 until an admin opens access; logins and box lists work throughout.
-Admins always bypass it.
+Team consoles answer 423 until an admin opens access; logins and box lists work throughout;
+admins always bypass it.
 
 ```bash
 python3 portal-access.py <comp> status | open | close
 ```
 
-`state/access.json` survives a re-push (phase 8 re-runs, engine-recovery re-seed). A re-push
-restarts the portal container (it reads `portal.json` once at startup), so open consoles drop and
-need a reconnect.
+`state/access.json` survives a re-push and is re-read per request. A re-push does restart the
+portal container (`portal.json` is read once at startup), so open consoles drop and need a
+reconnect.
 
 ### The stable hostname has one owner
 
-Two cloudflared connectors on one tunnel token would split students between two ranges at random.
-Before starting cloudflared, phase 8 fetches `https://$TEZ_PORTAL_HOSTNAME/healthz`
-(`{comp, run_id, open}`):
-
-| Answer | Action |
-|---|---|
-| Nobody: offline, error page, or not our JSON | Start cloudflared |
-| This run | Start it again |
-| Another comp or run | Skip the tunnel, record a degradation, stop any cloudflared this comp left behind. The portal stays reachable through `ssh -L` only |
+Two cloudflared connectors on one tunnel token would split students between two ranges at random,
+so before starting cloudflared phase 8 asks `https://$TEZ_PORTAL_HOSTNAME/healthz` who owns the
+name (`portal_ops.tunnel_decision`): free or this run → start; another comp or run → skip the
+tunnel, record a degradation, and stop any cloudflared this comp left behind — the portal stays
+reachable through `ssh -L` only.
 
 **One-time Cloudflare setup** (by hand; the repo only consumes the token): create a remotely
 managed tunnel in Zero Trust; add a public hostname → service `http://portal:8000` (cloudflared
 runs in the portal's compose network, so the service name resolves); put the token and hostname
-in the event env file as `TEZ_PORTAL_TUNNEL_TOKEN`/`TEZ_PORTAL_HOSTNAME`.
+in the event env file.
 
 ## Operating it
 
@@ -146,82 +109,59 @@ ssh -i proxmox -L 8443:127.0.0.1:8443 <vm_user>@<engine_ip>    # then http://127
 ```
 
 - `credentials.txt` gets a `Portal:` line once it's up.
-- `/opt/tez-portal/state/access.log` records logins, console opens/closes, gate flips. Teardown
+- `/opt/tez-portal/state/access.log` records logins, console opens/closes, gate flips; teardown
   copies it to `competitions/<id>/portal-access.log`, and artifact collection carries it into
   `.automated-tests/<run-id>/`.
 
-**After a box rebuild**: Proxmox's VM-destroy path removes that VM's ACL entries, so re-apply:
+**After a box rebuild**: Proxmox's VM-destroy path removes that VM's ACL entries (the rest stay),
+so re-apply:
 
 ```bash
 python3 portal-access.py <comp> resync
 ```
 
-Confirmed live 2026-10-18 (portal-smoke): rebuilding `team1/lnx01` removed exactly
-`/vms/<that vmid>` while the other three ACLs stayed; `resync` put all four back and reused
-the recorded token. PUTs are idempotent. If it reports a token was re-created, re-run
-`create-competition.py --competition <comp> --from-phase 8 --yes` so the engine's `portal.json`
-picks up the new secret.
+`resync` reuses the recorded token (PUTs are idempotent). If it reports a token was re-created,
+re-run `python3 create-competition.py --competition <comp> --from-phase 8 --yes` so the engine's
+`portal.json` picks up the new secret.
 
 **After engine recovery**: `redeploy_engine_ops` clears `portal_up`; the advertised `--from-phase
 7` re-seed re-runs phase 8, which re-ships the portal with the recorded tokens.
 
-**No console token on a node**: re-run phase 8 with a privileged token, e.g.
+**No console token on a node**: re-run phase 8 with a privileged token —
 `TEZ_PROXMOX_API_TOKEN=<privileged token> python3 create-competition.py --competition <comp>
---from-phase 8 --yes`. Phase 8's other steps are flag-guarded and skip.
+--from-phase 8 --yes` (phase 8's other steps are flag-guarded and skip).
 
 ## Limits
 
 - **No clipboard.** QEMU's VGA console has no guest clipboard; the console page's *Type text…*
   button sends paced ASCII keystrokes instead.
-- **RFB 3.3 cap.** PVE's `vncwebsocket` only completes an RFB 3.3 handshake; noVNC has no public
-  setting for its version cap, so `Console.jsx` lowers the internal `_rfbMaxVersion` to 3.3 right
-  after constructing the client. Re-check that field on a noVNC upgrade.
+- **RFB 3.3 cap.** PVE's `vncwebsocket` only completes an RFB 3.3 handshake and noVNC has no
+  public setting for its version cap — `Console.jsx` lowers the internal `_rfbMaxVersion`;
+  re-check that field on a noVNC upgrade.
 - **The engine healthcheck does not watch the portal** — `range-healthcheck.sh` is baked into the
   engine template, and changing it would rebuild every competition's engine template for an
   opt-in feature. The container has its own Docker healthcheck and `restart: unless-stopped`.
 
 ## Frontend
 
-`portal/frontend/` shares the management UI's stack (React 19, Vite, Tailwind 4) and design.
-`src/components/ui.jsx`/`kit.jsx` and `src/index.css` are verbatim copies of
-`tezcatlipoca-dashboard/web/src/components/` (the shared kit's original home; plus portal-only rules) rather than cross-tree imports, because
-the image builds on the engine from `portal/` alone. `tests/portal/test_portal_frontend.py` pins the
-noVNC release tarball's integrity hash; it doesn't check the copies for drift.
-
-- **Views**: `/` is sign-in, then the team hub (VPN setup panel when remote access is on, the
-  VM access console grid) or the white-team view (gate, every team, access log);
-  `/console/<team>/<box>` is one console per tab. The FastAPI app serves the build as
-  an SPA, same as the dashboard service.
-- **noVNC** comes from the v1.6.0 GitHub release tarball (pinned integrity hash), not the npm
-  package: its `lib/` build is CommonJS with a top-level `await`, which Vite rejects; the release
-  source's ES modules build cleanly.
-- **Build**: the image builds the UI itself (Dockerfile stage 1: `npm ci` + `vite build`), so a
-  deploy host needs no Node; only the frontend source ships to the engine.
-- **Local dev**: `cd portal/frontend && npm install && npm run dev`. Vite proxies `/api`,
-  `/healthz`, and the console websocket to `127.0.0.1:8443` (a local uvicorn portal, or a real
-  engine's portal over `ssh -L`).
+`portal/frontend/` shares the dashboard's stack and UI kit by in-tree copy (the image builds on
+`portal/` alone, so no cross-tree imports); nothing drift-checks the copies. noVNC is pinned to
+its GitHub release tarball with an integrity hash (`tests/portal/test_portal_frontend.py`), not
+the npm package: the `lib/` build is CommonJS with a top-level `await`, which Vite rejects, while
+the release source's ES modules build cleanly. The image builds the UI itself (`npm ci` +
+`vite build`, Dockerfile stage 1), so a deploy host needs no Node. Local dev:
+`cd portal/frontend && npm install && npm run dev` (Vite proxies `/api`, `/healthz` and the
+console websocket to `127.0.0.1:8443` — a local uvicorn portal, or a real engine's portal over
+`ssh -L`).
 
 ## Verification
 
 `verify-competition.py` runs the `portal` gate when the Compfile enables it, probing the engine's
-`127.0.0.1` listener the way cloudflared reaches it: health; a team login sees exactly its own
-boxes; the gate (423 while closed); a cross-team console request refused (403); an admin login;
-per node in `portal.json`'s `nodes`, one console relayed far enough to read the `RFB 003.`
-greeting (a node with no box sample is a named FAIL); that relay id refused on reuse.
-
-When `portal.json` has a `public_host` (the tunnel started), the probe also goes through
-`https://<public_host>` from the engine: public `/healthz`, a team login, and one admin console
-relay. A broken tunnel is a FAIL row, not a crash; with no tunnel there is no tunnel row.
-
-`--portal-concurrency N` (default 1) opens up to N console relays at once, across team boxes, so
-`pveproxy` is exercised at event-size concurrency instead of one console at a time. The default
-keeps the normal verify's sequential per-node pass. Live 2026-10-18 (portal-smoke, single node,
-2 teams × 2 boxes): `--portal-concurrency 4` opened all four relays (each `101` + `RFB 003.008`),
-the gate stayed closed (`423`), cross-team was refused (`403`), relay IDs were single-use, the
-rebuild drill removed/reapplied only the rebuilt VM's ACL, and a full destroy removed
-`tezcon-<comp>-<engine-run-id>@pve` and every ACL on the node. A second one-box run proved the
-gate-open path (`open: True`, team gate `200`, console relay). A third one-box run proved the
-public Cloudflare path through a quick tunnel: `tunnel healthz 200`, `tunnel team login 200`, and
-a tunnel console relay (`wss 101` + `RFB 003.008`). The deploy-side named-tunnel start (token +
-hostname/ownership) and multi-node remain unproven. Offline coverage:
-`tests/portal/test_portal_*.py`, `tests/portal/test_pve_console_ops.py`.
+`127.0.0.1` listener the way cloudflared reaches it — health, a team login sees exactly its own
+boxes, the gate (423 while closed), cross-team console refused (403), an admin login, one console
+relayed per node in `portal.json` far enough to read the `RFB 003.` greeting (a node with no box
+sample is a named FAIL), and a relay id refused on reuse; with `public_host` set it repeats the
+probe through `https://<public_host>` (a broken tunnel is a FAIL row, not a crash). Probe list:
+`portal_ops.check_portal`. `--portal-concurrency N` opens N relays at once across team boxes so
+`pveproxy` is exercised at event size instead of one at a time (`verifier/cli.py`). Offline
+coverage: `tests/portal/` (`test_portal_*.py`, `test_pve_console_ops.py`).

@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""Open, close, or inspect a competition's student-portal gate without the web UI.
-
-    python3 portal-access.py <competition> status
-    python3 portal-access.py <competition> open
-    python3 portal-access.py <competition> close
-    python3 portal-access.py <competition> resync    # re-apply console ACLs after a box rebuild
-
-Team consoles stay closed (HTTP 423) until access is opened; admins always bypass it. The
-white-team view in the portal flips the same switch (docs/portal.md).
-
-`resync` re-applies this run's console-token ACLs (one per team VM). Proxmox's VM-destroy path
-removes that VM's ACL entries (confirmed live 2026-10-18: a rebuilt box lost exactly its own
-`/vms/<vmid>` ACL while the others stayed), so a box rebuilt by redeploy-competition.py can
-lose its console until this (or a re-run of phase 8) puts the ACL back. The PUTs are idempotent, so running it needlessly is
-harmless."""
+"""Open, close, or inspect a competition's student-portal gate without the web UI."""
 
 import argparse
 import json
@@ -38,7 +24,8 @@ from estate.engine_setup import engine_ctx  # noqa: E402
 
 
 def resync(comp_dir):
-# Re-apply this run's console ACLs on every node (the token itself is reused).
+# Proxmox's VM-destroy path drops that VM's ACL entries, so a rebuilt box loses its console
+# until this re-applies them; the PUTs are idempotent.
     state = estate_state.load_flat(comp_dir)
     teams = json.loads((comp_dir / "teams.json").read_text())
     boxes = json.loads((comp_dir / "boxes.json").read_text())
@@ -53,8 +40,7 @@ def resync(comp_dir):
     for p in problems:
         print(f"  WARNING: {p}")
     if any(tokens.get(k, {}).get("secret") != v.get("secret") for k, v in previous.items()):
-        # The token had to be re-created (PVE only shows a secret at creation), so the
-        # engine's portal.json is stale: re-run phase 8 to re-ship it.
+        # PVE only shows a token's secret at creation: a re-created token makes portal.json stale.
         print("  NOTE: a console token was re-created — re-run "
               f"`create-competition.py --competition {competition_name(comp_dir)} --from-phase 8 --yes` "
               "so the portal picks up the new secret.")

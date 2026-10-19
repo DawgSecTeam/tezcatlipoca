@@ -35,9 +35,8 @@ apt-get -o DPkg::Lock::Timeout=120 update
 
 
 def _apt_prep_script(gateway=None):
-# gateway=None removes any proxy file a previous prep wrote, so toggling the Compfile's
-# `apt_cache` flag cannot leave stale proxying. The proxy is an IP (the box's gateway = the
-# engine's team NIC), so apt keeps working when a planted null-DNS breaks the box's DNS.
+# gateway=None removes the proxy file, so toggling Compfile apt_cache cannot leave stale proxying.
+# The proxy is an IP (the engine's team NIC), so apt works after a planted null-DNS breaks the box's DNS.
     if gateway:
         proxy_lines = (
             "mkdir -p /etc/apt/apt.conf.d\n"
@@ -50,8 +49,7 @@ def _apt_prep_script(gateway=None):
 
 
 def prep_apt_on_boxes(targets, ctx, use_proxy=True):
-# SSH + sudo is the primary channel (the guest agent is unreliable in the minute after a
-# tz-base rollback/reboot); the agent is the fallback. Non-fatal per box.
+# SSH+sudo is primary: the guest agent is unreliable in the minute after a tz-base rollback/reboot. Non-fatal per box.
     box_username = ctx.get("box_username", "ubuntu")
     node = config.active().proxmox.node
     print("  Prepping apt on Linux boxes (disable apt-daily/unattended-upgrades, refresh index)...")

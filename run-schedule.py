@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""Event-day schedule driver for a packet-compiled competition.
-
-The engine has no schedule model — pausing IS the schedule. This reads a packet
-profile's `schedule:` windows, prints the wall-clock plan from T0, and (with
---execute) drives the engine through start / lunch-freeze / resume / end:
-
-  python3 run-schedule.py <packet-dir>/packet.yaml --t0 "<iso8601 t0>"
-  python3 run-schedule.py <packet-dir>/packet.yaml --execute freeze
-  python3 run-schedule.py <packet-dir>/packet.yaml --execute end
-
-`end` also dumps the final scoreboard + inject state into <comp>/evidence/ BEFORE
-the pause kills the loop's last round (the stage_capture lesson: capture first)."""
+"""Event-day schedule driver for a packet-compiled competition."""
 
 import argparse
 import os
@@ -30,6 +19,7 @@ from quotient.event_capture import end_event
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 REPO_ROOT = Path(__file__).resolve().parent
+# The engine has no schedule model; pausing IS the schedule.
 ACTIONS = ("start", "freeze", "resume", "end")
 
 
@@ -37,7 +27,7 @@ def load_profile(profile_arg):
     from config.packet_ops import load_profile, packet_yaml_for_event, resolve_packet_source
     resolved = resolve_packet_source(profile_arg)
     if resolved is None or resolved.is_dir():
-        resolved = packet_yaml_for_event(profile_arg)  # bare event name (or event-dir arg)
+        resolved = packet_yaml_for_event(profile_arg)
     if not Path(resolved).exists():
         sys.exit(f"ERROR: no packet profile at {profile_arg} "
                  "(path, comp-dir/comps-root relative, or an event name)")
@@ -80,8 +70,7 @@ def print_plan(schedule, t0):
 
 
 def main():
-    # Every file this driver writes (the evidence dump and anything the engine layer
-    # creates) is private from the start rather than depending on the operator's umask.
+    # Evidence and engine-layer writes must not depend on the operator's umask.
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("profile", help="path to a packet.yaml (comp-dir/comps-root "
@@ -131,10 +120,8 @@ def main():
         if r.status_code >= 400:
             return 1
     elif action == "end":
-        # Capture BEFORE the pause: the round loop stopping is what freezes the
-        # scoreboard's last round, and a paused engine answers the same APIs — but
-        # capture first, exactly like stage_capture. end_event() cannot raise out of
-        # main(): the pause below is the whole point of `end` and must always run.
+        # Capture before the pause: the round loop stopping freezes the scoreboard's last
+        # round. end_event never raises, so the pause below always runs.
         return end_event(base_url, session, comp_dir)
     return 0
 

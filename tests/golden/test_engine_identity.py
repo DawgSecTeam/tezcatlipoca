@@ -1,18 +1,4 @@
-"""The engine-template build VM's identity stamp.
-
-The template clean (`clean_engine_for_template`) is the most destructive command in the
-pipeline: it drops the containers and volumes, `.env`, `event.conf`, machine-id, cloud-init
-state and the SSH host keys. It runs over SSH to a management IP that a second
-competition's live engine can be sharing, and with two VMs on one address ARP flaps can
-deliver it to the wrong machine. Observed (known-issues): an engine lost
-`/etc/ssh/ssh_host_*` — every session reset at kex while the listener stayed up — plus its
-`/opt/quotient/.env` and containers.
-
-The fix is a stamp written when the build VM first accepts SSH, verified before anything
-destructive, and removed by the clean so it is never baked into the template.
-
-Offline; `_run_engine_cmd` is faked.
-"""
+"""Identity-stamp gating of the template clean: verify before destroying a possibly-shared mgmt IP. Offline."""
 
 import sys
 import types
@@ -30,8 +16,6 @@ def _ctx(ip="10.0.0.250"):
 
 
 class _CmdRecorder:
-# Stands in for _run_engine_cmd: records calls, answers the identity probe.
-
     def __init__(self, stamp=""):
         self.stamp = stamp
         self.calls = []
@@ -53,17 +37,16 @@ class _CmdRecorder:
 class IdentityProbe(unittest.TestCase):
 
     def test_a_foreign_engine_is_refused(self):
-    # No stamp = a machine this pipeline never stamped: a foreign engine, or a clone
-    #         made from a template. Both are worse than stopping.
+    # No stamp also matches a legit template-made clone; refusing still beats cleaning it.
         rec = _CmdRecorder(stamp="")
         with patch.object(engine_identity_ops, "_run_engine_cmd", rec):
             with self.assertRaises(RuntimeError) as ctx:
                 engine_identity_ops.assert_engine_build_identity(_ctx(), 1240)
         message = str(ctx.exception)
         self.assertIn("refusing", message)
-        self.assertIn("10.0.0.250", message)                  # names the address
-        self.assertIn("Nothing was changed", message)         # reassures the operator
-        self.assertIn("TEZ_ENGINE_MGMT_IP", message)       # names the real remedy
+        self.assertIn("10.0.0.250", message)
+        self.assertIn("Nothing was changed", message)
+        self.assertIn("TEZ_ENGINE_MGMT_IP", message)
 
     def test_another_slots_build_is_refused(self):
         rec = _CmdRecorder(stamp=engine_identity_ops.engine_build_identity(1140) + "\n")

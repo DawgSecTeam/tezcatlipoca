@@ -1,15 +1,4 @@
-"""Guest-agent file transfer instead of scp/ssh.
-
-The agent file endpoints are the only file path that needs no network into the guest,
-but neither has an append/offset, and file-write's `content` is capped at 61440 chars
-(apidoc maxLength), so anything larger travels as .partN files reassembled with a
-guest-side `cat`. file-read is asymmetric: the apidoc default `decode=1` means the
-`content` we get back is already decoded, and it arrives as a str — non-UTF-8 bytes
-only survive if we re-read it with surrogateescape (the same contract pmx.py's
-`read`/`write` bake in).
-
-Offline; the Proxmox API is faked and no VM is touched.
-"""
+"""Guest-agent file transfer instead of scp/ssh; offline, the Proxmox API is faked."""
 
 import base64
 import json
@@ -25,9 +14,7 @@ from infra import guest_exec  # noqa: E402
 
 
 class _FakeApi:
-# Scripted proxmox_api: records every call, answers writes and exec, serves read data.
-# `content` is serialized the way the API does it — the decoded bytes ride a UTF-8 JSON
-# string — so the read tests exercise the real str -> bytes contract, not a byte array.
+# Fakes proxmox_api. Content rides a UTF-8 JSON string like the real API's str->bytes contract.
 
     def __init__(self, content=b""):
         self.calls = []
@@ -65,7 +52,7 @@ class ExecChannelLoss(unittest.TestCase):
 
 class WriteToGuest(unittest.TestCase):
     def test_chunks_stay_under_the_documented_content_cap(self):
-        size = guest_exec._FILE_WRITE_CHUNK * 2 + 10          # guarantees 3 chunks
+        size = guest_exec._FILE_WRITE_CHUNK * 2 + 10
         api = _FakeApi()
         with patch.object(guest_exec, "proxmox_api", api):
             guest_exec.guest_agent_write_file("pve", 221, "/tmp/blob", bytes(size))
@@ -126,9 +113,7 @@ class WriteToGuest(unittest.TestCase):
 
 class ReadFromGuest(unittest.TestCase):
     def test_binary_content_round_trips(self):
-        # NUL, C1/control bytes and multi-byte UTF-8: non-text but still valid on the
-        # API's UTF-8 JSON string. Bytes that are not valid UTF-8 cannot survive the
-        # JSON response at all (see the report's unverified note).
+        # NUL, C1 and multi-byte UTF-8 are valid on the API's JSON string; non-UTF-8 bytes are not.
         payload = (bytes(range(0, 32)) + bytes(range(0x7F, 0x100))
                    + "é€\U0001f600".encode("utf-8"))
         api = _FakeApi(payload)

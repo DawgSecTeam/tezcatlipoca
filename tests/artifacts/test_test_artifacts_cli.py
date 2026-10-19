@@ -1,12 +1,4 @@
-"""test-artifacts.py CLI: the read/inspect/repair surface over `.automated-tests/<key>/`.
-
-Fully offline: no estate, no Proxmox, no network. The CLI is called in-process (its exit codes are
-*returned*, not raised) with the cwd moved into a temp repo-like root — which is how an operator
-invokes it from the repo root, and the only way to exercise `competitions/<id>` resolution without
-touching the real tree. `collect` is exercised live only for a comp whose manifest has no agents
-(so no target has a remote route) and otherwise with `--dry-run`, because the real transport would
-scp to a red01 VM.
-"""
+"""test-artifacts.py CLI: the read/inspect/repair surface over `.automated-tests/<key>/`."""
 
 import contextlib
 import importlib.util
@@ -29,10 +21,6 @@ BUILD_INFO = '{"ok": true}\n'
 
 
 def _load_cli():
-# The script is not importable by name (`test-artifacts.py` has a dash), so load it by path.
-#
-#     Importing it is safe: only `main()` is guarded, and importing reads no state — artifacts_ops
-#     resolves its own paths from `__file__`, never from the cwd the tests move.
     spec = importlib.util.spec_from_file_location("test_artifacts_cli_under_test",
                                                   _REPO / "test-artifacts.py")
     module = importlib.util.module_from_spec(spec)
@@ -44,8 +32,6 @@ cli = _load_cli()
 
 
 class CliTestCase(unittest.TestCase):
-# A temp `repo root` holding competitions/demo with a Compfile + a run id in deploy state.
-
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -58,8 +44,7 @@ class CliTestCase(unittest.TestCase):
         self._cwd = os.getcwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, self._cwd)
-        # seal_test refreshes the durable archive when the checkout is a linked worktree; point
-        # that root at the temp dir so the suite stays hermetic wherever it runs.
+        # seal_test refreshes the durable archive on a linked worktree; redirect it to stay hermetic.
         patcher = patch.dict(os.environ,
                              {"TEZ_ARTIFACTS_ARCHIVE": str(self.root / "archive")})
         patcher.start()
@@ -67,17 +52,13 @@ class CliTestCase(unittest.TestCase):
         self.key = ao.test_key(self.comp)
         self.assertEqual(self.key, RUN_ID)
 
-    # ── helpers ────────────────────────────────────────────────────────────────────────
-
     def run_cli(self, *argv):
-    # (exit code, stdout+stderr) — both streams, so a refusal printed to stderr is visible.
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
             code = cli.main(list(argv))
         return code, buffer.getvalue()
 
     def make_folder(self, kind="deploy", *, files=None):
-    # An `ensure_test` folder, optionally with a collectable local harness run dir.
         path, _ = ao.ensure_test(self.comp, kind=kind, script="tests/artifacts/test_test_artifacts_cli.py")
         if files is not None:
             run_dir = self.root / "run"
@@ -88,7 +69,7 @@ class CliTestCase(unittest.TestCase):
         return path
 
     def settle(self, path):
-    # Collect (local-only) then stubs/REPORT.md/index — what teardown leaves behind.
+    # What teardown leaves behind.
         ao.collect(path, ao.plan_targets(ao.load_manifest(path), comp_dir=self.comp))
         ao.finalize(path, manifest=ao.load_manifest(path))
         return path

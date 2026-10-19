@@ -27,8 +27,7 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
 
     machines = [t["machine"] for t in targets]
     if nakon_bundle is not None and nakon_config_path is not None:
-        # The stage lists only machines with post-clone plants; `nakon --only` on an absent box
-        # errors ("matched no machine"), which the retry loop misreads as a dead SSH session.
+        # `nakon --only` on an absent box errors "matched no machine", which the retry loop misreads as dead SSH.
         staged = {m["name"] for m in json.loads(Path(nakon_config_path).read_text())["machines"]}
         machines = [m for m in machines if m in staged]
     if nakon_bundle is None or nakon_config_path is None or not machines:
@@ -43,8 +42,7 @@ def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
             timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
             strict=False, jobs=nakon_jobs,
         )
-        # Append, never replace: a scoped mid-event replant must not erase the deploy's failed
-        # steps or declare them resolved — verify's plant-integrity line reads this.
+        # Append, never replace: verify's plant-integrity line reads this.
         state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
             f"redeploy: {line}" for line in result.failed[:20]]
         # The document holds the only copy of the box passwords; write_flat is the atomic writer.
@@ -85,8 +83,7 @@ def _domain_config_path(comp_dir, fallback):
 
 
 def rerun_domain_configs(targets, rctx, nakon_config_path):
-# Returns True when the chain re-ran clean (or there are no domain semantics) and False when it
-#     could not; callers must NOT re-take tz-ready on False, or they bake in a broken state.
+# False means the chain could not re-run: callers must NOT re-take tz-ready, or they bake in a broken state.
     ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
     roles_path = comp_dir / "domain_roles.json"
     if not roles_path.exists():
@@ -117,9 +114,8 @@ def rerun_domain_configs(targets, rctx, nakon_config_path):
             for t in domain_targets
         )
         if dc_reset:
-            # A reset DC wipes the entire AD content and each chain step keys on its own
-            # done-marker, so every one of this team's markers is void; deleting only ADDS
-            # skipped account re-creation.
+            # A reset DC wipes all AD content and every chain step keys on its own done-marker,
+            # so all of this team's markers are void; deleting only some re-skips account creation.
             for marker in sorted(comp_dir.glob(f".nakon-domain-{team_key}-*.json")):
                 print(f"  Deleting stale domain marker {marker.name} — the DC was reset, "
                       f"so the whole domain chain (promotion, AD content, member joins) "
@@ -135,8 +131,7 @@ def rerun_domain_configs(targets, rctx, nakon_config_path):
 
 
 def prepare_nakon_assets(comp_dir, boxes):
-# Pre-domain re-plants run the post-clone stage only — the golden-stage installs ride the
-#     linked clone. Built lazily so a reset settling at tz-ready never demands unused files.
+# Pre-domain re-plants run the post-clone stage only; golden-stage installs ride the linked clone.
     postclone = comp_dir / ".nakon-postclone.json"
     if postclone.exists():
         if not json.loads(postclone.read_text()).get("machines"):

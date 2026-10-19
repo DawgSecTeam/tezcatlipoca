@@ -1,13 +1,4 @@
-"""Known-broken catalog configs are a machine-readable list
-(constants.KNOWN_BROKEN_CONFIGS) enforced at generate/compile time, replacing the prose +
-per-competition-JSON pruning that let a new comp silently re-pin one. The four Linux rows
-(tftpd, postgresql pair, sshd-force-sftp) were fixed upstream, and so
-were four of the five "Windows user-policy" rows (local-user-win,
-powershell-execution-unrestricted, rpc-proxy-on-dc-web-win, unauth-kiosk-app-startup-win):
-the user-policy/account-ordering diagnosis was wrong and none of them is an account defect.
-Only mailenable-cleartext-mail-win is still broken (its install is a wrong package id). A
-competition that already records a pin of a still-listed config keeps deploying (warning, not
-error) so historical comps stay re-deployable. Offline."""
+"""The machine-readable KNOWN_BROKEN_CONFIGS list is enforced at generate/compile/validate time. Offline."""
 
 import contextlib
 import io
@@ -78,9 +69,7 @@ class GenerateNakonConfigGate(unittest.TestCase):
             self.assertIn("mailenable-cleartext-mail-win", machines[0]["configurations"])
 
     def test_fresh_randomized_selection_is_filtered_not_fatal(self):
-        # randomize cannot know this driver-side table, so a fresh pick of a broken config is
-        # dropped with a notice — aborting create-competition for a pin nobody chose was the
-        # worse behaviour (found in integration).
+        # Fresh picks of broken configs are filtered, not fatal — no abort over a pin nobody chose.
         with tempfile.TemporaryDirectory() as tmp:
             comp = _comp(tmp)
             out = io.StringIO()
@@ -119,8 +108,7 @@ class DropUnplantableBare(unittest.TestCase):
 
 
     def test_literal_var_config_is_dropped_but_identity_only_survives(self):
-        # hosts-redirect-linux has a literal (HOSTS) -> unplantable bare; a config with only
-        # identity vars would be plantable, so the predicate is literal-scoped, not name-based.
+        # The drop predicate is literal-scoped, not name-based: hosts-redirect-linux has a literal (HOSTS).
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             kept = nakon_pin_ops._drop_unplantable_bare(
@@ -130,10 +118,8 @@ class DropUnplantableBare(unittest.TestCase):
         self.assertIn("hosts-redirect-linux", out.getvalue())
 
     def test_catalog_var_configs_dropped_from_fresh_selection(self):
-        # Regression: raw-socket-beacon (SERVICE_NAME) and desktop-autostart
-        # (DEST, EXEC) carry catalog required_vars but were missing from REQUIRED_VARS, so a
-        # fresh randomize selected them as BARE names and the nakon bundle lint aborted the
-        # whole deploy ("catalog payload(s) reference variable(s) their step does not declare").
+        # Regression: catalog required_vars missing from REQUIRED_VARS were picked bare and
+        # the bundle lint aborted the whole deploy.
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             kept = nakon_pin_ops._drop_unplantable_bare(

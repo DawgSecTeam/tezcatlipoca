@@ -32,8 +32,7 @@ def find_engine_template(node, engine_vmid):
 def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                           postgres_password, redis_password, quotient_ref,
                           hash_value, inputs, run_id=None, mgmt_bridge=""):
-# Converts the build VM before any competition state exists; the apt-cacher-ng cache is
-# empty here and is built on the linked-clone engine at deploy time.
+# The apt-cacher-ng cache is empty here; it builds on the linked-clone engine at deploy time.
     from engine.engine_bootstrap_ops import bootstrap_scoring_engine
     from engine.engine_identity_ops import clean_engine_for_template
     from common.ssh_ops import forget_engine_host_key, wait_for_ssh
@@ -43,9 +42,8 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     expect_tags = ownership_tags(competition_name(comp_dir), run_id, "engine-template")
     tags = ",".join(sorted(expect_tags))
 
-    # A config-PUT failure between the clone and the tag PUT leaves a leftover wearing the
-    # BASE image's inherited tags, which the strict guard would refuse forever; a
-    # not-yet-converted VM on the reserved slot carrying the reserved NAME is our dead attempt.
+    # A dead build leaves an unconverted VM on the reserved slot wearing the base image's
+    # inherited tags; the reserved NAME proves it is our attempt, not a foreign VM.
     from golden.golden_target_ops import _is_template  # local: golden_ops imports this module back
 
     if vmid in {v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]} \
@@ -58,9 +56,8 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
             destroy_vm_if_exists(node, vmid, expect_tags=None)
     destroy_vm_if_exists(node, vmid, expect_tags=expect_tags)
 
-    # PVE serializes concurrent full clones on one datastore lock and reports `can't lock
-    # file ... got timeout` to the loser. The retry must outlast the contention window, so
-    # back off 40/80/120 s rather than repeating a flat gap.
+    # PVE reports `can't lock file ... got timeout` to losers of concurrent full clones;
+    # the backoff must outlast the contention window, hence growing 40/80/120s waits.
     with storage_queue_lock(node):
         for attempt in range(5):
             upid = proxmox_api("POST", f"/nodes/{node}/qemu/{base_engine_vm_id}/clone", data={
@@ -93,8 +90,8 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
         "memory": 4096,
     }
     if mgmt_ip:
-        # Boot the build VM on the PLANNED mgmt IP so the converted template's config matches
-        # what apply #1 sets on clones; a fresh deploy refuses a leftover engine holding it.
+        # Boot on the planned mgmt IP so the template's config matches what clones get; a
+        # fresh deploy refuses a leftover engine holding it.
         gw = config.active().engine.mgmt_gw
         cfg["ipconfig0"] = f"ip={mgmt_ip}/24" + (f",gw={gw}" if gw else "")
     # A PUT landing right after the clone commits can 400 "Parameter verification failed"
@@ -126,8 +123,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                                "set TEZ_ENGINE_MGMT_IP (portable-node mode) or fix "
                                "the agent channel")
     forget_engine_host_key(build_ip)
-    # 900s: a parallel deploy saturating the node can push first-boot (host-key regen +
-    # cloud-init) past 300s, which timed out twice.
+    # 900s: parallel deploys saturating the node pushed first-boot past 300s, twice.
     if not wait_for_ssh(ctx["ssh_key_path"], ctx.get("vm_username", "ubuntu"), build_ip,
                         timeout=900):
         raise RuntimeError(f"engine-template build VM {build_ip} never accepted SSH")
