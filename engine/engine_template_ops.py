@@ -39,7 +39,9 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
     vmid = engine_template_vmid(engine_vmid)
     vm_name = ENGINE_TEMPLATE_NAME
-    expect_tags = ownership_tags(competition_name(comp_dir), run_id, "engine-template")
+    # Kept engine templates carry an earlier run's id; the hash-drift rebuild reclaims
+    # this competition's template, not another competition's.
+    expect_tags = ownership_tags(competition_name(comp_dir), None, "engine-template")
     tags = ",".join(sorted(expect_tags))
 
     # A dead build leaves an unconverted VM on the reserved slot wearing the base image's

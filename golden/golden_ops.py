@@ -55,6 +55,10 @@ def _await_base_volumes(node, vmid, box_name):
 
 def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_tag_str,
                            golden_hashes):
+    # A kept golden is this competition's template carrying an EARLIER run's id; on hash
+    # drift the rebuild must reclaim it, or the strict run-id guard refuses the deploy
+    # (live: cde-2026 reuse run-438f7c08). A foreign comp's template still fails this set.
+    reclaim_set = ownership_tags(competition_name(comp_dir), None, GOLDEN_TAG)
     for t in cold:
         # A clone task that outlived its task-wait leaves only the BASE image's inherited tags, which
         # the strict guard refuses forever — adopt one on our slot with our clone marker.
@@ -70,7 +74,7 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
                 destroy_vm_if_exists(node, t["vmid"], expect_tags=None)
         except Exception:
             pass  # slot empty, or unreadable — the strict destroy below decides
-        destroy_vm_if_exists(node, t["vmid"], expect_tags=own_set)
+        destroy_vm_if_exists(node, t["vmid"], expect_tags=reclaim_set)
         src = templates.get(t["box"]["template"])
         if src is None:
             raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
