@@ -7,12 +7,8 @@ GATES = {
             ("max_simultaneous_down", 4, ">="), ("stalls", 0, "==")],
     # evictions is deliberately NOT a gate: red's health checks only see SSH-class
     # footholds, so zero is an observability gap, not a failed red.
-    # cycles_rc0/timeouts tuned 6/0 -> 2/2  per docs/rehearsal-gates.md's
-    # post-rehearsal protocol: a meaningful blue cycle costs 20-30 min at the club's
-    # qwen3.8-27b endpoint and the two teams serialise on one shared LLM lock, so a
-    # 30-minute scrim affords about one cycle per team (measured across runs: 4 cycles/45 min,
-    # 3/30 min, 1 rc=0/30 min, 0/25 min) and a late cycle cut at the event deadline is logged as a TIMEOUT
-    # (2 measured). Must stay in sync with the doc's rows.
+    # blue's cadence gates assume one shared LLM lock: a real cycle costs 20-30 min and the two
+    # teams serialise, so a short scrim affords about one cycle per team. Meaning: rehearsal-gates.md.
     "blue": [("cycles_rc0", 2, ">="), ("restorations", 2, ">="),
              ("injects", 2, ">="), ("notebook_entries", 10, ">="),
              ("timeouts", 2, "<=")],
