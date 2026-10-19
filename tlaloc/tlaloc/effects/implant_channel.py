@@ -88,14 +88,18 @@ class ImplantChannel(Effect):
                                  "check_cmd": info.get("check_cmd"),
                                  "paths": info.get("paths") or []}]
             if ctx.is_windows(ip):
-                # A task, not a service: undo is end+delete the task and remove
-                # the binary. Defender is not excluded — it is REMOVED from every
-                # Windows template, so there is nothing to restore there.
-                task = info.get("unit")
+                # The plant draws its own undo list (task / service / registry /
+                # WMI / IFEO — whichever mechanisms it actually used), so blue's
+                # restore has to remove every surface red touched. Defender is not
+                # excluded — it is REMOVED from every Windows template, so there
+                # is nothing to restore there.
                 paths = info.get("paths") or []
-                exe = next((p for p in paths if not str(p).startswith("task:")), None)
-                recipe = [f'schtasks /End /TN "{task}"',
-                          f'schtasks /Delete /TN "{task}" /F']
+                exe = next((p for p in paths if str(p).lower().endswith(".exe")), None)
+                recipe = list(info.get("undo") or
+                              [f'schtasks /End /TN "{info.get("unit")}"',
+                               f'schtasks /Delete /TN "{info.get("unit")}" /F'])
+                recipe.append("taskkill /F /IM "
+                              + (exe.rsplit("\\", 1)[-1] if exe else "<payload>.exe"))
                 if exe:
                     recipe.append(f"Remove-Item -Path '{exe}' -Force")
             else:

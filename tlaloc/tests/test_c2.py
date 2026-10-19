@@ -15,7 +15,8 @@ import pytest
 
 from tests.helpers import FakeSSH, base_cfg, make_ctx
 from tlaloc.c2 import FakeMythic
-from tlaloc.c2.implant import Planter, load_manifest, payload_file
+from tlaloc.c2.implant import (WINDOWS_LAUNCHERS, WINDOWS_MECHANISMS,
+                               Planter, load_manifest, payload_file)
 from tlaloc.c2.mythic import MythicClient, _epoch
 from tlaloc.errors import C2Error
 
@@ -425,22 +426,34 @@ def test_the_plant_rides_the_escalated_foothold_when_sudo_is_broken(tmp_path):
     assert "/tmp/.x" in install[0] and "sudo -n" not in install[0]
 
 
-def test_the_windows_plant_is_a_system_scheduled_task(tmp_path):
-    """apollo is a console agent: New-Service/Start-Service dies 1053 (the CLIXML
-    error every Windows box reported on the 2026-10-18 scrim). A SYSTEM ONSTART
-    task runs it without a service wrapper."""
+def test_the_windows_plant_varies_its_persistence_surfaces(tmp_path):
+    """One ONSTART SYSTEM task is a one-look IOC: blue finds it and the board is
+    clean in a minute. Each plant draws a launcher plus one or two redundant
+    mechanisms from OTHER surfaces (registry, WMI, IFEO, Active Setup, startup),
+    and the plant's undo covers every surface it touched."""
     _manifest(tmp_path)
-    out = ("SUCCESS: The scheduled task \"X\" has successfully been created.\r\n"
-           "SUCCESS: Attempted to run the scheduled task \"X\".\r\n\r\n"
-           "Folder: \\\r\nStatus:        Running\r\nLogon Mode:    Interactive/Background\r\n")
+    out = ("SUCCESS: The scheduled task \"X\" has successfully been created.\r\n")
     ssh = FakeSSH().on("schtasks /Create", rc=0, out=out)
+    ssh.on("tasklist", rc=0, out="web01-1.exe  1234  Console  1  10,000 K\r\n")
     ctx = make_ctx(tmp_path / "state", ssh=ssh)
     ctx.world.add_foothold("192.168.1.20", "Administrator", "pw", "admin", windows=True)
     planter = Planter(ctx, comp_dir=tmp_path)
     payload = tmp_path / "dc01.bin"
     payload.write_bytes(b"MZ fake")
-    info = planter._install_windows("192.168.1.20", "web01-1", payload, "http")
-    assert info["ok"] is True and info["unit"]
-    cmd = [c["cmd"] or "" for c in ssh.calls if "schtasks /Create" in (c["cmd"] or "")][0]
-    assert "/RU SYSTEM" in cmd and "/SC ONSTART" in cmd and "New-Service" not in cmd
-    assert "ProgramData" in cmd
+
+    seen = set()
+    for seed in range(12):
+        ctx.rng.seed(seed)
+        info = planter._install_windows("192.168.1.20", "web01-1", payload, "http")
+        assert info["ok"] is True, info["detail"]
+        mechs = info["mechanisms"]
+        assert mechs[0] in WINDOWS_LAUNCHERS
+        assert len(mechs) >= 2, "a plant carries a redundant surface too"
+        assert all(m in WINDOWS_MECHANISMS for m in mechs)
+        assert len(info["undo"]) >= len(mechs), "every surface has an undo"
+        assert len(set(mechs)) == len(mechs), mechs
+        seen.add(tuple(mechs))
+
+    launchers = {ms[0] for ms in seen}
+    assert len(launchers) >= 3, f"launchers stay diverse across plants: {launchers}"
+    assert len(seen) >= 3

