@@ -102,7 +102,9 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] "
         "https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable\" "
         "| sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && "
-        "sudo apt-get update && sudo apt-get install -y docker-compose-plugin"
+        # cloud-guest-utils carries growpart: without it the 40 GB engine disk stays
+        # on the image's ~10 GB root and fills within a deploy (live: 92% full engine).
+        "sudo apt-get update && sudo apt-get install -y docker-compose-plugin cloud-guest-utils"
     ), timeout=600, step="install docker compose v2 plugin")
 
     print("  Starting Docker (installed by the engine template)...")
