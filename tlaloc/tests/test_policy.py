@@ -278,3 +278,13 @@ def test_ssh_is_never_offered_as_a_pressure_target(tmp_path):
                  policy._pressure_targets(ctx, box["ip"], None)]
         assert all(n.lower().removesuffix(".service").strip() not in ("ssh", "sshd")
                    for n in names)
+
+
+def test_failure_counts_age_out(tmp_path):
+    """A counter from an old, fixed condition must not ban a box forever."""
+    ctx, policy = policy_for(tmp_path)
+    ip = "192.168.1.10"
+    for _ in range(3):
+        ctx.world.tally_failure("takedown", ip)
+    assert ctx.world.failure_count("takedown", ip) == 3
+    assert ctx.world.failure_count("takedown", ip, within_min=0) == 0
