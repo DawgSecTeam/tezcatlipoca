@@ -14,7 +14,7 @@ sys.path.insert(0, str(_REPO))
 from common import windows_ops
 
 
-def _capture_bootstrap_script():
+def _capture_bootstrap_script(features=()):
     captured = {}
 
     def fake_exec(node, vmid, script, timeout=0):
@@ -25,7 +25,7 @@ def _capture_bootstrap_script():
          patch.object(windows_ops, "guest_agent_exec_windows", side_effect=fake_exec), \
          patch.object(windows_ops, "wait_for_guest_agent", return_value=True):
         windows_ops.bootstrap_windows_box("n", 1, "192.168.125.3", "192.168.125.1",
-                                          "192.168.125.2", "pw")
+                                          "192.168.125.2", "pw", features=features)
     return captured["script"]
 
 
@@ -37,6 +37,16 @@ class FirewallProfiles(unittest.TestCase):
         script = _capture_bootstrap_script()
         self.assertLess(script.index("Set-NetFirewallProfile"),
                         script.index("Enable-NetFirewallRule"))
+
+
+class IisManagement(unittest.TestCase):
+    def test_management_tools_install_when_requested(self):
+        script = _capture_bootstrap_script(features=("Web-Mgmt-Tools",))
+        self.assertIn("Install-WindowsFeature -Name @('Web-Mgmt-Tools')", script)
+        self.assertIn("-IncludeManagementTools", script)
+
+    def test_no_feature_install_by_default(self):
+        self.assertNotIn("Install-WindowsFeature", _capture_bootstrap_script())
 
 
 class RdpRules(unittest.TestCase):

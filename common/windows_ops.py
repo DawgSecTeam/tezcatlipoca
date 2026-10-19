@@ -44,7 +44,8 @@ def _wait_for_windows_setup_complete(node, vmid, deadline):
     return False
 
 
-def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=1800):
+def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=1800,
+                          features=()):
 # 1800 s: a fresh DC clone's sysprep first boot is IO-bound far past the old 900 s default.
     deadline = time.time() + timeout
     if not _wait_for_windows_setup_complete(node, vmid, deadline):
@@ -58,6 +59,15 @@ def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, t
             raise RuntimeError(f"vmid {vmid}: Windows setup (sysprep first boot) did not complete "
                                f"within {timeout}s (after one hard-cycle)")
 
+    # A competition whose box configures IIS needs the WebAdministration module
+    # BEFORE the plan's step runs: the template ships the server role without the
+    # management tools, and `Import-Module WebAdministration` then fails with
+    # FileNotFoundException (live: scrim-one/win02 IIS FTP, 2026-10-19).
+    feature_block = ""
+    if features:
+        feature_list = ", ".join(f"'{f}'" for f in features)
+        feature_block = (f"Install-WindowsFeature -Name @({feature_list}) "
+                         f"-IncludeManagementTools -ErrorAction Stop | Out-Null\n")
     ps_script = f"""
 $ErrorActionPreference = 'Stop'
 $adapter = Get-NetAdapter | Where-Object {{ $_.Status -eq 'Up' }} | Select-Object -First 1
@@ -109,7 +119,7 @@ if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
 # group ships disabled on the template even after the RDP plant flips the
 # registry, so the listener is up but every external dial is filtered.
 Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMode-In-UDP -ErrorAction SilentlyContinue
-"""
+{feature_block}"""
     deadline = time.time() + timeout
     while True:
         try:

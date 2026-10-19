@@ -315,9 +315,19 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     windows_targets = [t for t in work if is_windows_template(t["box"]["template"])]
 
     def _boot_win(t):
+        # A box whose services include IIS needs the management module before the
+        # plan's IIS step runs (the template ships the role without the tools).
+        features = ()
+        try:
+            services = json.loads((Path(comp_dir) / "box_services.json").read_text())
+        except (OSError, ValueError):
+            services = {}
+        if any("iis" in str(entry).lower()
+               for entry in (services.get(t["box"]["name"]) or [])):
+            features = ("Web-Mgmt-Tools",)
         # 1800s: a fresh sysprep-specialize first boot can exceed the 900s default on a loaded node.
         bootstrap_windows_box(node, t["vmid"], t["ip"], t["gateway"], "8.8.8.8", box_password,
-                              timeout=1800)
+                              features=features, timeout=1800)
 
     win_results = run_concurrent(windows_targets, _boot_win, max_workers=4)
     for t, r in zip(windows_targets, win_results):
