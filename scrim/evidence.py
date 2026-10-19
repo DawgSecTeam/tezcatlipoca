@@ -10,9 +10,8 @@ from scrim.core import log
 from scrim.runfiles import SCOREBOARD_STATE, FINAL_SCOREBOARD
 
 
-# a copy, never a move: scrim_report/loaders.py reads evidence/final-scoreboard.json at
-# that exact path, so relocating the engine dump would silently zero the report's
-# scoreboard section
+# Copy, never move — scrim_report/loaders.py reads evidence/final-scoreboard.json at that
+# exact path; moving the engine dump silently zeroes the report's scoreboard section.
 def capture_engine_evidence(ev):
     ev = Path(ev)
     engine_dir = ev / "engine"
@@ -23,10 +22,8 @@ def capture_engine_evidence(ev):
     return [core.secure_evidence(core.shutil_copy(src, engine_dir / src.name)) for src in srcs]
 
 
-# the submission globs are sub*.md/sub*.txt, NOT sub-*.md: blue is told to write sub.md,
-# so the hyphenated pattern matched nothing and observed runs counted 0 inject submissions
-# with an empty submissions/ (plan §3.2); REPORT.md is blue's after-action report, copied
-# for the same reason it is asked for
+# Globs are sub*.md/sub*.txt, not sub-*.md: blue writes sub.md, so the hyphenated pattern
+# counted zero submissions against a live blue.
 def capture_blue_evidence(run_dir, ev, teams):
     run_dir, ev = Path(run_dir), Path(ev)
     written = []
@@ -55,8 +52,7 @@ def stage_capture(args, creds):
     ev.mkdir(parents=True, exist_ok=True)
     admin_jar = str(ev / ".jar-admin")
     teams = scoreboard_monitor._cred_team_names(args, creds)
-    # Final scoreboard dump goes to evidence BEFORE anything can tear the engine
-    # down — teardown destroys the scoring DB, and the report reads this file.
+    # Dump to evidence before teardown destroys the scoring DB; the report reads this file.
     final = {"captured_at": core.now_iso(),
              "teams": [], "injects": [], "services": {}}
     for path, key in (("/api/teams", "teams"), ("/api/injects", "injects")):
@@ -79,9 +75,8 @@ def stage_capture(args, creds):
     core.write_evidence(ev / FINAL_SCOREBOARD, json.dumps(final, indent=1))
     log("final scoreboard dumped to evidence")
 
-    # rc + body both checked: a version that logged "engine paused (best-effort)"
-    # unconditionally left a 500 mid-round scoring while the operator read a line saying
-    # it had stopped (a harness audit finding)
+    # rc and body both checked: a 500 mid-round returned rc 0, so logging pause success
+    # without checking the body hid scoring that was still running.
     def _pause():
         r = procs.run_tree(["curl", "-s", "--max-time", "15", "-b", admin_jar, "-X", "POST",
                             f"http://{creds['ENGINE_IP']}/api/engine/pause",
@@ -93,9 +88,8 @@ def stage_capture(args, creds):
             return False, (r.stdout or "")[:120]
         return True, ""
 
-    # Refresh the admin session before pausing: the capture loop only re-logs-in after a
-    # rejected call, so a jar that expired between the last capture and the pause would
-    # otherwise silently spend the first attempt on an unauthenticated POST.
+    # Refresh the jar before pausing: the capture loop only re-logins on a rejected
+    # call, so an expired jar would otherwise waste the first pause attempt.
     quotient_api._qlogin(creds, "admin", admin_jar)
     paused, why = _pause()
     if not paused:
@@ -109,8 +103,6 @@ def stage_capture(args, creds):
     sb = Path(args.run_dir) / SCOREBOARD_STATE
     if sb.exists():
         core.secure_evidence(core.shutil_copy(sb, ev / SCOREBOARD_STATE))
-    # The engine capture is also copied into its own subtree (INV8) — a copy, because
-    # scrim-report.py reads evidence/final-scoreboard.json where the harness wrote it.
     log(f"engine capture copied to {ev / 'engine'} "
         f"({len(capture_engine_evidence(ev))} file(s))")
     capture_blue_evidence(args.run_dir, ev, args.teams)

@@ -1,16 +1,4 @@
-"""Every driver entry point refuses at startup without the ambient Proxmox identity.
-
-A deploy survives a missing endpoint (nodes.json supplies it), so the gap stayed invisible
-until teardown, whose verify_clean reads the ambient config: two teardowns printed
-`[estate] ok — destroyed 0` and then exited non-zero on `config 'proxmox.endpoint' is not
-set`. Each script is run for real with the ambient identity neutralized.
-
-Deleting the TEZ_* variables is not enough to isolate a checkout that HAS a `.env`:
-`verifier/context.py` loads `REPO_ROOT/.env` regardless of cwd (destroy/redeploy/deploy load a
-cwd-relative one, which a cwd outside the repo does hide). The keys are therefore set to the
-empty string, which `load_dotenv` will not override, so the identity is absent for every
-driver in every tree.
-"""
+"""Every driver entry point refuses at startup without the ambient Proxmox identity."""
 
 import os
 import subprocess
@@ -25,8 +13,8 @@ REPO = Path(__file__).resolve().parents[2]
 
 def _run(script, *argv, cwd):
     env = {k: v for k, v in os.environ.items() if not k.startswith("TEZ_")}
-    # Empty, not absent: load_dotenv does not override an existing key, so this is what
-    # makes the checkout's own .env unable to supply the identity.
+    # Empty, not absent: verifier/context.py loads REPO_ROOT/.env whatever the cwd, and
+    # load_dotenv will not override an existing key, so "" kills the identity in every tree.
     env["TEZ_PROXMOX_ENDPOINT"] = ""
     env["TEZ_PROXMOX_API_TOKEN"] = ""
     return subprocess.run([sys.executable, str(REPO / script), *argv],
@@ -69,8 +57,8 @@ class StartupRefusal(unittest.TestCase):
 
 class IdentityHelper(unittest.TestCase):
     def test_one_resolved_key_is_enough(self):
-        # The refusal is for an empty ambient config, not for a missing endpoint: nodes.json
-        # supplies the endpoint, and a token alone still proves the estate is configured.
+        # nodes.json supplies the endpoint; a resolved token alone proves the estate is
+        # configured — the refusal targets an empty ambient config, not a missing endpoint.
         from estate import config
         config.reset()
         self.addCleanup(config.reset)

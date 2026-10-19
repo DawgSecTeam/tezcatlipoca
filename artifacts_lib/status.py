@@ -7,11 +7,8 @@ from .constants import ABSENT, LOST, NOT_COLLECTED, SIDES
 
 
 def document_state(test_path, filename, collection):
-# What state a canonical document is actually in: `present`, or the stub's own status.
-#
-#     The distinction matters because a stub is a file that exists and says "not available" —
-#     warning only on a missing *file* would either miss every real gap (the stub exists) or
-#     ignore the document on disk entirely.
+    # A stub is a file that exists saying "not available" — checking only for a
+    # missing file misses every real gap.
     test_path = Path(test_path)
     path = test_path / filename
     for derived in collection.get("derived", []):
@@ -24,11 +21,8 @@ def document_state(test_path, filename, collection):
 
 
 def warn_summary(collection, manifest, test_path=None):
-# The lines teardown prints loudly when something that should be there is not.
-#
-#     Severity comes from the manifest, not the collection: a run with no red agent is not missing
-#     anything when there is no red report. Nothing here blocks — the operator chose warn-and-
-#     proceed  because a dead guest box must never wedge a teardown.
+    # Severity comes from the manifest: a run with no red agent is not missing a red report.
+    # Nothing blocks — a dead guest box must never wedge a teardown.
     warnings = []
     for target in collection.get("targets", []):
         for item in target.get("files", []):
@@ -67,13 +61,8 @@ def side_status(collection, side):
 
 
 def why_missing(collection, side):
-# (status, reason) for a canonical document we wanted and did not get.
-#
-#     Three genuinely different situations, and conflating them is how an artifact folder starts
-#     lying: nothing was attempted (recoverable — the sources are still out there), an attempt was
-#     made and the source was empty, unreachable, or already destroyed, or the run never had that
-#     side at all. A target that failed wholesale records no per-file status, so its own status is
-#     the honest answer for the document it was meant to carry.
+    # Never-attempted, attempted-and-lost, and no-such-side must not be conflated or the
+    # folder lies; a wholesale-failed target's own status answers for the documents it carried.
     filename = SIDES[side]
     attempted = False
     for target in collection.get("targets", []):

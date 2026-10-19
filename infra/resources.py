@@ -9,8 +9,6 @@ _CLOUDINIT_DISK_RE = re.compile(r"^(?:ide|scsi|sata)\d+$")
 
 
 def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_name=None):
-    """Blocking datastore-headroom gate: provisioned team-disk math vs pool avail. `label` and
-    `node_name` are the multi-node scoping (the same gate run per hosting node)."""
     # The storage LIST zeroes/omits free on some pools; the per-store STATUS avail is the
     # authoritative number.
     free = proxmox_api("GET", f"/nodes/{node}/storage/{datastore}/status")["data"].get("avail")
@@ -24,9 +22,9 @@ def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_n
     # disk_gb unset means "template's own disk", unknowable here; 40 GB is a conservative
     # stand-in across the base templates.
     need_gb = num_teams * sum(b.get("disk_gb") or 40 for b in boxes)
-    # On thin-provisioned pools (0 < TEZ_THIN_HEADROOM <= 1) count that fraction of the
-    # provisioned math: linked clones only allocate written blocks.
-    thin = config.active().knobs.thin_headroom  # float; the config default is 1.0
+    # Thin-provisioned pools only allocate written blocks, so TEZ_THIN_HEADROOM scales down
+    # the provisioned math.
+    thin = config.active().knobs.thin_headroom
     if not 0 < thin <= 1:
         raise SystemExit(f"  ERROR: TEZ_THIN_HEADROOM must be in (0, 1], got {thin}")
     counted_gb = need_gb * thin
@@ -44,8 +42,6 @@ def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_n
 
 
 def template_cloudinit_missing(config):
-    """True when a Linux-ostype VM config carries no cloud-init drive. A template can be tagged
-    `template` and still ship none, so its clones boot with no network; Windows ostypes are exempt."""
     ostype = str((config or {}).get("ostype") or "").strip().lower()
     if not ostype.startswith("l"):
         return False
@@ -56,8 +52,6 @@ def template_cloudinit_missing(config):
 
 
 def cloudinit_gate(tagged_by_name, boxes, label=""):
-    """Refuse a selected Linux template with no cloud-init drive. A config read that fails is
-    warned about, not fatal, but its drive stays UNVERIFIED. Returns templates checked."""
     seen = set()
     verified = 0
     for box in boxes:
@@ -90,7 +84,6 @@ def cloudinit_gate(tagged_by_name, boxes, label=""):
 
 
 def tagged_templates(vms):
-    """(names, name -> cluster entry) of VMs that are templates AND carry the `template` tag."""
     tagged = set()
     by_name = {}
     for vm in vms:
@@ -101,9 +94,7 @@ def tagged_templates(vms):
 
 
 def check_share_templates(share, boxes, vms):
-    """Template resolution for one NodeShare: a clone can only use its own node's templates.
-    Single-node: every box template on the cluster + the engine base. Multi-node: engine base on
-    the engine node, box templates on a team node, a jump clone source on satellites."""
+    # A clone can only use templates that exist on its own node.
     where = f"node '{share.name}' ({share.node})" if share.multi else "the cluster"
     if share.check_templates:
         tagged, tagged_by_name = tagged_templates(vms)
@@ -134,7 +125,7 @@ def check_share_templates(share, boxes, vms):
             f"engine clone would fail mid-apply.")
     if share.needs_jump_template:
         from net.jump_ops import find_jump_template
-        find_jump_template(share.node, share.jump_template)  # raises with remedy
+        find_jump_template(share.node, share.jump_template)
         print(f"  Preflight{share.label}: box templates + jump clone source present")
     elif not share.multi:
         print(f"  Preflight: all {len(boxes)} box template(s) resolve; engine base image vmid "

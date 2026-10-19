@@ -7,12 +7,10 @@ from common.utils import record_degradation
 # wait — abandoning a still-running qmshutdown and force-stopping hits the lock that task holds.
 SHUTDOWN_GRACE_S = 120
 
-# PVE's own wait for a start. Same rule: abandoning a still-running qmstart declares a VM dead
-# that is about to come up.
+# PVE's own wait for a start; same abandon-the-task hazard as SHUTDOWN_GRACE_S.
 START_GRACE_S = 900
 
 def vm_status(node, vmid):
-    """Current status string ('running'/'stopped'/...) or None if the VM doesn't exist."""
     vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
     vm = next((v for v in vms if v["vmid"] == vmid), None)
     return vm.get("status") if vm else None
@@ -30,7 +28,6 @@ def stop_vm(node, vmid):
 
 
 def start_vm(node, vmid, timeout=START_GRACE_S):
-    """Start the VM if it isn't already running. No-op for a VM that doesn't exist."""
     status = vm_status(node, vmid)
     if status is None or status == "running":
         return
@@ -38,14 +35,13 @@ def start_vm(node, vmid, timeout=START_GRACE_S):
         run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/status/start",
                     data={"timeout": timeout}, timeout=timeout + 120)
     except RuntimeError:
-        # A task that outlived the wait may still have started the VM; only a VM that is not up
-        # afterwards is a failed start.
+        # a task that outlived the wait may still have started the VM; recheck before failing
         if vm_status(node, vmid) != "running":
             raise
 
 
 def list_snapshots(node, vmid):
-    """Snapshot names on this VM, excluding Proxmox's synthetic `current`; empty set when unanswerable."""
+    """Proxmox lists a synthetic `current` snapshot; it is excluded."""
     try:
         data = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/snapshot")["data"]
     except Exception:
@@ -59,7 +55,6 @@ def delete_snapshot(node, vmid, name, timeout=600):
 
 
 def take_snapshot(node, vmid, name, description="", timeout=900):
-    """Take a disk-only snapshot, replacing any existing one; never raises."""
     try:
         if name in list_snapshots(node, vmid):
             delete_snapshot(node, vmid, name)
@@ -71,18 +66,14 @@ def take_snapshot(node, vmid, name, description="", timeout=900):
         return True
     except Exception as e:
         print(f"    WARNING: snapshot '{name}' failed for vmid {vmid}: {e}")
-        # NOT cosmetic: tz-base/tz-ready are the rollback points, so a range whose snapshot failed
-        # cannot be rolled back and a failed golden snapshot removes the pre-plant guard.
+        # tz-base/tz-ready are the rollback points: a failed snapshot means no rollback,
+        # and a failed golden one drops the pre-plant guard.
         record_degradation(f"snapshot '{name}' failed",
                            f"vmid {vmid}: {str(e)[:200]}")
         return False
 
 
 def rollback_snapshot(node, vmid, name, timeout=900, restart=True):
-    """Rollback to snapshot (requires stop/start for a no-RAM snapshot). Raises on failure. Waits
-    for the guest agent after restart: whatever runs next dials the moment start_vm returns and
-    fails against a still-booting Windows guest."""
-
     if vm_status(node, vmid) == "running":
         stop_vm(node, vmid)
     run_vm_task(node, vmid, "POST", f"/nodes/{node}/qemu/{vmid}/snapshot/{name}/rollback",
@@ -90,6 +81,7 @@ def rollback_snapshot(node, vmid, name, timeout=900, restart=True):
     if restart:
         start_vm(node, vmid)
         try:
+            # callers dial the moment start_vm returns; a Windows guest is still booting
             from infra.guest_exec import wait_for_guest_agent
             wait_for_guest_agent(node, vmid, timeout=600)
         except Exception as e:
@@ -97,7 +89,6 @@ def rollback_snapshot(node, vmid, name, timeout=900, restart=True):
 
 
 def snapshot_support_hint(node, vmid):
-    """One-line explanation for why snapshots may be unavailable, for error messages."""
     return (
         f"vmid {vmid} on node {node} has no tezcatlipoca snapshots. Either this range was "
         f"deployed before snapshotting was added, or TEZ_PROXMOX_DATASTORE doesn't support "

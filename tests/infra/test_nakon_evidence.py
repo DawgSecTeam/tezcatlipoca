@@ -1,12 +1,4 @@
-"""A failed nakon plant must keep its own evidence.
-
-run_nakon's cleanup removed the whole staging dir off the engine — including
-the per-machine run logs that are the only record of WHY a step failed — so
-the first IIS FTP golden failure printed a `logs:` path that was
-gone seconds later and could only be diagnosed by re-running the deploy.
-_preserve_failed_run moves the staging aside and prints the failed machines'
-log tails instead; successful runs still clean up normally.
-"""
+"""A failed nakon plant must keep its own evidence."""
 import sys
 import unittest
 from pathlib import Path
@@ -37,7 +29,7 @@ class PreserveFailedRun(unittest.TestCase):
                                         runner=runner)
         self.assertIsNotNone(keep)
         self.assertTrue(keep.startswith("/opt/nakon/failed-golden-"))
-        self.assertEqual(len(self.calls), 2)              # mv + tail
+        self.assertEqual(len(self.calls), 2)
         self.assertIn("sudo mv /opt/nakon/golden", self.calls[0])
         self.assertIn("win02-golden.log", self.calls[1])
         self.assertIn("win02-golden.log", keep and self.calls[1])
@@ -57,14 +49,8 @@ if __name__ == "__main__":
 
 
 class SessionDeathRetry(unittest.TestCase):
-# A dead ssh session must only trigger the bundle re-run when NOTHING executed.
-#
-#     full-scrim-20261013d phase 7: both DC promotions completed on the boxes
-#     (674 s of dcpromo) while the reporting ssh died rc=255; the blind retry
-#     re-promoted already-promoted DCs and failed the phase with DCPromo
-#     General.77 'InstallDNS' not recognized. Re-running a bundle is only safe
-#     when the death looks cold: fast and before any step line streamed.
-
+    # A dead ssh session may re-run the bundle only when the death looks cold (fast, before
+    # any step line streamed): a blind retry after partial execution re-promotes live DCs.
     def _run(self, popen_results):
         made = []
         def fake_popen(cmd, **kw):

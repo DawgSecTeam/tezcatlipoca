@@ -1,15 +1,4 @@
-"""build_jump_vms runs satellites concurrently instead of one host at a time.
-
-Why this test exists: the serial loop was measured at 17s..547s per satellite
-(avg ~150s, n=17) measured on a spread multinode run, so an 8-satellite spread paid
-~18 minutes of pure waiting. Satellites are independent Proxmox hosts reached over
-the direct API path and the mgmt LAN, so the wait collapses under a bounded pool.
-
-The regression risk is not "did it get faster" but "did it stay correct": a
-concurrent rewrite can silently drop satellites, swallow a failure that the serial
-loop would have propagated, or turn a hard abort into a partial build. Those three
-properties are what these tests pin.
-"""
+"""build_jump_vms runs satellites concurrently instead of one host at a time."""
 
 import sys
 import threading
@@ -69,14 +58,11 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
 
         self.assertEqual(result, {"sat1": 1900, "sat2": 1901, "sat3": 1902})
         self.assertEqual(len(seen), 3, "concurrent rewrite must not drop a satellite")
-        # team_ids must still be that satellite's own teams, sorted as ints
         by_name = {n: t for n, _, t in seen}
         self.assertEqual(by_name["sat1"], ("201", "202"))
         self.assertEqual(by_name["sat3"], ("205", "206"))
 
-    # a scale soak found routed red could not reach any satellite team because the
-    # jump's FORWARD policy dropped its source — a segment that stops at build_jump_vms
-    # leaves the range unreachable; it must survive the thread-pool hop.
+    # a red_segment dropped at the thread-pool hop leaves routed red unable to reach any team
     def test_red_segment_reaches_every_satellite_build(self):
         placement = _placement(3)
         seen = []
@@ -115,7 +101,6 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         self.assertLessEqual(state["peak"], 4, "worker pool exceeded its bound")
         self.assertGreater(state["peak"], 1, "work was not actually concurrent")
 
-    # the serial loop raised on the first failure; that must be preserved
     def test_a_failing_satellite_aborts_the_deploy(self):
         placement = _placement(3)
 

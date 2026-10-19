@@ -1,19 +1,4 @@
-"""The eight deploy phases, one function per phase, grouped by what they do.
-
-  cleanup.py    phase 1  reclaim interrupted clones + reset local deploy state
-  engine.py     phases 2-3  engine template + engine/bridge create, per-deploy engine prep
-  golden.py     phase 4  golden set + the team-box clone pass + clone bootstrap
-  firewall.py   phase 5  in-path firewall bootstrap + engine cutover
-  postclone.py  phase 6  pre-domain pass
-  final.py      phase 7  AD domains, final pass, beacons, tz-ready snapshots
-  seed.py       phase 8  seed teams / unpause / injects
-  finish.py     connect_estate (between 2 and 3) and finish_deploy (after 8)
-
-Each phase takes the DeployContext prepare() built and touches only that, so a phase boundary
-is a call boundary. Every phase prints its own "[N/8] Skipped (resume)" banner when
-ctx.from_phase has already passed it; the sequencer (runner.run_pipeline) walks PHASES with
-enumerate(..., 1), so a phase's index IS its [N/8] number and its checkpoint value.
-"""
+"""The eight deploy phases, one function per phase, grouped by what they do."""
 
 from deploy_lib.phases.cleanup import phase1_cleanup
 from deploy_lib.phases.engine import phase2_engine_template, phase3_prepare_engine
@@ -26,7 +11,8 @@ from deploy_lib.phases.seed import phase8_seed
 
 __all__ = ["PHASES", "connect_estate", "finish_deploy"]
 
-# The pipeline, in order.
+# runner.run_pipeline walks this with enumerate(..., 1): a phase's index here IS its
+# [N/8] banner number and its checkpoint value.
 PHASES = (
     phase1_cleanup,
     phase2_engine_template,

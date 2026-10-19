@@ -15,8 +15,6 @@ from redeploy.redeploy_rebuild_ops import mode_rebuild
 
 
 def scored_ports_for(comp_dir):
-# Box name to sorted scored TCP ports. Bare catalog names resolve through quotient's own
-#     _SERVICE_TO_CHECK — the same mapping that builds event.conf — and plant_only pins emit none.
     path = comp_dir / "box_services.json"
     if not path.exists():
         return {}
@@ -24,7 +22,7 @@ def scored_ports_for(comp_dir):
         pins_by_box = json.loads(path.read_text())
     except json.JSONDecodeError:
         return {}
-    # Private name: the single source of port truth for event.conf.
+    # Private name: quotient's own port map, the same one that builds event.conf.
     from quotient.setup import _SERVICE_TO_CHECK
     ports = {}
     for box_name, pins in pins_by_box.items():
@@ -48,8 +46,7 @@ def scored_ports_for(comp_dir):
 
 
 def ports_closed_from_engine(ctx, ip, ports, per_port_timeout=3):
-# The subset the engine cannot connect to — Quotient's own vantage, so an in-path firewall is
-#     traversed exactly as scoring traverses it; an empty set means every scored port accepts.
+    # The engine is Quotient's own vantage: an in-path firewall is traversed exactly as scoring does.
     if not ports:
         return set()
     probe = "; ".join(
@@ -73,10 +70,8 @@ PAM_BUNDLE_TIMEOUT_S = 20
 
 
 def _capture_pam_bundle(comp_dir, node, t, detail, *, run_id=None, teams=None, boxes=None):
-# The reset ladder cannot reproduce the trap on demand, so the live occurrence is the only
-#     evidence: capture it before the next rung destroys the disk. It lands in the run's
-#     artifacts evidence folder (not comp_dir/evidence, which teardown does not archive).
-#     Non-fatal by construction.
+    # The live trap is the only evidence — capture it before the next rung destroys the disk.
+    # It lands in the run's artifacts folder; teardown does not archive comp_dir/evidence.
     from artifacts_lib.lifecycle import test_folder_for_teardown
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     try:
@@ -97,9 +92,7 @@ def _capture_pam_bundle(comp_dir, node, t, detail, *, run_id=None, teams=None, b
 
 
 def probe_box_health(ctx, t, ports, node):
-# ('healthy'|'pam-trap'|'unhealthy', detail). The SSH leg exists because a tz-ready rollback
-#     boots a post-plant disk: a box in the PAM planted-box trap dies at SSH preauth with its
-#     ports still listening.
+    # The SSH leg catches the planted-box trap: it dies at SSH preauth with its ports still listening.
     windows = box_platform(t["box"]) == "windows"
     detail = "no attempt"
     for attempt in range(1, RESET_PROBE_ATTEMPTS + 1):
@@ -125,8 +118,7 @@ def probe_box_health(ctx, t, ports, node):
 
 
 def mode_reset(targets, rctx):
-# Each rung gets only the boxes the previous rung left unhealthy; a PAM-trap verdict escalates
-#     one rung rather than straight to rebuild, because the trap lives on the post-plant disk.
+    # A PAM-trap box escalates one rung, not straight to rebuild: the trap lives on the post-plant disk.
     ctx, node, comp_dir, boxes = rctx.ctx, rctx.node, rctx.comp_dir, rctx.boxes
     print(f"\n  Reset ladder: '{SNAP_READY}' rollback -> '{SNAP_BASE}' rollback + replant "
           f"-> golden rebuild. Escalating only the boxes each rung leaves unhealthy.")
@@ -140,8 +132,6 @@ def mode_reset(targets, rctx):
         return assets
 
     def _rung(batch, run):
-    # carry is nonempty only on a wholesale failure: the rung touched nobody, so the whole
-    #         batch goes to the next rung unprobed.
         try:
             return run(batch) or [], []
         except (Exception, SystemExit) as e:

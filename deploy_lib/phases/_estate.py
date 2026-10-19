@@ -1,9 +1,4 @@
-"""The estate plumbing the deploy phases share: the engine's coordinates, the create call,
-and the guest-side network setup.
-
-The phases call these, and the offline suite stubs them (tests/_deploy_patch.dpatch patches
-every deploy_lib module binding a name).
-"""
+"""Estate plumbing shared by the deploy phases; stubbed by tests/_deploy_patch.dpatch."""
 
 
 from common.constants import DEFAULT_ENGINE_MGMT_GW
@@ -16,7 +11,6 @@ ENGINE_NAME = "quotient-engine"
 
 
 def discover_engine_ip(node, vmid, timeout=300):
-    """The running engine's management IPv4, via the guest agent."""
     wait_for_guest_agent(node, vmid, timeout=timeout)
     ip = _discover_vm_ipv4(node, vmid)
     if not ip:
@@ -28,11 +22,7 @@ def discover_engine_ip(node, vmid, timeout=300):
 
 
 def engine_context(ctx):
-    """The dict the SSH helpers expect (ssh_key_path / vm_username / scoring_engine_ip).
-
-    On a DHCP engine the planned address is empty, so the running VM's is discovered
-    through the guest agent; a static one is taken from the state document.
-    """
+    """A DHCP engine has no planned address, so the running VM's is discovered via the guest agent."""
     from estate import engine_setup
     engine_ctx = engine_setup.engine_ctx(ctx.comp_dir)
     if ctx.engine_mgmt_ip:
@@ -43,8 +33,7 @@ def engine_context(ctx):
 
 
 def slot_team_identifiers(ctx):
-# Slot 0's team identifiers, sorted — the order is
-#     load-bearing: it decides both the engine's NIC order and the netplan's ens numbering.
+    # Sorted order is load-bearing: it decides the engine's NIC order and the netplan ens numbering.
     slots = (ctx.placement or {}).get("team_slots") or {}
     return [ctx.teams[key]["identifier"] for key in sorted(ctx.teams)
             if slots.get(key, 0) == 0]
@@ -55,7 +44,7 @@ def has_in_path_firewall(ctx):
 
 
 def create_engine_and_bridges(ctx):
-# The team bridges, then the engine, then the cold boot that surfaces its team NICs.
+    # Bridges before the engine; the cold boot surfaces the engine's team NICs.
     from estate import apply as estate_apply, engine_setup
     from infra.ownership import Ownership, bridge_comment
     from common.constants import red_bridge_name
@@ -95,7 +84,6 @@ def create_engine_and_bridges(ctx):
 
 
 def create_team_boxes(ctx, sources):
-# Clone every team box from its golden (slot-aware source vmids, keyed by vm_name).
     from estate import apply as estate_apply
     from infra.ownership import Ownership
     cfg = config.active()
@@ -106,8 +94,7 @@ def create_team_boxes(ctx, sources):
 
 
 def configure_engine_network(ctx, engine_ctx):
-# Address the engine's team bridges; the satellite routes keep router traffic alive across
-#     an engine reboot mid-event.
+    # The satellite routes keep router traffic alive across an engine reboot mid-event.
     from estate import engine_setup
     from multinode.placement_record import satellite_routes_for
     from common.constants import RED_SEGMENT_GW, RED_SEGMENT_SUBNET

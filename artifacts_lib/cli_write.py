@@ -37,27 +37,22 @@ def cmd_verify(args):
     try:
         sealed = ao.seal_test(path, author=args.author, force=args.force)
     except RuntimeError as e:
-        # seal_test's own refusal (unfilled TODO markers, or no REPORT.md at all) — the operator
-        # decides: fill the sections, or waive them explicitly with --force.
+        # seal_test's refusal (unfilled TODOs, missing REPORT.md): the operator fills or waives
+        # with --force; an OSError below is just the filesystem saying no.
         print(f"SEAL REFUSED: {e}", file=sys.stderr)
         return EXIT_FINDINGS
     except OSError as e:
-        # The refusal above is a decision; this is the filesystem saying no. Distinct wording so
-        # an operator does not go looking for a TODO marker that is not the problem.
         print(f"SEAL FAILED: could not write to {path}: {e}", file=sys.stderr)
         return EXIT_FINDINGS
     post = sealed.get("verify") or {}
     print(f"  SEALED      : writeup done by {show(sealed.get('author'))} "
           f"(recorded in {ao.MANIFEST_NAME})")
     if sealed.get("archived"):
-        # seal_test refreshes the durable copy itself when this checkout is a linked worktree;
-        # saying where it went is the whole point of the archive being automatic.
+        # seal_test auto-refreshes the durable copy when this checkout is a linked worktree
         print(f"  archived    : {sealed['archived']} (the archive no longer holds a skeleton)")
     print(f"  post-seal   : {post.get('checked', 0)} file(s) re-hashed, "
           f"{len(post.get('problems') or [])} problem(s)")
     if post.get("todos"):
-        # --force waives the markers; it does not resolve them, and nothing in test.json records
-        # the waiver — so say out loud that a later `verify` will still count them.
         print(f"  waived      : {post['todos']} TODO(author) marker(s) remain — sealed with "
               "--force, so they were waived, not filled; `verify` without --force still "
               "reports them")
@@ -68,9 +63,6 @@ def cmd_verify(args):
         return EXIT_FINDINGS
     print("RESULT: PASS — sealed and clean.")
     return EXIT_OK
-
-
-# ── collect ────────────────────────────────────────────────────────────────────────────
 
 
 def cmd_collect(args):
@@ -95,8 +87,8 @@ def cmd_collect(args):
     try:
         collection = ao.collect(path, targets, dry_run=args.dry_run)
     except RuntimeError as e:
-        # A route with no transport is a wiring bug (artifacts_ops refuses to record it), so this
-        # is the one collect failure that is not a per-file status.
+        # route-without-transport is refused as a wiring bug by artifacts_ops, unlike
+        # per-file statuses
         return error(f"collection could not run: {e}", EXIT_FINDINGS)
     except OSError as e:
         return error(f"collection started but could not write into {path}: {e}", EXIT_FINDINGS)
@@ -117,9 +109,6 @@ def cmd_collect(args):
         return EXIT_FINDINGS
     print("RESULT: COMPLETE — every wanted item was obtained or truthfully skipped.")
     return EXIT_OK
-
-
-# ── archive ────────────────────────────────────────────────────────────────────────────
 
 
 def cmd_archive(args):
@@ -143,8 +132,7 @@ def cmd_archive(args):
             try:
                 dest = ao.archive_test(comp_dir, key, dest_root=dest_root)
             except (OSError, RuntimeError) as e:
-                # archive_test verifies every byte by hash; a mismatch is reported per key and
-                # the rest still run, because losing one folder must not cost the others.
+                # failures are reported per key: losing one folder must not cost the others
                 failures.append(key)
                 print(f"  FAILED  {key}: {e}")
                 continue
@@ -162,8 +150,6 @@ def cmd_archive(args):
     try:
         dest = ao.archive_test(comp_dir, args.key, dest_root=dest_root)
     except (OSError, RuntimeError) as e:
-        # RuntimeError is archive_test's own hash-verification failure; OSError is the copy
-        # itself failing. Both mean the folder is NOT safely outside the repo — say so loudly.
         return error(f"archive failed for {args.key} (no verified copy was made): {e}",
                       EXIT_FINDINGS)
     print(f"archived {args.key} -> {dest}")

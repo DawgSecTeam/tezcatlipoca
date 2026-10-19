@@ -1,16 +1,4 @@
-"""SSH transport into a template builder's scratch VM.
-
-Three modes, from `--mode`/`--operator-iface`/`--bootstrap-ip` or
-`TEZ_BUILD_MODE`/`TEZ_BUILD_OPERATOR_IFACE`/`TEZ_BUILD_BOOTSTRAP_IP`:
-
-  node      alias 192.168.1.2 on the node's bridge and hop through root@<node>
-  operator  alias 192.168.1.2 on a local NIC sharing the scratch bridge's L2
-  direct    SSH straight to an operator-routable bootstrap address, no alias
-
-The guest keeps the deploy-contract LAN 192.168.1.1/24 in node and operator mode. Direct
-mode puts the bootstrap address there instead; the builders restore the contract at the
-console before sealing so sealed templates still match phase 5.
-"""
+"""SSH transport into a template builder's scratch VM, in node/operator/direct modes."""
 
 import argparse
 import subprocess
@@ -19,13 +7,14 @@ from contextlib import contextmanager
 
 from estate import config
 
+# The scratch guest keeps the deploy-contract LAN 192.168.1.1/24; direct mode puts the
+# bootstrap address there instead, and builders restore the contract before sealing.
 ALIAS_IP = "192.168.1.2"
 CONTRACT_IP = "192.168.1.1"
 MODES = ("node", "operator", "direct")
 
 
 def options(argv=None):
-    """Resolve the transport from flags after the command, then TEZ_BUILD_* config."""
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--mode", default=config.active().knobs.build_mode or "node")
     parser.add_argument("--operator-iface",
@@ -43,7 +32,6 @@ def options(argv=None):
 
 
 def guest_ip(opts):
-    """The address the builder SSHes to; direct mode uses the bootstrap address."""
     return opts.bootstrap_ip if opts.mode == "direct" else CONTRACT_IP
 
 
@@ -79,7 +67,6 @@ def _local_alias(verb, iface):
 
 @contextmanager
 def aliased(opts, *, node, bridge, key):
-    """Hold the hop alias for the body; direct mode never aliases."""
     if opts.mode == "node":
         _node_ssh(node, key, f"ip addr add {ALIAS_IP}/24 dev {bridge} 2>/dev/null || true")
     elif opts.mode == "operator":

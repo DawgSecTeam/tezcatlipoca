@@ -1,21 +1,14 @@
-"""Portal logins are Quotient's own logins, read from the event.conf Quotient reads.
+"""Portal logins are Quotient's own logins, read from the event.conf Quotient reads."""
 
-The portal never authenticates by logging into Quotient: it reads the same
-/opt/quotient/config/event.conf (mounted read-only), so a portal login cannot touch any
-operator/team session, and compares against its [[team]] and [[admin]] entries. The file is re-read when its
-mtime changes, so a password an operator rotates in Quotient's config is picked up without a
-portal restart.
-
-Roles: `team` (one per [[team]] entry) and `admin` (white team). The automation admin
-(`scoring`) and the [[inject]] account are refused — neither belongs to a person at a keyboard.
-"""
+# Reads the conf directly instead of logging in, so a portal login cannot touch a live session.
 
 import hmac
 import os
 import threading
 import tomllib
 
-# Admin-list entries that are automation, not people (quotient/setup.py _admin_accounts).
+# Automation, not people (quotient/setup.py _admin_accounts). [[inject]] accounts are
+# likewise refused: only [[team]] and [[admin]] sections are ever read.
 REFUSED_ADMIN_NAMES = frozenset({"scoring"})
 
 # Compared against when the username is unknown, so a miss costs the same as a wrong password.
@@ -33,9 +26,8 @@ class EventConfAuth:
         try:
             mtime = os.stat(self.path).st_mtime_ns
         except OSError:
-            # A missing file means "nobody can log in", never "keep the stale accounts":
-            # the engine's clean step removes event.conf, and a cached copy outliving it
-            # would keep honouring credentials Quotient itself no longer knows.
+            # A missing file means "nobody can log in", never stale accounts: the engine's
+            # clean step removes event.conf; cached creds would outlive Quotient's own.
             self._mtime, self._accounts = None, {}
             return
         if mtime == self._mtime:
@@ -57,7 +49,6 @@ class EventConfAuth:
             self._load()
             return [n for n, (role, _pw) in self._accounts.items() if role == "team"]
 
-    # constant-time per attempt
     def check(self, username, password):
         with self._lock:
             self._load()

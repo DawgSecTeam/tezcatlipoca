@@ -25,14 +25,11 @@ def load_manifest(run_dir):
     return data if isinstance(data, dict) else {}
 
 
-# doubles as the pre-T0 marker for --resume-event; mirrored into the run's test folder
-# (test.json) so the artifact reader can see how far a run got without cross-referencing
-# run.json; getattr because callers without a test folder (unit tests, legacy run dirs)
-# must keep working
+# Doubles as the pre-T0 marker for --resume-event; mirrored into the run's test.json so
+# the artifact reader sees progress without cross-referencing run.json.
 def record_phase(run_dir, args, phase, t0=None):
-    # `phases` is the ordered stage list the dashboard turns into one stage event per stage
-    # as the run progresses (dashboard/runner.py `_scrim_phases`); `phase` stays the latest
-    # marker for the resume path, which keys on its mere presence.
+    # `phases` feeds the dashboard's per-stage events (dashboard/runner.py `_scrim_phases`);
+    # `phase` is the latest marker the resume path keys on.
     manifest = load_manifest(run_dir)
     manifest.update({
         "competition": getattr(args, "competition", None),
@@ -42,8 +39,7 @@ def record_phase(run_dir, args, phase, t0=None):
         "keep_range": bool(getattr(args, "keep_range", False)),
         "keep_templates": bool(getattr(args, "keep_templates", False)),
         "blue_watchdog": bool(getattr(args, "blue_watchdog", False)),
-        # red's concurrent-down caps: the scrim report's max_simultaneous_down gate
-        # judges against max_concurrent_down_end from here, not a hardcoded 4
+        # the scrim report's max_simultaneous_down gate judges against max_concurrent_down_end here
         "pacing": red_pacing_caps(),
         "phase": phase,
         "updated_at": core.now_iso(),
@@ -56,10 +52,8 @@ def record_phase(run_dir, args, phase, t0=None):
         artifacts_ops.record_phase(test_dir, phase, t0=t0)
 
 
-# retention/watchdog intent lived only in the first CLI invocation, so a resume without
-# --keep-range tore down a range the original run was keeping up; OR semantics — a resume
-# cannot silently drop an intent the first run had. Same for --keep-templates: the practice
-# run that asked to keep its artifacts must not lose them because a resume omitted the flag.
+# OR semantics: a resume omitting --keep-range/--keep-templates must not drop the first
+# run's intent and tear down or reclaim what it was keeping.
 def resume_intent(args, manifest):
     args.keep_range = bool(getattr(args, "keep_range", False) or manifest.get("keep_range"))
     args.keep_templates = bool(getattr(args, "keep_templates", False)
@@ -69,15 +63,11 @@ def resume_intent(args, manifest):
     return args
 
 
-# the feed loop stops issuing cycles at duration_min - 2, so that margin is required on
-# top of the cycles themselves
+# the feed loop stops issuing cycles at duration_min - 2, hence the +2 margin on top of the cycles
 def resume_window_ok(remaining_min, min_cycles=RESUME_MIN_CYCLES):
     return remaining_min >= min_cycles * (core.CYCLE_TARGET_PERIOD / 60.0) + 2
 
 
-# a driver that died at T+85 of a 90-min event left remaining=5: every loop exits
-# immediately, the log claims "RESUME", nothing runs — and the run marched on to capture
-# and TEAR DOWN a range the original run may have meant to keep
 def resume_refusal(remaining_min, force=False):
     if force or resume_window_ok(remaining_min):
         return None

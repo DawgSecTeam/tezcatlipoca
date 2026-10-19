@@ -9,10 +9,8 @@ APT_CACHER_PORT = 3142
 
 def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
                red_segment=""):
-    # iptables-restore content for the jump; FORWARD DROP with explicit accepts, so team-to-team
-    # and mgmt->team isolation is structural. `red_segment` adds the routed-red path (FORWARD
-    # accept + SNAT to the team gateway) without which red's source matches nothing and falls off
-    # the DROP. The TCPMSS clamps stop a sub-1500 inter-node path black-holing large replies.
+    # Without red_segment's accepts + SNAT, red's source falls off the FORWARD DROP.
+    # TCPMSS clamps stop a sub-1500 inter-node path black-holing large replies.
     teams = [str(i) for i in team_identifiers]
     engine = f"{engine_mgmt_ip}/32"
     mgmt_prefix = ip_network(mgmt_cidr, strict=False).network_address
@@ -33,14 +31,13 @@ def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
     if red:
         for t in teams:
             lines.append(f"-A FORWARD -s {red} -d 192.168.{t}.0/24 -j ACCEPT")
-        # Public-LLM egress: red's cloud endpoint has no operator-side tunnel able to carry it, so
-        # red dials it directly — the same egress shape the teams have.
+        # Public-LLM egress: no operator-side tunnel reaches red's cloud endpoint, so red dials it like the teams.
         lines.append(f"-A FORWARD -s {red} ! -d 192.168.0.0/16 -j ACCEPT")
     for t in teams:
         lines.append(f"-A FORWARD -s 192.168.{t}.0/24 -d {engine} -j ACCEPT")
     if red:
-        # Return path: the jump is the teams' default gateway, so a reply to red leaves via the
-        # mgmt default route unless this accept matches FIRST (the engine -d rule covers only itself).
+        # The jump is the teams' default gateway: unless this accept matches FIRST, replies to
+        # red leave via the mgmt default route.
         for t in teams:
             lines.append(f"-A FORWARD -s 192.168.{t}.0/24 -d {red} -j ACCEPT")
     for t in teams:
@@ -50,21 +47,20 @@ def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
         lines.append(f"-A PREROUTING -d 192.168.{t}.1/32 -p tcp --dport {APT_CACHER_PORT} "
                      f"-j DNAT --to-destination {engine_mgmt_ip}:{APT_CACHER_PORT}")
     for t in teams:
-        # Engine -> box traffic sources from the gateway IP: boxes trust SSH only from
-        # 192.168.<id>.1.
+        # Boxes trust SSH only from 192.168.<id>.1, so engine->box traffic SNATs to the gateway IP.
         lines.append(f"-A POSTROUTING -s {engine} -d 192.168.{t}.0/24 "
                      f"-j SNAT --to-source 192.168.{t}.1")
     if red:
         for t in teams:
-            # Same gateway-IP treatment for red; it must PRECEDE the team-egress MASQUERADE
-            # below (first match wins in nat POSTROUTING) or red's source is rewritten twice.
+            # Must PRECEDE the team-egress MASQUERADE below (first match wins in nat
+            # POSTROUTING) or red's source is rewritten twice.
             lines.append(f"-A POSTROUTING -s {red} -d 192.168.{t}.0/24 "
                          f"-j SNAT --to-source 192.168.{t}.1")
         # Red's WAN egress: AFTER the per-team SNAT rules, so team-bound red traffic keeps its gateway source.
         lines.append(f"-A POSTROUTING -s {red} ! -d 192.168.0.0/16 -j MASQUERADE")
     for t in teams:
-        # Engine-bound traffic is left UNmangled via a terminal ACCEPT (first match wins in nat
-        # POSTROUTING); iptables-restore rejects two -d in one rule, so the exclusion can't ride it.
+        # Terminal ACCEPT leaves engine-bound traffic unmangled (first match wins);
+        # iptables-restore rejects two -d in one rule, so the exclusion can't ride it.
         lines.append(f"-A POSTROUTING -s 192.168.{t}.0/24 -d {engine} -j ACCEPT")
         lines.append(f"-A POSTROUTING -s 192.168.{t}.0/24 ! -d 192.168.0.0/16 -j MASQUERADE")
     lines.append("COMMIT")

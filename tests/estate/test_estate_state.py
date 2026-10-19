@@ -1,8 +1,4 @@
-"""estate/state.py: the one per-competition state document.
-
-Offline; every comp dir is a temp directory. The fixtures are shaped after the real
-writers (multinode/placement_record.py, common/targets.py, engine/template_freeze.py,
-teardown/engine.py)."""
+"""estate/state.py: the one per-competition state document."""
 
 import json
 import sys
@@ -104,8 +100,6 @@ class FlatBridgeTest(unittest.TestCase):
 
 
 class TheDocumentIsTheOnlyWriter(unittest.TestCase):
-    """Every folded record must land in the state document, and nowhere else."""
-
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -134,8 +128,8 @@ class TheDocumentIsTheOnlyWriter(unittest.TestCase):
 
 
     def test_a_red_identity_write_survives_the_deploy_state_save(self):
-        # record_identity() writes `red` straight to the file while the deploy context holds
-        # its own document copy; the final save used to drop it, so teardown skipped red01.
+        # red01_ops writes `red` straight to the file; the context's save used to clobber
+        # its own copy, and teardown then skipped red01.
         from deploy_lib.context import DeployContext
         from red import red01_ops
 
@@ -150,16 +144,12 @@ class TheDocumentIsTheOnlyWriter(unittest.TestCase):
                          {"vmid": 1671, "ip": "10.0.0.195", "node": "proxmox"})
 
     def test_a_placement_write_survives_the_deploy_state_save(self):
-        # The planner writes `placement` straight to the file while the deploy context holds
-        # its own copy of the document from load_prior_deploy_state, so saving that copy back
-        # dropped the record: state documents written before this gate read `placement: None`
-        # while the run's own log said "Placement recorded in <that file>". The record is what
-        # makes red01's selected address durable ("the recorded value is never re-derived"),
-        # so it must outlive the deploy's own save.
+        # The planner writes `placement` straight to the file; the context's save used to
+        # clobber it. That record keeps red01's selected address durable, never re-derived.
         from deploy_lib.context import DeployContext
         from multinode.placement_record import write_placement
 
-        ctx = DeployContext(comp_dir=self.comp)  # binds a copy of the document, no placement
+        ctx = DeployContext(comp_dir=self.comp)
         self.assertIsNone(ctx.document().data.get("placement"))
         write_placement(self.comp, {"version": 2, "engine_vmid": 2200})
         ctx.state["last_phase"] = 1
