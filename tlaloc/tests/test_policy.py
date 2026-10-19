@@ -268,3 +268,13 @@ def test_a_live_callback_is_found_by_box_id_not_by_ip(tmp_path):
     ctx.world.note_callback(box_id, now_iso(), agent="poseidon")
     assert policy._channel_fresh(box["ip"]) is True
     assert policy.world.callback_age(policy._box_id_for_ip(box["ip"])) is not None
+
+
+def test_ssh_is_never_offered_as_a_pressure_target(tmp_path):
+    """Our own access path: the effect refuses it, so it must not be a candidate."""
+    ctx, policy = policy_for(tmp_path)
+    for box in ctx.intel.boxes():
+        names = [s["name"] for s in
+                 policy._pressure_targets(ctx, box["ip"], None)]
+        assert all(n.lower().removesuffix(".service").strip() not in ("ssh", "sshd")
+                   for n in names)

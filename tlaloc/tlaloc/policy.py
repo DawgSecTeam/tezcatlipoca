@@ -554,6 +554,11 @@ class Policy:
         out = []
         for name in services:
             slug = str(name)
+            # ssh/sshd is red's own access path: the effect refuses it, so offering
+            # it burns a cycle on a guaranteed failure (live 2026-10-18: two cycles
+            # on web01-ssh with nothing to show).
+            if slug.lower().removesuffix(".service").strip() in ("ssh", "sshd"):
+                continue
             state = None
             for scored_name, is_up in team_status.items():
                 if scored_name.lower() in slug.lower() or slug.lower() in scored_name.lower():

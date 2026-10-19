@@ -209,7 +209,9 @@ class Takedown(Effect):
     def run(self, ctx, params):
         ip, unit = params["ip"], params["service"]
         fh = ctx.world.foothold(ip)
-        if unit.lower().removesuffix(".service") in ("ssh", "sshd"):
+        allow_ssh = str(params.get("allow_ssh", "")).lower() == "true"
+        if (unit.lower().removesuffix(".service") in ("ssh", "sshd")
+                and not (allow_ssh or ctx.cfg["effects"]["allow_ssh_takedown"])):
             return Result(False, "refusing to stop ssh — our own access path")
         if fh.get("windows"):
             return self._windows(ctx, ip, fh, unit)
