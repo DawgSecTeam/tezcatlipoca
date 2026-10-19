@@ -154,9 +154,17 @@ def gc_orphan_volumes(node, vmid):
         for v in vols:
             if int(v.get("vmid") or -1) != vmid:
                 continue
-            upid = proxmox_api("DELETE", f"/nodes/{node}/storage/{st['storage']}/content/{v['volid']}")["data"]
-            if upid:
-                wait_for_proxmox_task(node, upid)
+            try:
+                upid = proxmox_api("DELETE", f"/nodes/{node}/storage/{st['storage']}/content/{v['volid']}")["data"]
+                if upid:
+                    wait_for_proxmox_task(node, upid)
+            except Exception as e:  # noqa: BLE001 - stale index entries are not fatal
+                # A content entry whose file is already gone fails the delete task
+                # ("unable to open file") and the retry then 500s ("got no worker
+                # upid"); the volume occupies nothing, and the clone that follows
+                # reports a genuinely stuck volume with its own message.
+                print(f"    vmid {vmid}: orphan volume {v['volid']} could not be removed ({e})")
+                continue
             removed += 1
     if removed:
         print(f"    vmid {vmid}: removed {removed} orphaned disk volume(s) (no VM owns them)")
