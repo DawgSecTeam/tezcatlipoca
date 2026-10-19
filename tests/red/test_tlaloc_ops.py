@@ -352,6 +352,14 @@ class PlantTests(unittest.TestCase):
         to.push_llm_env.assert_called_once()
 
 
+    def test_an_operator_can_extend_the_event_without_editing_the_comp(self):
+        """A range kept up for human blue testing goes quiet at duration_min;
+        TEZ_TLALOC_DURATION_MIN extends the clock without touching the comp."""
+        with mock.patch.dict(os.environ, {"TEZ_TLALOC_DURATION_MIN": "480"}):
+            block = to.red_block(self.comp)
+        self.assertEqual(float(block["duration_min"]), 480.0)
+
+
 class VerdictTests(unittest.TestCase):
     def test_collect_evidence_copies_only_what_exists(self):
         with tempfile.TemporaryDirectory() as tmp:

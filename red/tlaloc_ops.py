@@ -101,6 +101,16 @@ def red_block(comp_dir):
     for key, value in lines.items():
         if key.startswith("red."):
             _set_dotted(block, key[len("red."):], _coerce(value))
+    # Operator override for a range kept up past its scheduled length (a scrim
+    # left running for human blue testing goes quiet once red.duration_min has
+    # elapsed: the loop exits cleanly and the re-arm reports it as "could not
+    # start"). Editing the competition for this would change what gets graded.
+    over = os.environ.get("TEZ_TLALOC_DURATION_MIN")
+    if over:
+        try:
+            block["duration_min"] = float(over)
+        except ValueError:
+            raise RuntimeError(f"TEZ_TLALOC_DURATION_MIN must be minutes, got {over!r}")
     return block
 
 

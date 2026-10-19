@@ -281,7 +281,11 @@ def start_red_director(args):
             log(f"red director started after the seed — {target} "
                 f"{' '.join((r.stdout or '').split())[-24:]}")
             return True
-    raise RuntimeError(f"could not start {red_unit(args)} on red01 after the seed")
+    raise RuntimeError(
+        f"could not start {red_unit(args)} on red01 after the seed. An event whose "
+        f"red.duration_min has elapsed exits immediately after printing its summary — "
+        f"for a range kept up past its scheduled length, set TEZ_TLALOC_DURATION_MIN "
+        f"(minutes) or check `journalctl -u {red_unit(args)}` for the real failure.")
 
 
 def red_box_power_state(args):
