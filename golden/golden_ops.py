@@ -2,6 +2,7 @@
 
 import json
 import time
+from pathlib import Path
 
 from common.constants import GOLDEN_CLONE_TIMEOUT, GOLDEN_TAG, SNAP_BASE, ownership_tags
 from guests.alpine_ops import ensure_alpine_services
@@ -210,6 +211,16 @@ def set_fedora_selinux_permissive(targets, ctx):
             raise r
 
 
+def iis_management_features(comp_dir, box_name):
+    """The Windows feature installs a box needs before its plan's IIS step runs."""
+    try:
+        services = json.loads((Path(comp_dir) / "box_services.json").read_text())
+    except (OSError, ValueError):
+        return ()
+    entries = services.get(box_name) or []
+    return ("Web-Mgmt-Tools",) if any("iis" in str(e).lower() for e in entries) else ()
+
+
 def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_password,
                      golden_config_path, key, scoring_user, scoring_ip, jobs=1,
                      golden_hashes=None, unbooted=frozenset(),
@@ -315,19 +326,10 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     windows_targets = [t for t in work if is_windows_template(t["box"]["template"])]
 
     def _boot_win(t):
-        # A box whose services include IIS needs the management module before the
-        # plan's IIS step runs (the template ships the role without the tools).
-        features = ()
-        try:
-            services = json.loads((Path(comp_dir) / "box_services.json").read_text())
-        except (OSError, ValueError):
-            services = {}
-        if any("iis" in str(entry).lower()
-               for entry in (services.get(t["box"]["name"]) or [])):
-            features = ("Web-Mgmt-Tools",)
         # 1800s: a fresh sysprep-specialize first boot can exceed the 900s default on a loaded node.
         bootstrap_windows_box(node, t["vmid"], t["ip"], t["gateway"], "8.8.8.8", box_password,
-                              features=features, timeout=1800)
+                              features=iis_management_features(comp_dir, t["box"]["name"]),
+                              timeout=1800)
 
     win_results = run_concurrent(windows_targets, _boot_win, max_workers=4)
     for t, r in zip(windows_targets, win_results):
