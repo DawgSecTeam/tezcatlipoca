@@ -94,6 +94,17 @@ class Rules(unittest.TestCase):
         s = self._script()
         self.assertIn("-t nat -I POSTROUTING 1 -s 192.168.0.0/16 -d 10.200.0.10", s)
 
+    def test_the_c2_dnat_is_inserted_before_dockers_local_addrtype_jump(self):
+        # Appending put it after `--dst-type LOCAL -j DOCKER`; the engine's own
+        # published :80 answered the team box with a 404 and the DNAT counter
+        # stayed at 0 (live run-b0bd41fe).
+        s = self._script()
+        self.assertIn("-t nat -D PREROUTING -p tcp", s)
+        self.assertIn("-t nat -I PREROUTING 1 -p tcp", s)
+        self.assertIn("-t nat -D PREROUTING -p udp", s)
+        self.assertIn("-t nat -I PREROUTING 1 -p udp", s)
+        self.assertNotIn("-t nat -A PREROUTING -p", s)
+
     def test_without_a_port_only_the_segment_rules_exist(self):
         s = self._script(callback_port=None)
         self.assertNotIn("DNAT", s)

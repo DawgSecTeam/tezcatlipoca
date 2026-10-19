@@ -75,6 +75,20 @@ class ImplantChannel(Effect):
         # "no callback" on boxes that were live two minutes later.
         wait = int(ctx.cfg["c2"].get("callback_wait_sec", 120))
         detail = info.get("detail", "")
+        # A channel that installs but never checks in is undiagnosable from the
+        # agent's side alone: the payload prints its connect error to the journal
+        # and nowhere else (live: six implants "active", zero callbacks and no
+        # reason in the record).
+        fh = ctx.world.foothold(ip)
+        if (info.get("ok") and not info.get("callback_seen")
+                and not ctx.is_windows(ip) and fh and info.get("unit")):
+            _rc, out, err = ctx.ssh.ssh(
+                ip, fh["user"], fh.get("password") or "",
+                f"journalctl -u {info['unit']} -n 20 --no-pager 2>&1 | tail -12",
+                timeout=30, key_path=fh.get("key_path"))
+            agent_log = (out or err or "").strip()
+            if agent_log:
+                detail += f"; agent log: {agent_log[-400:]}"
         channel = ("callback observed" if info.get("callback_seen")
                    else f"no callback within {wait}s")
         outcome = f"{detail}; channel: {channel}"

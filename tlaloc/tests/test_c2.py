@@ -287,7 +287,8 @@ def test_planter_refuses_without_a_manifest_entry(tmp_path):
 
 def test_implant_channel_effect_needs_the_callback_to_succeed(tmp_path):
     _manifest(tmp_path)
-    ssh = FakeSSH().on("is-active", rc=0, out="active")
+    ssh = FakeSSH().on("is-active", rc=0, out="active").on(
+        "journalctl", rc=0, out="error client.Do: Post \"http://http://10.0.0.1:80/data\": invalid URL")
     # comp_dir points at the manifest; box_id is named explicitly because the
     # manifest's keys are comp-prep's, not something the agent may guess
     ctx = make_ctx(tmp_path / "state", ssh=ssh, comp_dir=tmp_path)
@@ -298,6 +299,8 @@ def test_implant_channel_effect_needs_the_callback_to_succeed(tmp_path):
                      ctx)
     assert result.ok is False
     assert "no callback" in result.detail
+    assert "agent log" in result.detail and "client.Do" in result.detail, \
+        "the payload's own connect error must ride the record"
     assert ctx.world.artifacts()[0]["kind"] == "c2-implant", \
         "the install is recorded even when the channel never checked in"
 

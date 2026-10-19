@@ -4,53 +4,6 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 
 ## Open
 
-### The scrim's `--duration-min` does not set red's event clock
-
-`run-agent-scrim.py --duration-min` sets the window the harness runs and captures; tlaloc's
-clock comes from the competition's `red.duration_min`. `red.tlaloc_ops.red_block` honours
-`TEZ_TLALOC_DURATION_MIN` (`estate.config` declares `knobs.tlaloc_duration_min`), but the scrim
-never sets it from `--duration-min`, so a 90-minute scrim on a 60-minute profile needs the
-operator to set both (`run-8f91036c` ran only because the practice profile was edited to 90). A
-mismatch makes red reach `event_over()`/its endgame early, leaving the tail of the event quiet
-while the report still measures ladder progress against the event clock.
-**Next action**: export `TEZ_TLALOC_DURATION_MIN=args.duration_min` from `scrim.red_stage` (the
-director launch), so the pushed clock is the event window; test the rendered config.
-
-### An overdue inject reads as due hours in the future
-
-`scrim.inject_sync.inject_brief.due_in_min` tries the UTC and local readings of `DueTime` and
-returns the first inside `[-15 min, 12 h]`. Once an inject is more than 15 minutes overdue the
-UTC reading is rejected and the local reading is hours ahead, so a missed inject renders
-"due in 207min" and never gets the `<< TASK #1` marker (`run-8f91036c`'s T+53 prompt showed
-this for inject #1).
-**Next action**: take the reading closest to now, render "OVERDUE by Nmin", and keep the urgent
-marker while the close window is open.
-
-### The teardown collector calls red's report unreachable after the scrim already pulled it
-
-`artifacts_lib.lifecycle.stage_red_artifacts` stages `/var/lib/tlaloc/*` to `/tmp/ba` for the
-plan's scp. Both `run-0637d642` and `run-8f91036c` recorded `/tmp/ba/report.md` as `unreachable`
-(reason: the ssh known-hosts warning) while `scrim/red_link.pull_red_state` pulled the same
-report into `RED-TEAM.md` — so `REPORT.md` says "red01: unreachable" beside a present red
-narrative. One authority, one collector.
-**Next action**: have `collection.json` trust the harness pull when it landed, or delete the
-duplicate staging path.
-
-### c2-prep on Mythic 4 is implemented but not yet proven live
-
-Mythic 4 removed `/api/v1.4`; the client now uses `/auth` for the Bearer token, GraphQL
-(`callback`, `createTask`, `task`+`response`, `createPayload`, `payload`) for the data
-surface and `/direct/download/<agent_file_id>` for the binaries, and the deploy hands
-c2-prep the operator password Gaia mints once (kept 0600 under `~/.tezcatlipoca/c2/`, since
-Gaia never repeats it). The first live attempt past that point (`run-f1c099c7`, 2026-10-18)
-then hit an environment failure, not a client one: two Gaia installs raced on the same box
-(one from a deploy process that had been left running), and afterwards the range's Mythic
-stack stopped answering on `:7443` — nginx accepted connections and `mythic_server` logged
-"Starting webserver" but never replied, surviving a VM reboot and a `mythic_server` restart.
-So the freeze has not yet run end to end against a real Mythic.
-**Next action**: deploy one clean range (no concurrent deploy on the same comp) and confirm
-c2-prep writes `red/payloads/manifest.json` with built payloads before the seed runs.
-
 ### A retired range's kept templates cannot be reclaimed until the competition deploys again
 
 `--teams-only` retires the range and keeps this competition's golden + engine templates for
