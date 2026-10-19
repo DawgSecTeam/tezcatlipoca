@@ -211,14 +211,19 @@ def set_fedora_selinux_permissive(targets, ctx):
             raise r
 
 
-def iis_management_features(comp_dir, box_name):
-    """The Windows feature installs a box needs before its plan's IIS step runs."""
+def windows_plan_features(comp_dir, box_name):
+    """The Windows features a box needs before its plan's IIS/AD steps run."""
     try:
         services = json.loads((Path(comp_dir) / "box_services.json").read_text())
     except (OSError, ValueError):
         return ()
-    entries = services.get(box_name) or []
-    return ("Web-Scripting-Tools",) if any("iis" in str(e).lower() for e in entries) else ()
+    text = " ".join(str(e).lower() for e in (services.get(box_name) or []))
+    features = []
+    if "iis" in text:
+        features.append("Web-Scripting-Tools")
+    if "adds" in text or "ad-ds" in text or "domain" in text:
+        features += ["AD-Domain-Services", "RSAT-AD-PowerShell"]
+    return tuple(features)
 
 
 def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_password,
@@ -328,7 +333,7 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     def _boot_win(t):
         # 1800s: a fresh sysprep-specialize first boot can exceed the 900s default on a loaded node.
         bootstrap_windows_box(node, t["vmid"], t["ip"], t["gateway"], "8.8.8.8", box_password,
-                              features=iis_management_features(comp_dir, t["box"]["name"]),
+                              features=windows_plan_features(comp_dir, t["box"]["name"]),
                               timeout=1800)
 
     win_results = run_concurrent(windows_targets, _boot_win, max_workers=4)

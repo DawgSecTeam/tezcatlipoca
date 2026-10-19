@@ -10,22 +10,30 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
-from golden.golden_ops import iis_management_features
+from golden.golden_ops import windows_plan_features
 
 
 class Features(unittest.TestCase):
     def test_an_iis_box_gets_the_management_tools(self):
         d = Path(self._tmp())
         (d / "box_services.json").write_text(json.dumps(
-            {"win02": [{"name": "IIS FTP"}], "dc01": ["ADDS"]}))
-        self.assertEqual(iis_management_features(d, "win02"), ("Web-Scripting-Tools",))
-        self.assertEqual(iis_management_features(d, "dc01"), ())
+            {"win02": [{"name": "IIS FTP"}], "web01": ["nginx"]}))
+        self.assertEqual(windows_plan_features(d, "win02"), ("Web-Scripting-Tools",))
+        self.assertEqual(windows_plan_features(d, "web01"), ())
+
+    def test_an_ad_box_gets_the_ad_modules(self):
+        d = Path(self._tmp())
+        (d / "box_services.json").write_text(json.dumps(
+            {"ad01": ["ADDS", "Enable WinRM"], "db01": ["mysql"]}))
+        self.assertEqual(windows_plan_features(d, "ad01"),
+                         ("AD-Domain-Services", "RSAT-AD-PowerShell"))
+        self.assertEqual(windows_plan_features(d, "db01"), ())
 
     def test_a_missing_or_broken_file_is_no_features(self):
         d = Path(self._tmp())
-        self.assertEqual(iis_management_features(d, "win02"), ())
+        self.assertEqual(windows_plan_features(d, "win02"), ())
         (d / "box_services.json").write_text("{")
-        self.assertEqual(iis_management_features(d, "win02"), ())
+        self.assertEqual(windows_plan_features(d, "win02"), ())
 
     def _tmp(self):
         import tempfile
