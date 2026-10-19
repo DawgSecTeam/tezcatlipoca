@@ -6,17 +6,13 @@ from scrim_report import timefmt
 
 HEALTH_CHECK = "health_check"
 
-# tlaloc v2 (the in-tree red engine) writes `effect` + `params` where v1 wrote
-# `tactic` + `data`: a v2 action is {"kind":"action","effect":"takedown",
-# "params":{"ip":…,"service":…,"mode":…}}. Reading only the v1 shape reports a
-# fully working red team as "takedowns 0, distinct tactics 1, targets none" —
-# live run-8240b93c: 16 real takedowns, one gate table reading zero.
+# tlaloc v2 writes `effect` + `params` where v1 wrote `tactic` + `data`; reading only
+# the v1 shape scores a fully working red team at zero takedowns.
 V2_TAKEDOWN_EFFECTS = ("takedown",)
 V2_INITIAL_ACCESS_EFFECTS = ("spray_access", "reestablish")
 
 
-# SSH is red's own access path, never a takedown target (effects.allow_ssh_takedown
-# stays off), so a comp that exposes it has one fewer service red may take down.
+# SSH is red's own access path, never a takedown target (effects.allow_ssh_takedown stays off).
 ACCESS_SERVICE_PINS = ("ssh", "sshd")
 
 
@@ -25,7 +21,6 @@ def is_access_service(name):
 
 
 def action_effect(ev):
-    """The tactic name for either schema (v1 `tactic`, v2 `effect`)."""
     return ev.get("tactic") or ev.get("effect") or "?"
 
 
@@ -64,11 +59,7 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
     for ev in events:
         if ev.get("kind") != "action":
             if ev.get("kind") in ("blue_restore", "blue_restores"):
-                # v1 writes one row per restore (target/detail); v2 batches them
-                # under "restores": [{"team","service"}] with service "<box>-<pin>".
-                # Recognising only the v1 spelling reads every v2 restore as absent
-                # — the interaction gate then scores 0 restorations for a blue team
-                # that logged five.
+                # v2 batches restores under a "restores" list; v1 writes one row per restore.
                 entries = ev.get("restores")
                 if isinstance(entries, list) and entries:
                     for item in entries:
@@ -87,8 +78,7 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
         tactic = action_effect(ev)
         ok = bool(ev.get("ok"))
         m["actions_ok" if ok else "actions_failed"] += 1
-        # health_check's detail carries the agent's own eviction tally ("N footholds
-        # alive, M evicted"); each rise in M is blue removing access red had.
+        # health_check detail "N footholds alive, M evicted": a rise in M is blue evicting red.
         if tactic == HEALTH_CHECK and ok:
             em = re.search(r"(\d+) evicted", ev.get("detail", ""))
             if em:
@@ -113,7 +103,7 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
             m["timeline"].append((tp, host_labels.host_label(dip, labels), svc, mode))
             takes.append((tp, dip))
     per_ip = {}
-    restored = []  # (tp, team, box) — box parsed from the detail; target field is null
+    restored = []
     for rtp, _team, rtarget, rdetail in m["blue_restore_list"]:
         box = None
         for name in (labels or {}).values() if labels else []:
@@ -129,14 +119,8 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
         earlier = per_ip.get(dip)
         gap_reaction = (earlier is not None
                         and (tp - earlier) * 60 >= REAKILL_GAP_SEC)
-        # A re-kill that closely follows blue restoring THAT box is a reaction too,
-        # even when red never left (continuous pressure): red saw the restore and
-        # answered it (red re-killed the same service within minutes of
-        # every blue restore on the run that tuned this, but the >=15-min-gap rule counted 0 restore-reactions
-        # and the gate failed red for exactly the behavior the gate is about. The
-        # blue_restore event carries target=null and a detail like "web01-roundcube
-        # is UP again on team2", so the match is box-level: the killed IP's team
-        # octet must agree and the box label must be the restored one.
+        # A re-kill soon after blue restored that box is a reaction even with no gap;
+        # restore rows carry target=null, so the match is on the host label.
         follow_reaction = False
         box = host_labels.host_label(dip, labels)
         for rtp, _rteam, rbox in restored:
@@ -150,10 +134,7 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
         if earlier is None or tp > earlier:
             per_ip[dip] = tp
     if t0 is None:
-        # No event_start (a run dir with red events but no world.json): every stamp is
-        # None and comparing one to the stall threshold used to abort the WHOLE report —
-        # including the timeout count the rehearsal gate reads. With no clock there is
-        # no timeline to measure gaps in, so report none.
+        # No t0: stamps are None and comparing one to the threshold aborted the whole report.
         ok_stamps = [s for s in ok_stamps if s is not None]
     if ok_stamps and ok_stamps[0] >= STALL_SEC / 60.0:
         m["stalls"].append((0.0, ok_stamps[0], ok_stamps[0]))

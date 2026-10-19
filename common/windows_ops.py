@@ -7,7 +7,7 @@ from infra.guest_exec import guest_agent_exec_windows, wait_for_guest_agent
 
 
 def is_windows_template(template_name):
-# Single definition of the "win" rule; the routing/auth/target-split call sites must agree.
+# Routing/auth/target-split call sites must agree on the "win" rule.
     return "win" in template_name.lower()
 
 
@@ -16,23 +16,19 @@ _IMAGE_STATE_PS = (
     "-ErrorAction SilentlyContinue; if ($s) { $s.ImageState } else { 'IMAGE_STATE_COMPLETE' }"
 )
 
-# Cap on one nested agent wait so the enclosing loop re-checks its own deadline; an uncapped
-# wait consumed a whole 900 s window in one uninterruptible call.
+# Uncapped nested waits ate whole 900 s windows uninterruptibly; cap so the outer loop re-checks.
 AGENT_POLL_CAP = 120
 
-# No single domain-chain probe may consume the whole helper deadline.
 AGENT_PROBE_CAP = 60
 
 
 def _bounded(timeout, remaining):
-# No single agent call may outlive the loop waiting on it: the smallest of the three wins.
     return max(1, min(timeout, AGENT_POLL_CAP, int(remaining)))
 
 
 def _wait_for_windows_setup_complete(node, vmid, deadline):
-# Wait out a sysprepped image's first boot (specialize -> reboot -> OOBE). The agent answers
-# during specialize, but the box reboots and renames itself minutes later, so anything applied
-# before that races the reboot.
+# The agent answers during specialize, but the box then reboots and renames itself
+# minutes later — anything applied before COMPLETE races the reboot.
     while time.time() < deadline:
         remaining = deadline - time.time()
         if wait_for_guest_agent(node, vmid, timeout=_bounded(AGENT_POLL_CAP, remaining)):
@@ -49,13 +45,10 @@ def _wait_for_windows_setup_complete(node, vmid, deadline):
 
 
 def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=1800):
-# Post-clone Windows setup (IP/gateway/DNS, admin password, sshd) via the QEMU guest agent.
-# 1800 s is the golden-build budget; a fresh DC clone's first boot is IO-bound far longer than
-# the post-clone path's old 900 s default.
+# 1800 s: a fresh DC clone's sysprep first boot is IO-bound far past the old 900 s default.
     deadline = time.time() + timeout
     if not _wait_for_windows_setup_complete(node, vmid, deadline):
-        # A clone's first boot can deadlock pre-specialize at idle CPU with no agent; a forced
-        # stop/start clears it (golden boxes wedged identically on snapshot rollback).
+        # First boot can deadlock pre-specialize (idle CPU, no agent); a stop/start clears it.
         from infra.lifecycle import start_vm, stop_vm
         print(f"    vmid {vmid}: setup wait expired with no agent — hard-cycling once")
         stop_vm(node, vmid)
@@ -144,8 +137,7 @@ Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses '{d
 
 
 def wait_for_adws(node, vmid, timeout=900):
-# sshd comes back well before ADWS after the promotion reboot, so AD plants run in that
-# window die with ADServerDownException; returns the DomainSID string or None.
+# ADWS lags sshd after the promotion reboot — AD plants in that window die ADServerDownException.
     deadline = time.time() + timeout
     errors = 0
     while time.time() < deadline:
@@ -160,7 +152,6 @@ def wait_for_adws(node, vmid, timeout=900):
             errors += 1
         time.sleep(15)
     if errors:
-        # Distinguishes an agent-unreachable DC from a merely slow ADWS.
         print(f"    WARNING: ADWS never came up in {timeout}s and {errors} agent probe(s) "
               f"failed — the DC may be agent-unreachable rather than slow")
     return None
@@ -187,8 +178,6 @@ def wait_for_windows_sshd(node, vmid, timeout=180):
 
 
 def wait_for_dc_dns(node, dc_vmid, domain, dc_ip, timeout=300):
-# Agent errors don't consume the probe budget, so 'DNS not up yet' isn't confused with
-# 'DC unreachable'.
     record = f"_ldap._tcp.dc._msdcs.{domain}"
     deadline = time.time() + timeout
     probes = 0

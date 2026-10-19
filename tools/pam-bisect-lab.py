@@ -1,24 +1,12 @@
 #!/usr/bin/env python3
 """PAM/SSH bisect lab for the planted-box restart trap (docs/known-issues.md).
 
-  grab   collect a support bundle from a LIVE box over the guest agent (SSH may be dead)
-  up     clone a named template into a tagged scratch lab VM and write <out>/lab.json
-  cycle  stop/start the lab N times, classify SSH, auto-grab a bundle on pam-trap
-  bisect roll back to a failing snapshot, omit one config at a time, print the correlate
-  down   destroy exactly the lab VM recorded in lab.json, and nothing else
-
-Teardown is `down --lab <lab-dir>/lab.json`. It uses the sanctioned ownership guard: the
-state's tag set must still carry tezcatlipoca + comp-pam-lab + pam-lab, and the destroy
-path refuses a VM that does not. No competition range, bridge, or template is ever touched.
-
 The bisect config set is JSON:
 
   [{"name": "pam-auth-faillock", "omit": "rm -f /etc/pam.d/common-auth"},
    {"name": "security-limits",   "omit": "rm -f /etc/security/limits.conf"}]
 
-`omit` runs as root through the guest agent against the rolled-back failing snapshot; the
-box is then restarted and probed. A config whose omission leaves every cycle healthy
-correlates with the trap. The omission commands are operator data, never printed.
+`omit` runs as root through the guest agent against the rolled-back failing snapshot.
 """
 
 import argparse
@@ -104,8 +92,7 @@ def _engine_ctx(args):
     if not engine_ip:
         raise SystemExit("  ERROR: no engine management IP in the profile — pass --engine-ip "
                          "(box SSH is tunnelled through the scoring engine)")
-    # A lab-local known_hosts: the default TOFU file can still pin a pre-reboot engine key,
-    # which made every cycle report "unreachable" after the engine restarted.
+    # Default TOFU pins the pre-reboot engine key, faking "unreachable" after engine reboots.
     lab = getattr(args, "lab", None)
     return {"ssh_key_path": str(config.ssh_key_path()),
             "scoring_engine_ip": engine_ip,
@@ -131,7 +118,6 @@ def load_configs(path):
 
 
 def correlate(rows):
-    """Config names whose omission left every retest cycle healthy."""
     return [row["name"] for row in rows if row["verdict"] == "healthy"]
 
 
@@ -203,7 +189,7 @@ def cmd_up(args):
         # /clone takes no tags; the description marks a clone killed before the tagging PUT.
         "description": clone_marker(LAB_COMP),
     })["data"]
-    # The state exists before the clone task finishes, so a failed clone still has a down path.
+    # State written before the clone task finishes, so a failed clone still has a down path.
     _write_state(launcher, doc)
     wait_for_proxmox_task(node, upid)
     proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config",

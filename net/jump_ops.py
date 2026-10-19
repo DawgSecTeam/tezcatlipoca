@@ -19,7 +19,6 @@ from estate import config
 
 
 def find_jump_template(node, hint=""):
-    # The satellite's alpine base template: name-substring, stopped, tagged `template`, on node.
     hint = hint or "alpine"
     matches = {}
     for vm in cluster_vms_for(node):
@@ -60,9 +59,8 @@ def _jump_ssh(ip, user, key_path, cmd, timeout=60):
 
 
 def wait_jump_ready(node, vmid, ip, user, key_path, expected_key, timeout=900):
-    # Watch the PREREQUISITES over the guest agent: cloud-init done, THE DEPLOY KEY installed, the
-    # account unlocked. A fresh clone carries the template's build key and is shadow-locked before
-    # cloud-init runs, so key-matching alone passes instantly on stale state. Cold clones ~10 min.
+    # A fresh clone carries the template's build key and is shadow-locked, so key-matching
+    # alone passes on stale state. Cold clones ~10 min.
     from infra.guest_exec import guest_agent_exec_root
     key_body = expected_key.split()[1] if len(expected_key.split()) > 1 else expected_key
     probe = (f"cloud-init status 2>/dev/null | grep -q done && "
@@ -93,8 +91,6 @@ def wait_jump_ready(node, vmid, ip, user, key_path, expected_key, timeout=900):
 
 def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
                    red_segment=""):
-    # Push forwarding + NAT rules and make them persistent (Alpine OpenRC or Debian
-    # netfilter-persistent, detected from the guest itself).
     rules = jump_rules(team_identifiers, engine_mgmt_ip, red_segment=red_segment)
     quoted = subprocess.list2cmdline([rules]).replace("'", "'\\''")
     probe = _jump_ssh(ip, user, key_path,
@@ -102,8 +98,7 @@ def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
                       timeout=30)
     alpine = "alpine" in (probe.stdout or "")
     if alpine:
-        # Alpine's iptables OpenRC service ignores /etc/iptables/rules.v4: apply the rules LIVE,
-        # then `rc-service iptables save` persists them to Alpine's boot-loaded save file.
+        # Alpine's iptables OpenRC ignores rules.v4: apply live, then rc-service save persists.
         cmds = [
             "command -v iptables-restore >/dev/null || sudo apk add --no-cache iptables",
             f"printf '%s' {quoted} | sudo tee /etc/iptables/rules.v4 > /dev/null",
@@ -113,8 +108,7 @@ def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
             jump_sysctl_script(),
         ]
     else:
-        # Debian non-login SSH PATH lacks /usr/sbin (iptables-restore, sysctl), and a
-        # static-ipconfig0 cloud-init jump may boot with no resolver at all.
+        # Debian: SSH non-login PATH lacks /usr/sbin; static-ip cloud-init may leave no resolver.
         path = "export PATH=$PATH:/usr/sbin:/sbin; "
         resolver = ("printf 'nameserver 10.0.0.1\\nnameserver 1.1.1.1\\n' | "
                     "sudo tee /etc/resolv.conf > /dev/null")
@@ -140,8 +134,6 @@ def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
 
 
 def _log(*args, **kwargs):
-    # print() under the shared lock: _build_one runs on a thread pool, so an unwrapped
-    # multi-line print from one satellite interleaves into another's.
     with PRINT_LOCK:
         print(*args, **kwargs)
 
@@ -149,8 +141,7 @@ def _log(*args, **kwargs):
 def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
                    engine_mgmt_gw=DEFAULT_ENGINE_MGMT_GW, engine_node_name=None,
                    run_id=None, red_segment=""):
-    # Clone + configure one jump per satellite, CONCURRENTLY (each dominated by a full clone plus a
-    # first-boot cloud-init wait, 17s-547s). Bounded at 4: each is a full clone onto a datastore.
+    # Bounded at 4: each worker is a full clone onto a datastore.
     from multinode.placement_record import record_of
     sats = list(placement["satellites"])
 
@@ -166,8 +157,7 @@ def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
                    mgmt_bridge=resolved_mgmt_bridge(placement))
 
     results = run_concurrent(sats, _one, max_workers=4)
-    # run_concurrent captures exceptions per slot instead of raising; one satellite that never
-    # comes up aborts the deploy.
+    # run_concurrent captures exceptions per slot; one dead satellite aborts the deploy.
     for sat, r in zip(sats, results):
         if isinstance(r, Exception):
             raise r
@@ -180,8 +170,6 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
     ownership = ownership_tags(comp_name, run_id, JUMP_TAGS_EXTRA)
     vm_name = f"jump-{comp_name}-{sat['slot']}"
 
-    # Resume short-circuit: a running, ours jump from a failed attempt is reconfigured in place
-    # instead of re-cloned (another ~10 min cloud-init wait).
     reuse = False
     try:
         cfg0 = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
@@ -221,14 +209,12 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
             "ciuser": ctx.get("vm_username", "sysadmin"),
             "sshkeys": ctx["ssh_public_key_quoted"],
             "ipconfig0": f"ip={sat['jump_mgmt_ip']}/24,gw={engine_mgmt_gw}",
-            # Alpine's adduser leaves a fresh account shadow-locked ('!') and sshd refuses pubkey
-            # auth to a locked account; cloud-init only unlocks it when a (random, unused) password is set.
+            # Alpine adduser shadow-locks; cloud-init unlocks only when a password is set.
             "cipassword": secrets.token_urlsafe(12),
         }
         for i, t in enumerate(team_ids):
             cfg[f"ipconfig{i + 1}"] = f"ip=192.168.{t}.1/24"
-        # The alpine base template carries its BUILD-TIME cicustom user-data (its own seeded
-        # key) that overrides the generated ciuser/sshkeys fragment; strip it before first boot.
+        # Template cicustom user-data overrides generated ciuser/sshkeys; strip before first boot.
         try:
             proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data={"delete": "cicustom"})
         except Exception as e:
@@ -246,8 +232,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
         if not wait_for_guest_agent(node, vmid, timeout=180):
             _log("    WARNING: jump agent not answering (cloud-init may still be running)")
     user = ctx.get("vm_username", "sysadmin")
-    # Every fresh clone regenerates its sshd host keys, so the PREVIOUS jump's pinned key for
-    # this mgmt IP makes accept-new refuse everything ("host key changed").
+    # Clones regenerate host keys; the prior jump's pin at this IP makes accept-new refuse.
     forget_engine_host_key(sat["jump_mgmt_ip"])
     if not wait_jump_ready(node, vmid, sat["jump_mgmt_ip"], user, ctx["ssh_key_path"],
                            config.active().ssh.public_key):

@@ -117,8 +117,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
             where = f"fresh selection for '{box['name']}'"
             services = _drop_unplantable_bare(services, where)
             vulns = _drop_unplantable_bare(vulns, where)
-            # The curated REQUIRED_VARS table is an incomplete mirror of the catalog's own
-            # required_vars, so also drop what the catalog declares.
+            # REQUIRED_VARS mirrors the catalog's required_vars incompletely; also drop what it declares.
             banned = catalog_required_var_names()
             services = _drop_catalog_var_bare(services, where, banned)
             vulns = _drop_catalog_var_bare(vulns, where, banned)
@@ -132,8 +131,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         )
 
 
-    # Pin gates at generate time instead of mid-plant: var gate (bare-name selections of
-    # var-requiring configs) and known-broken gate. On the reuse path a recorded pin exempts the box.
+    # Pin gates at generate time, not mid-plant; on the reuse path a recorded pin exempts the box.
     baseline_path = comp_dir / "box_baseline.json"
     baseline = json.loads(baseline_path.read_text()) if baseline_path.exists() else {}
     for box_name, (services, vulns) in box_configs.items():
@@ -149,10 +147,9 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
         ((t, b) for t in teams.values() for b in boxes), start=1
     ):
         if is_unmanaged(box):
-            continue  # firewall/appliance: no nakon plant (see utils.is_unmanaged)
+            continue
         services, vulns = box_configs[box["name"]]
-        # Three kinds of pin never ride the machine list: DOMAIN_INFRA_CONFIGS (re-injected with
-        # real vars), score-only pins, and PIN_CHECK_OVERRIDES (strip the keys, keep the config).
+        # Domain pins re-inject with real vars; PIN_CHECK_OVERRIDES strips keys, keeps the config.
         configurations = []
         for c in services + vulns + list(baseline.get(box["name"], [])):
             name = c if isinstance(c, str) else c["name"]
@@ -187,9 +184,7 @@ def generate_nakon_config(teams, boxes, difficulty, comp_dir, box_password, box_
 
 
 def _golden_stage_machines(full, unbooted, anchor_identifier, box_index_by_name):
-    # One machine per box type at the anchor subnet's golden IP; the anchor is team1 for slot 0 and
-    # the satellite's first local team otherwise — the golden must sit on a bridge the host building
-    # it has. The identity ban is computed here so slot 0 and every satellite share one definition.
+    # One machine per box type at the anchor's golden IP; anchor must sit on a bridge the builder has.
     identity_banned = _identity_banned_configs()
     seen_types = set()
     golden_machines = []
@@ -225,8 +220,6 @@ def _golden_stage_machines(full, unbooted, anchor_identifier, box_index_by_name)
 
 
 def generate_slot_golden_config(comp_dir, boxes, unbooted, anchor_identifier, slot):
-    # The satellite slot's golden-stage config: identical planted content to slot 0, different
-    # transport IPs (the anchor team's subnet, reachable from the engine via the jump).
     full = json.loads((comp_dir / "nakon-config.json").read_text())["machines"]
     box_index_by_name = {b["name"]: i for i, b in enumerate(boxes)}
     machines = _golden_stage_machines(full, unbooted, anchor_identifier,
@@ -238,10 +231,7 @@ def generate_slot_golden_config(comp_dir, boxes, unbooted, anchor_identifier, sl
 
 
 def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
-    # Split the full nakon config into golden / pre-domain / final / last stage files
-    # (nakon-config.json stays the source of truth). Golden takes ONE machine per box type (linked
-    # clones inherit the heavy work); the last stage holds the account-file mode pins. unbooted box
-    # types (DCs) get no golden machine and plant per team in the pre-domain stage.
+    # unbooted box types (DCs) get no golden machine and plant per team in the pre-domain stage.
     full = json.loads((comp_dir / "nakon-config.json").read_text())["machines"]
     team1_identifier = str(teams["team1"]["identifier"])
     box_index_by_name = {b["name"]: i for i, b in enumerate(boxes)}
@@ -249,17 +239,12 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
     def config_name(c):
         return c if isinstance(c, str) else c["name"]
 
-    # Identity-dependent configs write an address into the disk; planted on the golden they would
-    # bake its IP into every clone. _golden_stage_machines refuses them; the stages fill them per team.
-
     golden_machines = _golden_stage_machines(full, unbooted, team1_identifier,
                                              box_index_by_name)
-    # Domain-dependent configs plant per team AFTER the domain pass (a DC box type is unbooted, so
-    # absent this rule its whole plan rides the pre-domain pass and every domain-dependent step fails).
+    # Domain-dependent pins plant post-domain: else a DC's whole plan rides the pre-domain pass.
     domain_dependent = {config_name(c) for m in full for c in m["configurations"]
                         if is_domain_dependent(config_name(c))}
     post_clone = POST_CLONE_CONFIGS | domain_dependent
-    # Account-file mode pins, by name or by their own FILE_PATH var (see _late_mode_names).
     late_names = _late_mode_names(full)
 
     def stage_machines(want, include_golden_stage=False):
@@ -274,8 +259,7 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
                     continue
                 required = REQUIRED_VARS.get(name) or {}
                 if required:
-                    # Machine identity wins: overwrite "ip"-kind vars with THIS machine's
-                    # address and "ip:<box>"-kind with the same team's copy of that box.
+                    # Machine identity wins: these fills override the pin's own vars below.
                     filled = {v: m["ip"] for v, kind in required.items() if kind == "ip"}
                     for v, kind in required.items():
                         if str(kind).startswith("ip:"):
@@ -293,8 +277,7 @@ def generate_stage_configs(comp_dir, teams, boxes, unbooted=frozenset()):
     predomain_machines = stage_machines(PREDOMAIN_STAGE_CONFIGS, include_golden_stage=True)
     final_machines = stage_machines(FINAL_STAGE_CONFIGS | domain_dependent)
     late_machines = stage_machines(late_names)
-    # Merge pre-domain ∪ final per machine, deduping on the pin's full identity (_pin_key). The last
-    # pass is deliberately NOT in this view: redeploy's sweep replays it, and hardening would clobber it.
+    # The late pass is excluded here: redeploy's sweep replays it, and hardening would clobber it.
     combined = {}
     for m in predomain_machines + final_machines:
         entry = combined.setdefault(m["name"], {**m, "configurations": []})

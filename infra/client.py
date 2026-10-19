@@ -14,8 +14,7 @@ from estate import config
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 
-# node name -> (endpoint, api_token), registered by placement_record.activate_placement(); a
-# node-scoped path resolves through it, so existing call sites reach the owning host unchanged.
+# Registered by placement_record.activate_placement(); node-scoped paths resolve to the owning host.
 _NODE_ROUTES = {}
 _NODE_PATH_RE = re.compile(r"^/nodes/([^/]+)(?:/|$)")
 
@@ -42,8 +41,7 @@ def _route_for_path(path):
 
 
 def live_vmids():
-    """Every vmid the cluster knows; raises instead of returning an empty set, which would read
-    as "everything is gone" and hard-fail a fine resume."""
+    """Raises on failure: an empty set reads as "everything is gone" and kills a fine resume."""
     try:
         data = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     except Exception as e:                                  # noqa: BLE001 - reported
@@ -62,7 +60,6 @@ class _FingerprintAdapter(HTTPAdapter):
 
 
 def proxmox_request(method, url, fingerprint=None, **kwargs):
-    """requests wrapper honoring TLS pinning: fingerprint pins the cert, else ca_bundle, else verify=False."""
     cfg = config.active()
     fp = fingerprint or cfg.proxmox.tls_fingerprint
     ca = cfg.proxmox.ca_bundle
@@ -76,22 +73,18 @@ def proxmox_request(method, url, fingerprint=None, **kwargs):
 
 
 def proxmox_api_for(endpoint, token, method, path, **kwargs):
-    """proxmox_api with an explicit endpoint+token instead of the env."""
     url = f"{endpoint.rstrip('/')}/api2/json{path}"
     headers = {"Authorization": f"PVEAPIToken={token}"}
 
     def _call():
-        # A caller's own timeout wins; passing both it and a default raised "got multiple values
-        # for keyword argument 'timeout'", which list_proxmox_templates swallowed into [].
         kwargs.setdefault("timeout", 60)
         r = proxmox_request(method, url, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
 
     def _retry_on(exc):
-        # PVE serializes API writes against per-VM/per-datastore lock files and answers the loser
-        # of a race with a 500 "can't lock file ... got timeout" — routine with concurrent ranges.
-        # The request is idempotent and the lock is held only for one operation, so retry is safe.
+        # PVE serializes API writes on per-VM/datastore lock files and answers the loser
+        # with a 500 "can't lock file"; the calls are idempotent, so retry is safe.
         if not isinstance(exc, (requests.exceptions.ConnectionError,
                                 requests.exceptions.Timeout,
                                 requests.exceptions.HTTPError)):
@@ -115,8 +108,7 @@ def proxmox_api(method, path, **kwargs):
 
 
 def cluster_vms_for(node):
-    """Cluster-wide VM list from the host owning `node`: on independent hosts /cluster/resources
-    sees only its own VMs, so per-node template maps must ask the right host."""
+    """Independent hosts' /cluster/resources shows only their own VMs — ask the owning host."""
     override = _route_for_path(f"/nodes/{node}/x")
     if override:
         endpoint, token = override
@@ -132,14 +124,11 @@ def wait_for_proxmox_task(node, upid, timeout=1800):
             raise RuntimeError(f"Proxmox task {upid} timed out after {timeout}s")
         data = proxmox_api("GET", f"/nodes/{node}/tasks/{upid}/status")["data"]
         status, exitstatus = data.get("status") or "", data.get("exitstatus") or ""
-        # A task whose worker died carries the failure IN `status` ("clone failed: can't lock
-        # file … - got timeout") and has no `exitstatus`, so a `== "stopped"` test never fires and
-        # the caller polls a corpse to its timeout. Only "running" is not-terminal.
+        # A dead worker's failure is in status with no exitstatus; only "running" is not terminal.
         if status == "running":
             time.sleep(3)
             continue
-        # "WARNINGS: n" is PVE's completed-with-warnings exit — the task's work is done. An
-        # empty exitstatus is "still being written", not a failure.
+        # exitstatus "WARNINGS: n" = done with warnings; empty = still being written, not failure.
         if status == "stopped" and exitstatus in ("", "OK"):
             return
         if exitstatus.startswith("WARNINGS"):
@@ -149,8 +138,7 @@ def wait_for_proxmox_task(node, upid, timeout=1800):
 
 
 def run_vm_task(node, vmid, method, path, *, timeout=1800, attempts=5, **kwargs):
-    """Issue a VM-scoped PVE operation and wait for its task, retrying one PVE refused for
-    `lock-<vmid>.conf` contention. Every operation routed here is idempotent, so retry is safe."""
+    """Retries PVE lock-contention refusals; every operation routed here is idempotent."""
     for attempt in range(attempts):
         upid = proxmox_api(method, path, **kwargs)["data"]
         try:
@@ -165,15 +153,14 @@ def run_vm_task(node, vmid, method, path, *, timeout=1800, attempts=5, **kwargs)
 
 
 def node_bridges(node):
-    """{iface: comment} for every bridge the node owns — a comment is a bridge's only identity."""
+    """A bridge's comment is its only identity in PVE."""
     nets = proxmox_api("GET", f"/nodes/{node}/network")["data"]
     return {n.get("iface"): str(n.get("comments") or "")
             for n in nets if n.get("iface") and n.get("type") in (None, "bridge")}
 
 
 def destroy_bridge_if_exists(node, bridge_name):
-    """Delete a Proxmox Linux bridge; True when it is gone afterwards. DELETE only STAGES the
-    change, so without the apply PUT the bridge stays UP and the next preflight refuses it."""
+    """PVE DELETE only stages network changes; the apply PUT is what takes the bridge down."""
     try:
         existing = {n.get("iface") for n in proxmox_api("GET", f"/nodes/{node}/network")["data"]}
         if bridge_name not in existing:
@@ -193,9 +180,7 @@ def destroy_bridge_if_exists(node, bridge_name):
 
 @contextmanager
 def storage_queue_lock(node, wait_s=900):
-    # PVE takes a per-datastore lock for a base-image clone or golden->template conversion and
-    # tells everyone else "can't lock file ... got timeout", so concurrent ranges fight rather
-    # than queue. Keyed on the node: over-serialising beats diagnosing a lost conversion.
+    # Concurrent base-image clones/conversions hit PVE datastore lock timeouts; queue, don't race.
     endpoint = (config.active().proxmox.endpoint or "unknown")
     host = re.sub(r"^https?://", "", endpoint).split("/")[0].split(":")[0] or "unknown"
     slug = re.sub(r"[^A-Za-z0-9._-]", "_", f"{host}-{node}")

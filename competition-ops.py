@@ -1,27 +1,5 @@
 #!/usr/bin/env python3
-"""Competition lifecycle driver: start / freeze / resume / end / status.
-
-Deploy and start are separate steps: `create-competition.py --hold-start` finishes with
-everything deployed, teams seeded, the portal up — but the competition clock unstarted
-and the engine paused. This drives the engine afterwards:
-
-  python3 competition-ops.py start  --comp-dir competitions/<id>
-  python3 competition-ops.py freeze --comp-dir competitions/<id> --engine-ip 10.0.0.248
-  python3 competition-ops.py end    --comp-dir competitions/<id>
-
-Auth is always the `scoring` automation account (password from the estate state or
-credentials.txt): keep lifecycle automation off the operator's `admin` login for least
-privilege and a separate audit trail. (The old one-session-per-account claim did not
-reproduce on the 2026-10-18 live engine.)
-
-`start` also creates the deferred injects — their open/due/close windows anchor at
-creation time, so creating them at deploy time would open them before T0.
-
-`end` captures the final scoreboard into <comp-dir>/evidence/ BEFORE pausing: the
-pause is what freezes the loop's last round, and a paused engine still answers these
-APIs — capture first (stage_capture lesson). It is terminal: resuming afterwards is a
-deliberate reset-event, never an accident.
-"""
+"""Competition lifecycle driver: start / freeze / resume / end / status."""
 
 import argparse
 import json
@@ -107,8 +85,7 @@ def cmd_start(args, comp_dir):
     else:
         r = session.post(f"{base_url}/api/engine/pause", json={"pause": False}, timeout=10)
         if r.status_code >= 400 and engine_status(session, base_url).get("running"):
-            # The engine unpaused between the status GET and this POST — it 400'd on the
-            # stale transition; the re-GET above proves the state we wanted.
+            # Engine 400s a stale transition — it unpaused between GET and POST; the re-GET proves the wanted state.
             print("  Engine unpaused concurrently — treating as done.")
         else:
             r.raise_for_status()
@@ -147,8 +124,7 @@ def cmd_freeze(args, comp_dir, pause):
     session = login(base_url, scoring_password(args, state, comp_dir))
     r = session.post(f"{base_url}/api/engine/pause", json={"pause": pause}, timeout=10)
     if r.status_code >= 400:
-        # 400 on a pause toggle is the engine refusing a stale transition; ask it
-        # whether the state we asked for already holds before calling it a failure.
+        # 400 on a toggle = the engine refusing a stale transition; confirm the state before failing.
         running = bool(engine_status(session, base_url).get("running"))
         if running == (not pause):
             print(f"  Engine already {'frozen' if pause else 'scoring'} — nothing to do.")
@@ -163,10 +139,10 @@ def cmd_end(args, comp_dir):
     state = load_state(comp_dir)
     base_url = engine_base(args, comp_dir)
     session = login(base_url, scoring_password(args, state, comp_dir))
+    # end_event captures the scoreboard BEFORE pausing — a paused engine still answers the capture APIs.
     rc = end_event(base_url, session, comp_dir)
     if rc == 0:
-        # Only a clean capture AND pause may record the event as over; a failed one
-        # leaves the panel showing a still-live engine (run rc tells the operator).
+        # Never record `ended` on a failed capture — the panel must still show a live engine.
         state["ended"] = True
         document = estate_state.EstateState.load(comp_dir)
         document.absorb(state)
@@ -201,8 +177,7 @@ def cmd_status(args, comp_dir):
 
 
 def main():
-    # The state write below updates a 0600 file; keep everything it touches private
-    # from the start rather than depending on the operator's umask.
+    # Keep the 0600 state file private regardless of the operator's umask.
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("action", choices=ACTIONS)

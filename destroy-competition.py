@@ -1,18 +1,4 @@
-"""Teardown CLI: a thin shim over the teardown package (docs/internals.md#teardown).
-
-The mechanics, the step policies, the ordering rule and the exit contract live
-in teardown/ — this file only parses flags, builds the context, and turns the
-engine's verdict into an exit code. Exit 0 means verify_clean found the estate
-clean for this ownership set; every refusal is a Refusal (saw / expected /
-remedy) printed before anything is touched.
-
-Default mode is a FULL teardown: exit 0 leaves nothing of this deploy behind.
---teams-only keeps the competition's golden + engine templates for the next run
-of the SAME competition (the mid-event mode); goldens never carry across
-competitions. A FROZEN competition's templates require --end-of-competition.
---team NAME is the mid-event team removal (teardown/team_ops.py): one team's
-clones die, the rest of the range is never addressed.
-"""
+"""Teardown CLI: a thin shim over the teardown package (docs/internals.md#teardown)."""
 
 import json
 import os
@@ -45,9 +31,7 @@ def load_destroyable_competitions():
     ]
 
 
-# An orphan's comp dir is gone, so its ownership cannot come from state: the caller names the
-# comp + run tags and the VM's own tag set is the proof (teardown/orphan_ops.py). Returns the
-# exit code — 0 means nothing of that ownership set is left.
+# Orphan's comp dir is gone: the caller names comp + run tags and the VM's own tag set is the proof.
 def orphan_reclaim(args):
     from estate import config
     from teardown import orphan_ops
@@ -81,8 +65,7 @@ def orphan_reclaim(args):
         return 1
 
     print("\n─── Result " + "─" * 52)
-    # The scanned count is what tells "nothing matched" apart from "wrong node": a no-op on a
-    # node the profile does not actually host would otherwise read exactly like an empty estate.
+    # `scanned` tells "nothing matched" from "wrong node": a no-op must not read as a clean estate.
     print(f"  scanned      : {result['scanned']} guest(s) on {node}")
     for row in result["destroyed"]:
         print(f"  destroyed    : vmid {row['vmid']} ({row['name']}) — {row['role']}")
@@ -145,8 +128,7 @@ def main():
                              "VMs (irreversible — there is no freeze record left to consult)")
     args = parser.parse_args()
 
-    # Teardown is the path that always needed the ambient estate identity (verify_clean
-    # reads it), while a deploy survives its absence on nodes.json alone.
+    # verify_clean reads the ambient estate identity; a deploy survives on nodes.json alone.
     from estate import config
     config.require_proxmox_identity()
 
@@ -159,9 +141,6 @@ def main():
 
     if args.comp_dir:
         comp_dir = resolve_comp_dir(comp_dir=args.comp_dir)
-        # `competition` is only bound by the comps-root branch below, and the banner prints it —
-        # `--comp-dir` alone (the dashboard's shape: a per-run workspace with no name of its own)
-        # died with UnboundLocalError before any teardown ran .
         competition = args.competition or competition_name(comp_dir)
     else:
         competitions = load_destroyable_competitions()
@@ -184,10 +163,6 @@ def main():
 
         comp_dir = resolve_comp_dir(competition)
     name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
-    # teams.json/boxes.json are what this teardown plans against. A workspace whose deploy died
-    # before generating them (preflight-placement) never held a range, and reading them
-    # unconditionally died with FileNotFoundError instead of a verdict (caught live: two runs
-    # were handed a config-less workspace that had never held a range). Missing == refuse.
     missing = [f for f in ("teams.json", "boxes.json") if not (comp_dir / f).exists()]
     if missing:
         refusal = Refusal(
