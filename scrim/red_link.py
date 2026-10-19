@@ -266,7 +266,10 @@ def start_red_director(args):
     """
     target, common, jump = _red_ssh_ctx(args)
     unit = red_unit(args)
-    cmd = (f"sudo -n systemctl start {unit}; sleep 3; "
+    # RESTART, not start: a re-stage pushes new code onto red01, and `systemctl
+    # start` on an already-running unit is a no-op — three re-arms in a row on
+    # 2026-10-18 kept the pre-fix loop alive and every "fix" looked ineffective.
+    cmd = (f"sudo -n systemctl restart {unit}; sleep 3; "
            f"systemctl is-active {unit}")
     for extra in ([], (["-o", jump] if jump else [])):
         try:
