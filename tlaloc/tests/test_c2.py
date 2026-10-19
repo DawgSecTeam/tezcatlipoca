@@ -457,3 +457,28 @@ def test_the_windows_plant_varies_its_persistence_surfaces(tmp_path):
     launchers = {ms[0] for ms in seen}
     assert len(launchers) >= 3, f"launchers stay diverse across plants: {launchers}"
     assert len(seen) >= 3
+
+
+def test_the_linux_plant_adds_a_surface_beyond_the_unit(tmp_path):
+    """A lone systemd unit is the first grep a defender runs. The plant draws a
+    second surface (cron watchdog or login hook), and the undo names both."""
+    _manifest(tmp_path)
+    payload = tmp_path / "web01-1.bin"
+    payload.write_bytes(b"\x7fELF fake")
+    ssh = FakeSSH().on("is-active", rc=0, out="active")
+    ctx = make_ctx(tmp_path / "state", ssh=ssh)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root")
+    planter = Planter(ctx, comp_dir=tmp_path)
+
+    seen = set()
+    for seed in range(8):
+        ctx.rng.seed(seed)
+        info = planter._install_linux("192.168.1.10", "web01-1", payload, "http")
+        assert info["ok"] is True, info
+        assert len(info["mechanisms"]) >= 2, info
+        extra = [p for p in info["paths"]
+                 if "/etc/cron.d/" in p or "/etc/profile.d/" in p]
+        assert extra, info
+        assert any(extra[0] in u for u in info["undo"]), info
+        seen.update(info["mechanisms"])
+    assert {"systemd", "cron_watch", "profile_hook"} <= seen, seen

@@ -103,7 +103,11 @@ class ImplantChannel(Effect):
                 if exe:
                     recipe.append(f"Remove-Item -Path '{exe}' -Force")
             else:
-                recipe = [f"systemctl disable --now {info.get('unit')}",
-                          f"rm -f {' '.join(info.get('paths') or ['<payload>'])}"]
+                # The Linux plant draws a redundant surface too (cron / login
+                # hook), so the restore removes whatever was planted rather than
+                # assuming a bare systemd unit.
+                recipe = list(info.get("undo") or
+                              [f"systemctl disable --now {info.get('unit')}",
+                               f"rm -f {' '.join(info.get('paths') or ['<payload>'])}"])
             result.restore = {"recipe": recipe, "secrets": None}
         return result
