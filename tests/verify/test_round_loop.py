@@ -1,17 +1,4 @@
-"""One definition of "the scoring loop is stopped".
-
-This decision used to live only inside `verify-competition.py`'s gate. An engine-side
-watchdog would have had to re-derive it, and two implementations of the same judgement
-drift — the failure mode this repo keeps paying for. `round_loop.py` is now canonical
-and verify's gate uses it.
-
-The live signature (caught live, and the guaranteed aftermath of the
-owner-confirmed .193 hard-downs): after an engine VM reboots, Docker brings the
-containers back but the round loop stays stopped. `/api/engine` then reports the engine
-as NOT paused, the Go zero time in `current_round_time`, and a stale
-`last_round.StartTime`. The scoreboard freezes while everything that reads it keeps
-working — so an old UP is reported as a live UP.
-"""
+"""One definition of "the scoring loop is stopped": `engine/round_loop.py`, shared by verify's gate and the engine watchdog."""
 
 import base64
 import re
@@ -39,18 +26,18 @@ def _engine(running=True, current=ZERO, started_min_ago=0, competition_started=T
     return payload
 
 
+# The signature these pin: an engine VM reboot restores containers but not the round loop — the
+# API reports not-paused, a Go zero current_round_time, and a stale last_round.StartTime.
 class RoundLoopState(unittest.TestCase):
     def state(self, payload, **kw):
         return round_loop.round_loop_state(payload, now=NOW, **kw)["state"]
 
     def test_a_paused_engine_with_a_real_round_is_not_stale(self):
-    # An intentional pause has a real current round time; never restart it.
         current = (NOW - timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.assertEqual(self.state(_engine(running=False, current=current,
                                             started_min_ago=600)), round_loop.PAUSED)
 
     def test_paused_engine_with_zero_time_and_stale_round_is_stale(self):
-    # The reboot signature remains healable when the engine reports paused.
         self.assertEqual(self.state(_engine(running=False, started_min_ago=30)),
                          round_loop.STALE)
 
@@ -64,8 +51,7 @@ class RoundLoopState(unittest.TestCase):
                          round_loop.ADVANCING)
 
     def test_zero_time_with_a_fresh_start_is_only_pending(self):
-    # A fresh deploy has not scored its first round yet; Delay+Jitter has to elapse
-    #         before that means anything.
+        # Delay+Jitter means a fresh deploy legitimately has no scored round yet.
         self.assertEqual(self.state(_engine(started_min_ago=1)), round_loop.PENDING)
 
     def test_zero_time_with_an_old_start_is_stale(self):
@@ -85,7 +71,7 @@ class RoundLoopState(unittest.TestCase):
         self.assertEqual(self.state(just_outside), round_loop.STALE)
 
     def test_a_missing_start_time_cannot_be_judged(self):
-    # No last round at all is not evidence of a stopped loop.
+        # An absent last round is not evidence of a stopped loop: stays ADVANCING.
         payload = {"running": True, "current_round_time": ZERO}
         self.assertEqual(self.state(payload), round_loop.ADVANCING)
 
@@ -107,15 +93,12 @@ class RoundLoopState(unittest.TestCase):
                                                     started_min_ago=30), now=NOW))
 
     def test_a_naive_now_is_accepted(self):
-    # The engine-side actor has no reason to build a tz-aware clock.
         result = round_loop.round_loop_state(_engine(started_min_ago=30),
                                              now=datetime(2026, 10, 2, 12, 0, 0))
         self.assertEqual(result["state"], round_loop.STALE)
 
 
 class HealActions(unittest.TestCase):
-# The unattended repair: only a STALE loop whose competition has already started.
-
     def actions(self, payload):
         return round_loop.heal_actions(payload, now=NOW)
 
@@ -126,11 +109,10 @@ class HealActions(unittest.TestCase):
              ("/api/engine/pause", {"pause": False})])
 
     def test_a_stale_paused_engine_is_healed(self):
-    # The reboot signature: running=False, zero current time, stale last round.
         self.assertEqual(len(self.actions(_engine(running=False, started_min_ago=30))), 2)
 
     def test_an_unstarted_competition_is_never_started(self):
-    # A held pre-T0 range stays held, whatever the loop looks like.
+        # A held pre-T0 range stays held, whatever the loop looks like.
         for payload in (_engine(started_min_ago=30, competition_started=False),
                         _engine(running=False, started_min_ago=30,
                                 competition_started=False),
@@ -150,8 +132,6 @@ class HealActions(unittest.TestCase):
 
 
 class HealthcheckRoundLoopHeal(unittest.TestCase):
-# The install renders both the watchdog script and the canonical classifier it imports.
-
     def test_healthcheck_script_calls_the_helper_and_keeps_the_existing_checks(self):
         from engine.engine_health_ops import healthcheck_script
         script = healthcheck_script()

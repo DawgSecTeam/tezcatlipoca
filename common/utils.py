@@ -22,8 +22,7 @@ _COMP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
 PRINT_LOCK = threading.Lock()
 MAX_CONCURRENCY = 8
 
-# Prerequisites that failed while the deploy continued anyway; collected so a run that came
-# up with every service down has a named cause instead of a scrollback WARNING.
+# Failed prerequisites the deploy continued past; collect so a dead range has a named cause.
 _DEGRADATIONS = []
 _DEGRADATION_LOCK = threading.Lock()
 
@@ -58,14 +57,11 @@ def degradation_summary():
 
 
 def mint_run_id():
-# Per-deploy run identity; teardown requires it, so two concurrent deploys of one
-# competition directory cannot destroy each other's VMs.
+# Teardown requires this per-deploy id; concurrent deploys of one comp dir cannot destroy each other's VMs.
     return f"run-{_secrets.token_hex(4)}"
 
 
 def retry(fn, *, attempts, gap, backoff=False, retry_on=Exception):
-# `retry_on` may be a predicate: it sees every exception and decides (used where the
-# retryable condition lives in the response body rather than its type).
     predicate = callable(retry_on) and not (isinstance(retry_on, type)
                                             and issubclass(retry_on, BaseException))
     for attempt in range(1, attempts + 1):
@@ -80,8 +76,7 @@ def retry(fn, *, attempts, gap, backoff=False, retry_on=Exception):
 
 
 def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
-# Returns a LIST aligned with `items` holding fn's return or the exception it raised (never
-# raised here), so each caller keeps its own aggregate semantics. Wrap prints in PRINT_LOCK.
+# Exceptions are returned in the list, never raised; wrap prints in PRINT_LOCK.
     results = [None] * len(items)
     if not items:
         return results
@@ -97,14 +92,12 @@ def run_concurrent(items, fn, max_workers=MAX_CONCURRENCY):
 
 
 def is_unmanaged(box):
-# Boxes every plant/config/scoring path must skip (e.g. an in-path pfSense fw); kept in
-# boxes.json so per-box-index vmids stay positional.
+# Skipped by every plant/config/scoring path; flag lives in boxes.json so per-box-index vmids stay positional.
     return bool(box.get("unmanaged"))
 
 
 def is_in_path_fw(box):
-# Unmanaged + in-path: two NICs (WAN on vmbrW<id>, LAN on vmbr<id>), and deploy phase 5
-# bootstraps its pfSense config so the engine routes the team subnet.
+# WAN on vmbrW<id>, LAN on vmbr<id>; deploy phase 5 bootstraps its pfSense so the engine routes the team subnet.
     return is_unmanaged(box) and bool(box.get("in_path"))
 
 
@@ -170,8 +163,7 @@ def load_users_config(comp_dir):
 
 
 def competition_name(comp_dir):
-# The name the Compfile carries, never the directory: the dashboard seeds every run's comp
-# dir as <run_dir>/comp, so a directory-derived tag made every dashboard range "comp-comp".
+# Dashboard seeds run dirs as <run_dir>/comp — a directory-derived name would tag every range "comp-comp".
     path = Path(comp_dir) / "Compfile"
     if not path.exists():
         return Path(comp_dir).name
@@ -231,14 +223,12 @@ def compfile_value(path, key, default=""):
 
 
 def stages_red(comp_dir):
-    # Every range stages a red team; the private red bridge and the engine's red NIC
-    # exist for the life of the range.
+    # The private red bridge and the engine's red NIC exist for the life of every range.
     return True
 
 
 def env_summary():
-# The RESOLVED config, not the ambient environment: multi-node placement and
-# --engine-mgmt-ip move host/address in-process, so an operator reading the env sees stale values.
+# Placement and --engine-mgmt-ip move host/address in-process — the ambient env is stale.
     from estate import config
     cfg = config.active()
     mgmt = cfg.engine.mgmt_ip if cfg.is_set("engine.mgmt_ip") else ""

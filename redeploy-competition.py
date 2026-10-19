@@ -1,10 +1,4 @@
-"""Redeploy a subset of a live competition's boxes (rollback-ready/base, reconfigure, rebuild).
-
-CLI entrypoint only: argument parsing, the confirmation flow and mode dispatch. The modes
-live in redeploy_light_ops (resync / rollback / reconfigure), redeploy_rebuild_ops,
-redeploy_reset_ops and redeploy_engine_ops; target selection in redeploy_select_ops, the
-shared configure half in redeploy_plant_ops, and the state/run-id gate (checked before any
-Proxmox call) in redeploy_gate_ops."""
+"""Redeploy a subset of a live competition's boxes (rollback-ready/base, reconfigure, rebuild)."""
 
 import argparse
 import os
@@ -37,7 +31,6 @@ if not os.environ.get("TEZ_TEST_OFFLINE"):
     load_dotenv(ENV_PATH)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# mode -> (targets, rctx, nakon_config_path, nakon_bundle) -> (done, levels|None).
 # Only reset returns per-box levels; the rest report just the boxes they touched.
 MODES = {
     "rollback-ready": lambda t, r, cfg, bundle: (
@@ -114,8 +107,7 @@ def main():
                              "reset and injects re-open anchored at now. Use for scrim reruns.")
     args = parser.parse_args()
 
-    # Every redeploy path reuses the ambient estate identity (and teardown will need it);
-    # a deploy alone would survive its absence on nodes.json.
+    # Redeploy and teardown both reuse the ambient estate identity.
     config.require_proxmox_identity()
 
     comp_name = args.competition
@@ -135,8 +127,7 @@ def main():
             raise SystemExit("Quitting.")
 
     comp_dir = resolve_comp_dir(comp_name, args.comp_dir)
-    # Display/resolution value only (ownership comes from the state document) — but the
-    # dashboard's --comp-dir workspace would otherwise be announced as "comp".
+    # Display only (ownership: the state document); without this a --comp-dir run prints "comp".
     comp_name = comp_name or competition_name(comp_dir)
     if not comp_dir.is_dir():
         raise SystemExit(f"  ERROR: no such competition: {comp_dir}")
@@ -144,8 +135,7 @@ def main():
     name, _scenario, difficulty = load_compfile(comp_dir / "Compfile")
     teams, boxes, state, state_path = load_deployed_range(comp_dir)
 
-    # Multi-node: the placement record is authoritative — env -> engine host and
-    # node routes registered before anything node-scoped (snapshots, clones).
+    # Multi-node: the placement record is authoritative — activate before any node-scoped call.
     from multinode.placement_record import activate_placement, read_placement
     placement = read_placement(comp_dir)
     if placement:
@@ -230,8 +220,7 @@ def main():
 
     nakon_config_path = nakon_bundle = None
     if args.mode in ("rollback-base", "reconfigure", "rebuild"):
-        # mode_reset prepares these lazily — a reset that settles at the tz-ready rung
-        # must not demand stage files it would never have used.
+        # mode_reset prepares these lazily; a reset settling at tz-ready must not demand unused stage files.
         nakon_config_path, nakon_bundle = prepare_nakon_assets(comp_dir, boxes)
 
     done, levels = MODES[args.mode](targets, rctx, nakon_config_path, nakon_bundle)

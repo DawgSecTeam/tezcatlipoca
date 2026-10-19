@@ -7,14 +7,11 @@ import threading
 from scrim.core import log
 
 
-# Grace between the SIGINT that lets a child release its resources and the SIGKILL that
-# sweeps whatever ignored it.
+# Grace between the SIGINT that lets a child release its resources and the SIGKILL that sweeps it.
 TREE_STOP_GRACE = 30
 
 
-# subclasses TimeoutExpired so the handlers around the blue cycles and the watchdog keep
-# catching it; __str__ names the recovery path because a timed-out deploy/verify is
-# resumed, not restarted (--skip-deploy/--from-phase, or --resume-event past T0)
+# Subclasses TimeoutExpired so the handlers around the blue cycles and the watchdog keep catching it.
 class ScrimTimeout(subprocess.TimeoutExpired):
 
     def __init__(self, cmd, timeout):
@@ -31,9 +28,8 @@ class ScrimTimeout(subprocess.TimeoutExpired):
                   "if T0 was already recorded)")
 
 
-# fed from a thread because communicate(input=...) cannot be re-entered after
-# TimeoutExpired (exactly what the kill-and-drain path needs); the pipe is closed
-# immediately — an open stdin pipe keeps a straggler grandchild alive
+# Threaded because communicate(input=...) cannot be re-entered after TimeoutExpired; stdin
+# closes immediately — an open pipe keeps a straggler grandchild alive.
 def _feed_stdin(proc, text):
     try:
         proc.stdin.write(text)
@@ -42,8 +38,6 @@ def _feed_stdin(proc, text):
         pass
 
 
-# SIGINT first, so a child can release what it holds; SIGKILL because the grandchildren
-# this exists to reap may ignore SIGINT. killpg on an already-empty group is a no-op.
 def _kill_tree(proc, grace=TREE_STOP_GRACE):
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGINT)
@@ -55,11 +49,8 @@ def _kill_tree(proc, grace=TREE_STOP_GRACE):
         os.killpg(proc.pid, signal.SIGKILL)
 
 
-# own session so a timeout kills the whole tree, not just the direct child: subprocess.run
-# SIGKILLs the DIRECT child only, after which create-competition.py/tlaloc/their
-# nakon/ssh grandchildren survive with the deploy lock held and keep mutating
-# infrastructure (one hung opencode cycle held the shared lock ~80 min because a
-# grandchild outlived the kill). SIGINT to the group, escalate to SIGKILL after `grace`.
+# Own session so a timeout reaps the whole tree: subprocess.run kills only the direct child,
+# leaving create-competition/nakon/ssh grandchildren alive and holding the deploy lock.
 def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
              stdin_text=None, grace=TREE_STOP_GRACE):
     cmd = [str(c) for c in cmd]
@@ -77,7 +68,7 @@ def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
         proc.communicate()
         raise ScrimTimeout(cmd, timeout) from None
     except BaseException:
-        # Ctrl-C / any other driver-side abort must not orphan the tree either.
+        # A driver-side abort (Ctrl-C) must not orphan the tree either.
         _kill_tree(proc, grace)
         proc.communicate()
         raise
@@ -94,10 +85,7 @@ def run(cmd, cwd=None, env=None, timeout=None, check=True, tail=None):
     return run_tree(cmd, cwd=cwd, env=env, timeout=timeout, check=check, tail=tail)
 
 
-# the password goes on stdin — a running command's argv is world-readable via ps, and
-# interpolating a generated password into the remote shell string is one shell
-# metacharacter from a syntax error aborting the fire test; same pin every other box
-# path uses. The script follows the password on the same stdin
-# stream, which is what `sudo -S -p '' bash -s` expects.
+# Password on stdin: argv is world-readable via ps. `sudo -S -p '' bash -s` takes the script
+# after the password on the same stream.
 def box_sudo_stdin(base, host, box_pw, script):
     return list(base) + [host, "sudo -S -p '' bash -s"], box_pw + "\n" + script

@@ -1,13 +1,4 @@
-"""implant_channel — (re)plant the C2 channel on a box and verify it by CALLBACK.
-
-The channel is what makes the rest of the run survivable: it is the takedown path
-that does not need SSH, and it is how red stays reachable after blue closes the
-login path. Success is defined the way the plan defines it — the payload is
-installed on the box AND a callback appears in the competition's operation within
-the wait window. The artifact is recorded from the install either way, with the
-channel outcome written into its detail, because a record gated on a check-in
-goes silently missing when the check-in is slow.
-"""
+"""implant_channel — (re)plant the C2 channel on a box; ok means installed AND a callback seen."""
 
 from ..c2.implant import Planter, load_manifest
 from ..errors import PolicyError
@@ -15,7 +6,6 @@ from .base import Effect, Result, can_root, register
 
 
 def box_id_for(ctx, ip, override=None):
-    """The manifest key for a box: `<name>-<team>` (e.g. web01-2)."""
     if override:
         return override
     box = ctx.intel.box_by_ip(ip)
@@ -54,10 +44,7 @@ class ImplantChannel(Effect):
         if ctx.c2 is None and not load_manifest(ctx.cfg["run"].get("comp_dir") or "."):
             raise PolicyError("no C2 configured and no frozen payload manifest "
                               "(c2.enabled / red/payloads/manifest.json)")
-        # A plant that keeps failing on the same box (a quarantining AV, a locked
-        # profile) must not eat every cycle: the loop starved on dc01 for ten
-        # cycles in a row on the 2026-10-18 range. Two failures and the box yields
-        # to the rest of the board until the cause is gone.
+        # Two failures and the box yields; a quarantining AV otherwise starves the whole board.
         if (ctx.world.failure_count(self.id, ip) >= 2
                 and str(params.get("force", "")).lower() != "true"):
             raise PolicyError(f"implant_channel already failed twice on {ip} — switch "
@@ -70,9 +57,7 @@ class ImplantChannel(Effect):
         planter = Planter(ctx, comp_dir=ctx.cfg["run"].get("comp_dir"),
                           manifest=getattr(ctx, "payload_manifest", None))
         info = planter.plant(ip, box_id, transport=params.get("transport"))
-        # One window for every implant path: a freshly installed Mythic takes
-        # MINUTES for the first check-in, and the old 45s default reported
-        # "no callback" on boxes that were live two minutes later.
+        # A fresh Mythic needs minutes for its first check-in; 45s false-reported "no callback".
         wait = int(ctx.cfg["c2"].get("callback_wait_sec", 120))
         detail = info.get("detail", "")
         # A channel that installs but never checks in is undiagnosable from the
@@ -102,11 +87,7 @@ class ImplantChannel(Effect):
                                  "check_cmd": info.get("check_cmd"),
                                  "paths": info.get("paths") or []}]
             if ctx.is_windows(ip):
-                # The plant draws its own undo list (task / service / registry /
-                # WMI / IFEO — whichever mechanisms it actually used), so blue's
-                # restore has to remove every surface red touched. Defender is not
-                # excluded — it is REMOVED from every Windows template, so there
-                # is nothing to restore there.
+                # Defender is removed from every Windows template — nothing to restore there.
                 paths = info.get("paths") or []
                 exe = next((p for p in paths if str(p).lower().endswith(".exe")), None)
                 recipe = list(info.get("undo") or
@@ -117,9 +98,6 @@ class ImplantChannel(Effect):
                 if exe:
                     recipe.append(f"Remove-Item -Path '{exe}' -Force")
             else:
-                # The Linux plant draws a redundant surface too (cron / login
-                # hook), so the restore removes whatever was planted rather than
-                # assuming a bare systemd unit.
                 recipe = list(info.get("undo") or
                               [f"systemctl disable --now {info.get('unit')}",
                                f"rm -f {' '.join(info.get('paths') or ['<payload>'])}"])

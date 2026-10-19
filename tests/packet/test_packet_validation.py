@@ -1,6 +1,4 @@
-"""Compile-boundary validation: the packet shapes that used to survive
-validate_profile and die later in a live deploy, some only at phase 6 after DC
-promotion. Offline — validate_profile is pure."""
+"""Compile-boundary validation: packet shapes that must die in validate_profile, not in a live deploy."""
 
 import copy
 import sys
@@ -11,8 +9,7 @@ _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 from config.packet_ops import validate_profile
 
-# A minimal profile that validates cleanly (checked by test_base_profile_is_valid);
-# each test deep-copies it and introduces exactly one defect.
+# Minimal cleanly-valid profile; each test deep-copies it and injects exactly one defect.
 _BASE = {
     "event": {"comp_id": "pkt-val", "name": "Validation Test",
               "scenario": "scenario line", "difficulty": 3},
@@ -48,8 +45,7 @@ def _mutated(**changes):
 
 
 
-# domain_ops adds these at phase 6 (acct["username"] / acct["password"]) — a
-# malformed entry was a KeyError/TypeError deep in a live deploy.
+# domain_ops reads acct["username"]/acct["password"] at phase 6; malformed entries died there.
 class DomainAccounts(unittest.TestCase):
     def test_missing_password_rejected(self):
         errs = validate_profile(_mutated(credentials={
@@ -59,9 +55,7 @@ class DomainAccounts(unittest.TestCase):
                             for e in errs), errs)
 
 
-# The Windows 8-char floor was enforced only for baseline credlist users
-# (build_baseline), never for box_password, which bootstrap pushes with net user /
-# the guest agent.
+# The Windows 8-char floor must cover box_password (pushed via net user / guest agent), not just credlist users.
 class BoxPassword(unittest.TestCase):
     def test_short_password_on_windows_box_rejected(self):
         errs = validate_profile(_mutated(credentials={
@@ -72,8 +66,7 @@ class BoxPassword(unittest.TestCase):
 
 
 
-# These become local-user USERNAME vars on every managed box, but got none of the
-# credlist name rules.
+# Credlist entries become local-user accounts on managed boxes and must pass the same policies.
 class WindowsCredlistPasswords(unittest.TestCase):
     def _profile(self, password):
         p = copy.deepcopy(_BASE)
@@ -105,8 +98,7 @@ class OutOfScopeUsernames(unittest.TestCase):
 
 
 
-# The Compfile is line-oriented (utils.load_compfile splits `key value` per line):
-# a newline in an interpolated field truncates it or injects keys.
+# Compfile is line-oriented (`key value` per line): a newline in a field truncates it or injects keys.
 class CompfileInjection(unittest.TestCase):
     def test_event_name_newline_rejected(self):
         errs = validate_profile(_mutated(event={
@@ -122,8 +114,7 @@ class CompfileInjection(unittest.TestCase):
                             for e in errs), errs)
 
 
-# render_fidelity defaulted a missing services[].fidelity to "exact", claiming
-# parity the packet may not have (boxes[].fidelity was already required).
+# services[].fidelity must be explicit; defaulting it to "exact" claimed unearned parity.
 class ServiceFidelity(unittest.TestCase):
     def test_missing_fidelity_rejected(self):
         svc = {k: v for k, v in _BASE["services"][0].items() if k != "fidelity"}
@@ -132,8 +123,7 @@ class ServiceFidelity(unittest.TestCase):
 
 
 
-# REQUIRED_VARS literal vars were only checked at deploy start
-# (nakon_pin_ops._validate_pin_vars), after the golden bundle was already built.
+# REQUIRED_VARS literals must fail here, not at deploy start (nakon_pin_ops) after the golden bundle was built.
 class ServiceRequiredVars(unittest.TestCase):
     def test_missing_literal_var_rejected(self):
         svc = {"box": "web01", "name": "hosts redirect", "port": 80,
@@ -146,8 +136,7 @@ class ServiceRequiredVars(unittest.TestCase):
 
 
 
-# in_path firewalls (unmanaged, gateway .1) and the legacy packet stand-in shape
-# (unmanaged .1 without in_path — cde-2026/maccdc packets).
+# in_path firewalls own gateway .1; unmanaged .1 without in_path is the legal legacy stand-in shape.
 class FirewallBoxes(unittest.TestCase):
 
 

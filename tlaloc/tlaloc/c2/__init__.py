@@ -1,22 +1,4 @@
-"""C2 abstraction: Mythic today, one interface for everything above it.
-
-The engine (tezcatlipoca) owns the C2 infrastructure — the Mythic VM, its
-install/update (`Gaia`), the operation per competition, the payload build and the
-DNAT that carries the callback path. tlaloc owns two things: the *tasking* call
-and the *evidence* that a callback exists.
-
-Contract used by the effects:
-
-* ``callbacks()`` -> {box_id: {"seen_at": epoch, "agent": str, "external_id": str}}
-  where box_id comes from the payload's build description (per-box attribution
-  without IP guessing).
-* ``task(box_id, command)`` -> {"ok", "output", "task_id", "detail"}
-* ``plant(box_id, os_name, transport, callback_uri)`` -> the payload artifact for
-  one box (used by comp-prep and by the seed's channel stage).
-
-The concrete client is injectable everywhere (tests use c2.FakeMythic), so no
-test ever needs a live Mythic.
-"""
+"""C2 abstraction: Mythic today, one interface for everything above it."""
 
 from ..errors import C2Error
 from .mythic import DEFAULT_TRANSPORTS, MythicClient  # noqa: F401
@@ -25,11 +7,7 @@ __all__ = ["MythicClient", "C2Error", "DEFAULT_TRANSPORTS", "FakeMythic"]
 
 
 class FakeMythic:
-    """In-memory stand-in with the same surface (tests, dry runs, offline prep).
-
-    Lives in the package (not in tests/) because the seed and the CLIs need a
-    no-op C2 for `--dry-run` smoke runs on a host with no Mythic.
-    """
+    """In-memory stand-in; in the package, not tests/, because the seed and CLIs need a no-op C2."""
 
     def __init__(self, callbacks=None, task_output="[dry-run c2] ok"):
         self._callbacks = dict(callbacks or {})

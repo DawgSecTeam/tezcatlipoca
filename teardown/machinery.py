@@ -1,5 +1,4 @@
-"""Teardown mechanics: every refusal is a `Refusal` (saw / expected / remedy), and
-every destroy-shaped function takes an `Ownership` instead of a loose tag set."""
+"""Teardown mechanics: every refusal is a Refusal and every destroy-shaped call takes an Ownership."""
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -20,7 +19,6 @@ from estate import config
 TEARDOWN_WORKERS = 4
 
 
-# a frozen competition's templates are the verified artifacts the event runs on: a full teardown needs --end-of-competition
 def refuse_frozen_full_teardown(competition, frozen, full, end_of_competition):
     if full and frozen and not end_of_competition:
         raise Refusal(
@@ -32,7 +30,6 @@ def refuse_frozen_full_teardown(competition, frozen, full, end_of_competition):
                    f"Re-run with --end-of-competition if the event is genuinely over.")
 
 
-# refuses when ownership cannot be proven: no run id in the state, or the env targets a different endpoint
 def load_ownership(comp_dir):
     state_path = estate_state.state_path(comp_dir)
     deployed_state = estate_state.load_flat(comp_dir)
@@ -61,7 +58,7 @@ def load_ownership(comp_dir):
         ownership_identity(comp_dir, deployed_state.get("comp_name")), run_id)
 
 
-# hard-stop before destroy: the API graceful path hangs on an agent-down DC and holds the qm lock for minutes ("Still destroying"); ownership gates every stop — the name pattern is shared by every worktree running the same competition ID
+# Hard-stop, never graceful: the API shutdown path hangs on an agent-down DC and holds the qm lock for minutes.
 def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
                            ownership=None):
     windows = [b["name"] for b in boxes]
@@ -109,7 +106,7 @@ def pre_stop_windows_boxes(teams, boxes, default_node, team_nodes=None,
             print(line, flush=True)
 
 
-# full ownership tag set only: partial overlap does not count, and a same-comp VM with a DIFFERENT run id belongs to another worktree's run
+# Full ownership set only: a same-comp VM with a different run id is another worktree's run.
 def sweep_tagged_leftovers(nodes, ownership, keep_templates=False):
     comp_tags = set(ownership.tags)
     ours = []
@@ -119,9 +116,8 @@ def sweep_tagged_leftovers(nodes, ownership, keep_templates=False):
         except Exception as e:
             print(f"  WARNING: leftover sweep skipped on {node} — listing failed: {e}")
             continue
-        # teams-only keeps the role templates, so the sweep must not claim them: the deploy
-        # re-stamps a reused template with THIS run's tags, putting it inside the full-set match
-        # (caught live: engine-template 2241 swept on --teams-only). The PVE `template` flag is the tell.
+        # A reused template carries THIS run's tags, so teams-only must exempt it by the PVE
+        # `template` flag rather than by tag matching (caught live: an engine template was swept).
         ours += [dict(v, _node=node) for v in vms
                  if comp_tags <= parse_vm_tags(v.get("tags"))
                  and not (keep_templates and v.get("template"))]
@@ -163,12 +159,7 @@ _WINDOWS_LOG_PS = (
 
 
 def collect_box_logs(ctx, out_dir):
-    """Copy every owned VM's logs to `out_dir` before anything destructive runs.
-
-    Uses the guest agent (no box credentials, no SSH path) and never fails the teardown:
-    an unreadable box is recorded in its own note file. This is the last copy — the
-    deploy's trail wipe and the destroy both run before the range is gone.
-    """
+    """Last copy of every owned VM's logs: run before anything destructive; an unreadable box is recorded, never fatal."""
     from infra.guest_exec import guest_agent_exec_root, guest_agent_exec_windows
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -207,10 +198,9 @@ def engine_vmid_from_state(deployed_state):
         return SCORING_ENGINE_VMID
 
 
-# templates are the clones' base disks, so they can only go after every clone has
+# Templates are the clones' base disks: they can only go after every clone is destroyed.
 def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, full):
-    """(skipped, blocking): blocking entries are this competition's templates owned by
-    another run — never touched, and never reported as a clean teardown."""
+    """blocking entries are this competition's templates owned by another run: never touched."""
     skipped = []
     engine_vmid = engine_vmid_from_state(deployed_state)
     node = config.active().proxmox.node
@@ -237,8 +227,7 @@ def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, fu
             node, engine_vmid, expect_tags=ownership.with_role("engine-template").tags)
     except Refusal as e:
         skipped.append(str(e))
-    # A destroyed template's hash record is a loaded gun for the reuse path: the next deploy
-    # would clone from a dead vmid.
+    # A stale hash record makes the next deploy clone from a dead vmid.
     forget_template_hashes(comp_dir)
     print("  Template hash record removed from the state document.")
     from golden.golden_ops import OTHER_RUN

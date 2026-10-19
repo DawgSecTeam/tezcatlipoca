@@ -1,16 +1,4 @@
-"""The append-only audit log (events.jsonl). Principle 7: everything is
-logged with its reason.
-
-Every decision record carries the full chain: the question bundle sent to
-clef, the answer, the probabilities, the threshold that was applied, the
-source (clef / llm_arbiter / deterministic), and what was executed. The
-after-action verdict and threshold recalibration read this file; the replay
-harness replays the recorded bundles against a stubbed clef (tests/test_decide.py).
-
-Secrets are masked on write (password values under known key names). A note from
-the earlier agent: masking is key-name based, so free-text must never interpolate
-a password — effects record credential SOURCES, not values.
-"""
+"""The append-only audit log (events.jsonl): every decision record carries its reason."""
 
 import json
 import traceback
@@ -20,6 +8,7 @@ from .state.schema import now_iso
 
 SECRET_KEYS = {"password", "new_password", "old_password", "key", "api_key",
                "ssh_key", "command"}  # 'command' masked when nested under a cred
+# Masking is key-name based: effects record credential SOURCES, never values in free text.
 
 
 def mask_secrets(obj):
@@ -42,8 +31,6 @@ class EventLog:
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, default=str) + "\n")
 
-    # -- the decision chain (one record per cycle, per principle 7) -----------
-
     def decision(self, *, cycle, question=None, bundle, answer, probabilities,
                  theta, source, chosen, ok, note=None):
         self.emit("decision", cycle=cycle, question=question, bundle=bundle,
@@ -57,17 +44,11 @@ class EventLog:
                   source=source, duration_s=round(duration_s, 2))
 
     def error(self, where, exc):
-        # Earlier defect M7: the catch-all logged only "type: message" — a
-        # deterministic cycle bug looped silently for the whole event. Full
-        # traceback lands here so the loop's consecutive-error breaker has
-        # something a human can read.
+        # Full traceback, not just "type: message" — the consecutive-error breaker needs readable detail.
         self.emit("error", where=where, error=f"{type(exc).__name__}: {exc}",
                   traceback=traceback.format_exc())
 
     def read(self, last_n=None):
-        """Parse the log; last_n returns the trailing records without
-        re-parsing the whole file (the earlier agent's read() was quadratic over
-        an event)."""
         if not self.path.exists():
             return []
         if last_n is None:

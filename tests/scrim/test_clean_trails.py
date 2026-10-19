@@ -1,12 +1,4 @@
-"""Trail wipe: the deploy must not leave blue a readable copy of the plant.
-
-The tezcatlipoca deploy, the nakon plant and the day-0 seed all reach each box
-over ssh as root, so the box's own logs (auth.log, the journal, apt history, the
-shell histories, the Windows SCM event log + PowerShell history) describe the
-whole operation. Blue's own notebook already listed every planted unit and the
-key comment, so the wipe is what keeps the randomized naming from being undone by
-a single `grep`.
-"""
+"""Trail wipe: the deploy must not leave blue a readable copy of the plant."""
 
 import json
 import tempfile
@@ -55,9 +47,8 @@ class TestTargets(unittest.TestCase):
 
 class TestScripts(unittest.TestCase):
     def test_linux_skip_block_guards_every_destructive_line(self):
-    # The decoy kill : a planted path matching a staging rm glob
-    #         died in the wipe. Every rm/truncate in LINUX_SCRIPT must go through
-    #         in_skip, and the skip block must define it before any use.
+    # Decoy kill: a planted path matching a staging rm glob died in the wipe. Every
+    # rm/truncate in LINUX_SCRIPT must go through in_skip, defined before any use.
         block = clean_trails._linux_skip_block(["/tmp/.imix-decoy", "/opt/plant"])
         script = block + clean_trails.LINUX_SCRIPT
         self.assertIn("SKIP_PATHS=", block)
@@ -80,7 +71,7 @@ class TestSkipList(unittest.TestCase):
         paths = clean_trails.extract_artifact_paths(arts)
         self.assertIn("/etc/systemd/system/x.service", paths)
         self.assertIn("/usr/local/lib/.x-cache", paths)
-        self.assertNotIn("bad\npath", paths)              # newline paths dropped
+        self.assertNotIn("bad\npath", paths)
 
     def test_red01_world_artifacts_reads_the_deploy_state_record(self):
         comp = Path(tempfile.mkdtemp())
@@ -136,13 +127,11 @@ class TestIntegrity(unittest.TestCase):
         self.assertEqual(casualties[0][1], "realm-imix")
 
     def test_clean_trails_runs_the_pre_and_post_check(self):
-    # The wipe must re-run the artifact checks around itself and name
-    #         anything that died in the window (the vanished decoy).
         checks = {"n": 0}
 
         def fake_integrity(comp, creds, artifacts):
             checks["n"] += 1
-            if checks["n"] == 1:                          # pre-wipe: both alive
+            if checks["n"] == 1:
                 return {"192.168.120.2": [(0, "k", 0)],
                         "192.168.120.3": [(0, "realm-imix", 0)]}
             return {"192.168.120.2": [(0, "k", 0)],
@@ -166,7 +155,7 @@ class TestIntegrity(unittest.TestCase):
                                                  "name": "web01", "windows": False}]):
             res = clean_trails.clean_trails(self.comp, self.creds)
         self.assertTrue(all(res.values()))
-        self.assertEqual(checks["n"], 2)                  # pre + post
+        self.assertEqual(checks["n"], 2)
 
 class TestDispatch(unittest.TestCase):
     def setUp(self):
@@ -201,11 +190,8 @@ if __name__ == "__main__":
 
 
 class TestTeardownStaging(unittest.TestCase):
-# The teardown path must stage red's root-owned artifacts too.
-#
-#     collect_for_teardown is the collector for the run whose harness died, so this is
-#     the one path where red's record exists nowhere else — and with the plan reading
-#     /tmp/ba it needs the staging step, which the harness happens to do for itself.
+# The harness normally stages red's root-owned artifacts to /tmp/ba; collect_for_teardown
+# is the only path left when the harness died, so it must stage them too.
 
 
     def test_staging_is_attempted_from_the_manifest_ssh_record(self):

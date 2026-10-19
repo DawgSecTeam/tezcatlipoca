@@ -7,14 +7,6 @@ from .manifest import resolve_recorded
 
 
 def plan_targets(manifest, *, comp_dir=None):
-# What this run's artifacts are, and where each one comes from.
-#
-#     Pure: no I/O, no transport. The result is the collector's input, and the CLI can print it to
-#     answer "why is RED-TEAM.md missing?" without touching a VM.
-#
-#     Severity is derived from the manifest rather than from a per-file `required` flag: if the
-#     manifest says a red agent was present, a missing red report is worth shouting about; if it
-#     does not, the same absence is simply the truth about a run that had no red agent.
     agents = manifest.get("agents") or {}
     paths = manifest.get("paths") or {}
     targets = []
@@ -27,9 +19,7 @@ def plan_targets(manifest, *, comp_dir=None):
             "note": ("red01 is destroyed by the teardown's red step after this collection, so "
                      "a missing red report here is the last chance to have it"),
             "want": [
-                # The sudo-staged copies: the originals are 0600 root, and one
-                # unreadable file used to make the collector give up on the whole
-                # red target (taking world.json with it).
+                # sudo-staged copies: the originals are 0600 root.
                 {"remote": "/tmp/ba/report.md", "to": "evidence/red/",
                  "canonical": SIDES["red"]},
                 {"remote": "/tmp/ba/restore-table.json",
@@ -71,12 +61,7 @@ def plan_targets(manifest, *, comp_dir=None):
     if blue.get("present") and workdirs:
         for index, workdir in enumerate(workdirs):
             name = Path(workdir).name
-            # Exactly ONE blue workdir claims the canonical BLUE-TEAM.md. With a workdir per
-            # team, two targets claiming one canonical name give the derivation two candidates
-            # for a single document, and a later collection can flip which team's narrative is
-            # the canonical one (caught live: "canonical document changed
-            # after collection: BLUE-TEAM.md"). Every team's REPORT.md is still collected, under
-            # its own evidence/blue/<team>/.
+            # One workdir claims canonical BLUE-TEAM.md; two claimants let a later collection flip which team is canonical.
             report_want = {"local_name": "REPORT.md"}
             if index == 0:
                 report_want["canonical"] = SIDES["blue"]
@@ -104,8 +89,7 @@ def plan_targets(manifest, *, comp_dir=None):
                         "root": str(comp_dir), "to": "evidence/harness/",
                         "note": "per-competition deploy sidecar",
                         "want": [{"local_name": ".deploy-timings.jsonl"}],
-                        # Saved by portal_ops.teardown_portal when the comp ran the
-                        # student portal; a glob, so comps without one record nothing.
+                        # written by portal_ops.teardown_portal when the comp ran the student portal
                         "want_globs": [{"pattern": "portal-access.log"}]})
 
     engine = resolve_recorded(paths.get("engine_evidence"), comp_dir)
