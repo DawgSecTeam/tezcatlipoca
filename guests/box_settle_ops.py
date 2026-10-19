@@ -1,5 +1,6 @@
 """Wait for freshly booted boxes to settle (no apt/dpkg holders) before a plant."""
 
+import os
 import shlex
 import time
 
@@ -72,11 +73,18 @@ def _cloud_init_verdict(rc, out):
     return "running"
 
 
-def wait_boxes_cloud_init(ctx, targets, timeout=600, run=None):
+# Boot-time package_upgrade can legitimately run long when a node is busy cloning several
+# goldens at once; the bound is a knob (TEZ_BOX_CLOUD_INIT_TIMEOUT) so a loaded night does not
+# read as a hung box. Default unchanged.
+_CLOUD_INIT_TIMEOUT = int(os.environ.get("TEZ_BOX_CLOUD_INIT_TIMEOUT", "600"))
+
+
+def wait_boxes_cloud_init(ctx, targets, timeout=None, run=None):
     """Bounded wait for cloud-init to finish before a long apt/build session: the base image's
     boot-time `package_upgrade` can bounce sshd mid-session (exit 255) and the apt-holder check
     alone slips through the gaps. 'error' warns and passes; still running at the bound fails."""
     run = run or ssh_via_gateway
+    timeout = _CLOUD_INIT_TIMEOUT if timeout is None else timeout
     user = ctx.get("box_username", "ubuntu")
     deadline = time.time() + timeout
 
@@ -114,7 +122,7 @@ def wait_boxes_cloud_init(ctx, targets, timeout=600, run=None):
 
 
 def wait_boxes_settled(targets, node, timeout=240, ssh_fallback=None, *,
-                       cloud_init_ctx, cloud_init_timeout=600):
+                       cloud_init_ctx, cloud_init_timeout=None):
 # Polls every box until it settles after boot and returns the vmids that never settled (not
 # fatal). cloud_init_ctx is keyword-only because a box is not settled until cloud-init is done.
     wait_boxes_cloud_init(cloud_init_ctx, targets, timeout=cloud_init_timeout)
