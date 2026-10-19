@@ -40,6 +40,10 @@ _SPEC = {
     # The decision model red asks (clef): a competition pins red.clef_url; this is
     # the estate-wide default, exported as TEZ_CLEF_URL.
     "knobs.clef_url": "",
+    # Operator override for tlaloc's event clock (minutes). A range kept up past
+    # its scheduled length goes quiet: the loop exits once red.duration_min has
+    # elapsed. Set this instead of editing what a competition gets graded on.
+    "knobs.tlaloc_duration_min": 0.0,
     "knobs.team_identifiers": "",
     "knobs.scoring_vmid": 0,
     "knobs.artifacts_archive": "",
