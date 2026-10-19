@@ -39,6 +39,17 @@ class FirewallProfiles(unittest.TestCase):
                         script.index("Enable-NetFirewallRule"))
 
 
+class DefenderPreferences(unittest.TestCase):
+    def test_the_cmdlet_is_guarded_before_use(self):
+        # A box whose Defender was removed has no Set-MpPreference; with
+        # $ErrorActionPreference='Stop' an unguarded call aborts the whole
+        # bootstrap on a resume (live: run-73f38274).
+        script = _capture_bootstrap_script()
+        self.assertIn("Get-Command Set-MpPreference", script)
+        self.assertLess(script.index("Get-Command Set-MpPreference"),
+                        script.index("Set-MpPreference -DisableRealtimeMonitoring"))
+
+
 class IisManagement(unittest.TestCase):
     def test_management_tools_install_when_requested(self):
         script = _capture_bootstrap_script(features=("Web-Mgmt-Tools",))
