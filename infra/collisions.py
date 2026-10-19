@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 
 from infra.client import proxmox_api
-from common.constants import DEFAULT_ENGINE_MGMT_IP, ENGINE_MGMT_BAND
+from common.constants import DEFAULT_ENGINE_MGMT_IP, ENGINE_MGMT_BAND, ownership_tags
 from common.targets import vm_id_for
 from infra.ownership import MARKER, ownership_verdict, parse_vm_tags
 from estate import config
@@ -95,6 +95,13 @@ def expected_bridges(share, boxes):
     return bridges
 
 
+def comp_tag_for(comp_name):
+    """The VMs' comp tag is the slugged one ownership_tags writes; a raw f-string
+    compared "comp-CDE-2026" against the stored "comp-cde-2026" and refused the
+    competition's own kept templates (live: cde-2026 reuse)."""
+    return next(t for t in ownership_tags(comp_name) if t.startswith("comp-"))
+
+
 def check_collisions(share, plan, vms):
     """Raise SystemExit on anything a fresh deploy must not create over.
 
@@ -102,7 +109,7 @@ def check_collisions(share, plan, vms):
     remedy; this competition's own templates and an untagged VM carrying its clone marker are not
     leftovers."""
     node, comp_name = share.node, plan.comp_name
-    comp_tag = f"comp-{comp_name}"
+    comp_tag = comp_tag_for(comp_name)
     existing = {vm.get("vmid") for vm in vms}
     vm_by_vmid = {vm.get("vmid"): vm for vm in vms}
 
