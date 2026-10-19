@@ -88,9 +88,16 @@ Start-Service -Name sshd -ErrorAction SilentlyContinue
 # plant (ThreatID 2147958560) while the same payload ran on win02. Every
 # competition image ships Defender removed for exactly this reason.
 try {{ Uninstall-WindowsFeature -Name Windows-Defender -ErrorAction SilentlyContinue | Out-Null }} catch {{}}
-Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
-Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
-Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
+# Idempotency: on a SECOND bootstrap of the same box the uninstall above has
+# already removed the Defender module, and CommandNotFoundException is a
+# terminating error per-command — -ErrorAction does not catch it under
+# $ErrorActionPreference='Stop', so a resume/re-bootstrap died rc=1 (a golden
+# rebuild refused mid-deploy). Ask first, then set.
+if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {{
+    Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+    Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
+    Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
+}}
 sc.exe config WinDefend start= disabled | Out-Null
 sc.exe stop WinDefend | Out-Null
 New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender' -Force -ErrorAction SilentlyContinue | Out-Null
