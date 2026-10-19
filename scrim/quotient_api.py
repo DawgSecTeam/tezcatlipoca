@@ -110,8 +110,11 @@ def services_to_rows(services):
 
 
 def parsed_status(creds, team):
-    jar = jar_path(creds["RUN_DIR"], team)
-    r = qget(creds, team, jar, f"/api/services/{_team_tid(creds, team, jar, team)}")
+    # Team logins get "unauthorized" on /api/teams (and their teams.json password
+    # need not match the engine's); the admin session can read every team.
+    user = "admin"
+    jar = jar_path(creds["RUN_DIR"], user)
+    r = qget(creds, user, jar, f"/api/services/{_team_tid(creds, user, jar, team)}")
     try:
         services = json.loads(r.stdout)
     except Exception:
