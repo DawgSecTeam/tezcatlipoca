@@ -24,6 +24,7 @@ def _capture_bootstrap_calls(features=()):
     with patch.object(windows_ops, "_wait_for_windows_setup_complete", return_value=True), \
          patch.object(windows_ops, "guest_agent_exec_windows", side_effect=fake_exec), \
          patch.object(windows_ops, "wait_for_guest_agent", return_value=True) as wait, \
+         patch("infra.lifecycle.stop_vm") as stop, patch("infra.lifecycle.start_vm") as start, \
          patch.object(windows_ops.time, "sleep"):
         windows_ops.bootstrap_windows_box("n", 1, "192.168.125.3", "192.168.125.1",
                                           "192.168.125.2", "pw", features=features)
@@ -61,10 +62,10 @@ class IisManagement(unittest.TestCase):
         self.assertIn("Install-WindowsFeature -Name @('Web-Scripting-Tools')", script)
         self.assertIn("-IncludeManagementTools", script)
 
-    def test_a_feature_install_reboots_before_returning(self):
+    def test_a_feature_install_cycles_the_vm_before_returning(self):
         calls, wait = _capture_bootstrap_calls(features=("Web-Scripting-Tools",))
-        self.assertTrue(any("Restart-Computer" in c for c in calls))
         wait.assert_called_once()
+        self.assertNotIn("Restart-Computer", " ".join(calls))
 
     def test_no_feature_install_by_default(self):
         self.assertNotIn("Install-WindowsFeature", _capture_bootstrap_script())

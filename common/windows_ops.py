@@ -133,16 +133,14 @@ Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMod
     if rc != 0:
         raise RuntimeError(f"vmid {vmid}: bootstrap script failed (rc={rc}): {err or out}")
     if features:
-        # The IIS management feature is staged until a restart; the plan's
-        # `Import-Module WebAdministration` fails without it (live: win02 golden).
-        try:
-            guest_agent_exec_windows(node, vmid, "Restart-Computer -Force", timeout=60)
-        except Exception:  # the agent drops the channel as the box goes down
-            pass
-        # The agent still answers for a moment before the OS goes down; without
-        # the gap the poll returns on the pre-restart agent and the plan connects
-        # into the shutdown (live: win02-golden reset by peer, run-a74f7bb6).
-        time.sleep(20)
+        # Feature installs are staged until a restart, and the in-guest
+        # `Restart-Computer` was swallowed by the single-shot agent exec: the
+        # clone then inherited InstallPending features and the plan's module
+        # imports failed (live: ad01 ADDS, 2026-10-19). A VM cycle applies them.
+        from infra.lifecycle import start_vm, stop_vm
+        stop_vm(node, vmid)
+        time.sleep(3)
+        start_vm(node, vmid)
         wait_for_guest_agent(node, vmid, timeout=600)
 
 
