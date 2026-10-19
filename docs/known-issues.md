@@ -4,7 +4,6 @@ Temporary writepad, not a ledger: every entry has a concrete next action and is 
 
 ## Open
 
-<<<<<<< HEAD
 ### The scrim's `--duration-min` does not set red's event clock
 
 `run-agent-scrim.py --duration-min` sets the window the harness runs and captures; tlaloc's
@@ -102,8 +101,6 @@ and an unverifiable one refuses.
 declared band with the agent-less guests named, as red01's address now does) and record the
 decision next to the band constants.
 
-=======
->>>>>>> fix/known-issues
 ### Planted Linux boxes deny all SSH at the PAM account stage after a restart
 
 Root cause unsolved. A stop/start on a planted box can kill SSH preauth (`Access denied ... by PAM account configuration`) while services still listen. `redeploy --mode reset` recognizes the signature and escalates past it. The diagnostic kit now exists: `tools/pam-bisect-lab.py` + `common/pam_bundle.py`; `grab` captured all 13 sections from the live planted `web01` over the guest agent, and `redeploy --mode reset` now auto-captures the same bundle into the run's `evidence/pam-trap/` before escalating. Twenty live stop/start cycles (2026-10-18, lab-local known_hosts) did not reproduce the trap. The bundle now also captures the box clock and per-user aging (`chage -l`, `passwd -S`, and the shadow aging fields without the hash), since a boot-time clock/password-aging disagreement is the remaining plausible account-stage cause. **Not the `bad-perms-userConfig` misconfig**: a recent pass checked Linux-PAM master and `pam_unix`'s auth and account paths carry no `stat`/mode check on `/etc/shadow`, so a world-readable shadow cannot fail `pam_acct_mgmt` — do not reconnect the two without new evidence. **Next action**: analyze the next auto-captured bundle, or run `pam-bisect-lab.py cycle`/`bisect` against a planted lab until it reproduces. Root cause still open.
