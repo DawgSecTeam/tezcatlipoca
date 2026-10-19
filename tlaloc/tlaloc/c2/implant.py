@@ -1,25 +1,4 @@
-"""Planting the C2 channel on a box, and reading back the evidence.
-
-The engine builds and FREEZES the payload matrix at comp-prep
-(`competitions/<id>/red/payloads/` + a `uuid -> box` manifest), because builds
-never run mid-event: a lost Mythic state is re-prep, and the payloads are the
-artifacts that matter. This module consumes the manifest:
-
-    manifest = {
-      "comp": "<id>", "operation": "<mythic operation>",
-      "transports": ["http", "webhook"],
-      "boxes": {"web01-1": {"uuid": "...", "file": "web01-1.bin",
-                            "os": "linux", "agent": "poseidon",
-                            "transport": "http"}}}
-
-`Planter.plant()` copies the frozen payload to the box, registers it (systemd
-unit on Linux, service + at-logon task on Windows — whichever the payload
-supports), verifies the install ON THE BOX, and then asks the operation whether a
-callback appeared. The RECORD is written from the install and always; the
-callback is evidence about it. That ordering is deliberate — the earlier agent
-gated the artifact write on the channel proof and a slow check-in turned a live
-plant into a silent absence in both blue's and the organizer's lists.
-"""
+"""Planting the C2 channel on a box from the comp-prep payload manifest, and reading back the evidence."""
 
 import json
 import os
@@ -64,11 +43,8 @@ def load_manifest(comp_dir):
 
 
 def manifest_entry(manifest, box_id, transport=None):
-    """The box's frozen payload.
-
-    comp-prep keys the manifest `<box>:<transport>` (a box may carry one payload per
-    transport); the caller knows only the box, so fall back to its first entry.
-    """
+    """The box's frozen payload; comp-prep keys the manifest `<box>:<transport>`, so a
+    caller that knows only the box falls back to its first entry."""
     boxes = (manifest or {}).get("boxes") or {}
     if box_id in boxes:
         return boxes[box_id]
@@ -546,14 +522,9 @@ class Planter:
                 "paths": [f"registry:{key}"],
                 "undo": [f'reg delete "{key}" /f']}
 
-    # -- evidence -----------------------------------------------------------
-
     def wait_for_callback(self, box_id, *, wait_sec=45, poll_interval=5):
-        """Poll the operation for this box's callback inside `wait_sec`.
-
-        A callback is a FRESH row (`c2.callback_max_age_sec`), never the mere
-        existence of a row: tavern/mythic keep rows after the agent dies.
-        """
+        """A callback is a FRESH row (`c2.callback_max_age_sec`), never the mere
+        existence of one: tavern/mythic keep rows after the agent dies."""
         if self.ctx.c2 is None:
             return False
         deadline = self._now() + max(wait_sec, 0)

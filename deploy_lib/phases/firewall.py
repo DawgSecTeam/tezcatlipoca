@@ -12,23 +12,6 @@ from deploy_lib.phases._snapshots import snap_base
 
 
 def phase5_firewall_bootstrap(ctx):
-# [5/8] Bootstrap the in-path firewalls, then cut the engine over.
-#
-#     Runs only when the lineup declares an `in_path` box (an unmanaged firewall). The kind
-#     follows the template name (firewall_kind): pfSense clones get their per-team
-#     config.xml pushed over SSH through the engine and reboot into it; VyOS clones get
-#     generated set-command passes applied live. Either way the engine cutover then moves
-#     the gateway address onto the firewalls and points the engine's routes through the
-#     transit /30s. From here on every engine→box path (pre-domain pass, final pass, beacons,
-#     scoring) is verified to run THROUGH the firewall.
-#
-#     No firewalls in the lineup: print-and-return — the phase index stays stable, so
-#     checkpoints and resume banners never depend on the box lineup.
-#
-#     Resumable: a --from-phase 5 re-pushes every config (a pfSense firewall whose config
-#     already matches is left alone, no reboot; a VyOS firewall re-applies harmlessly) and
-#     re-runs the cutover (the netplan rewrite is idempotent); the completion flag is
-#     written for reporting, not for skipping.
     if ctx.from_phase > 5:
         print("[5/8] Skipped (resume).")
         return
@@ -67,5 +50,6 @@ def phase5_firewall_bootstrap(ctx):
     # point would capture a firewallless network pretending to be in-path.
     print(f"  Snapshotting the firewalls as '{SNAP_BASE}' (post-cutover restore point)...")
     run_concurrent(fw_targets, partial(snap_base, ctx, phase=5), max_workers=4)
+    # for reporting, not skipping: a resume re-pushes and the cutover is idempotent
     ctx.state["firewalls_bootstrapped"] = True
     ctx.save_state()

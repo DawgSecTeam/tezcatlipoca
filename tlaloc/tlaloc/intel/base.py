@@ -1,15 +1,4 @@
-"""Shared intel plumbing: scope, boxes, accounts, heuristics (leaf of intel).
-
-Intel IS the ROE inventory: the gate builds its allowlist from subnets(), and
-every consumer reads targets through boxes() — a box the competition marks
-`unmanaged` (the in-path pfSense carrying all scoring traffic) is
-infrastructure, out of ROE, in exactly one place.
-
-tlaloc's fixes over the earlier agent: the addressing scheme is data (a
-teams.json `subnet` field with the historic 192.168.<identifier>.0/24 default),
-and there is ONE windows predicate (box["windows"]) instead of two reading
-different fields.
-"""
+"""Shared intel plumbing: scope, boxes, accounts, heuristics (leaf of intel)."""
 
 import json
 import re
@@ -19,8 +8,8 @@ INTEL_FILES = ("teams.json", "boxes.json", "users.json", "box_services.json",
                "box_vulns.json", "nakon-config.json", ".deploy_state.json",
                "credentials.txt")
 
-# keyword (service slug / Quotient ServiceName) -> candidate systemd units,
-# most likely first. Blind guesses; nakon narrows via box_services.json.
+# keyword (service slug / Quotient ServiceName) -> candidate systemd units, most likely first.
+# Blind guesses; nakon narrows via box_services.json.
 UNIT_HINTS = {
     "nginx": ["nginx"], "apache": ["apache2"], "http": ["nginx", "apache2"],
     "web": ["nginx", "apache2"], "dovecot": ["dovecot"], "imap": ["dovecot"],
@@ -50,8 +39,6 @@ class Intel:
     def file(self, name):
         return self._files.get(name)
 
-    # -- scope ---------------------------------------------------------------
-
     def teams(self):
         """[{team, identifier, subnet}] — the ROE allowlist."""
         out = []
@@ -65,8 +52,7 @@ class Intel:
         return [t["subnet"] for t in self.teams()]
 
     def boxes(self):
-        """[{team, identifier, box, ip, windows, template}] — every target.
-        unmanaged hosts are excluded HERE; no consumer re-implements that."""
+        """every target; unmanaged hosts are excluded HERE, no consumer re-implements it."""
         out = []
         for team in self.teams():
             for box in (self.file("boxes.json") or []):
@@ -87,8 +73,6 @@ class Intel:
         box = self.box_by_ip(ip)
         return box["team"] if box else None
 
-    # -- accounts ------------------------------------------------------------
-
     def box_username(self):
         users = self.file("users.json")
         if isinstance(users, dict):
@@ -102,8 +86,6 @@ class Intel:
         state = self.file(".deploy_state.json") or {}
         return list((state.get("box_creds") or {}).keys())
 
-    # -- scoring engine --------------------------------------------------------
-
     def quotient_admin_password(self):
         return (self.file(".deploy_state.json") or {}).get("admin_password")
 
@@ -116,8 +98,6 @@ class Intel:
                 return match.group(1)
         return None
 
-    # -- heuristics --------------------------------------------------------------
-
     def unit_candidates(self, service_name):
         name = (service_name or "").lower()
         for keyword, units in UNIT_HINTS.items():
@@ -125,8 +105,6 @@ class Intel:
                 return units
         slug = re.sub(r"[^a-z0-9]", "", name)
         return [slug] if slug else []
-
-    # -- overridden by NakonIntel / BlindIntel ------------------------------------
 
     def candidate_users(self):
         raise NotImplementedError
@@ -139,7 +117,7 @@ class Intel:
                 for p in self.candidate_passwords()]
 
     def known_creds(self):
-        """[{user, password, note}] ground truth (nakon; [] in blind)."""
+        """ground truth; NakonIntel fills this, BlindIntel leaves []."""
         return []
 
     def hints_for(self, ip):
@@ -149,5 +127,5 @@ class Intel:
         return []
 
     def port_checks_for(self, ip):
-        """score_only pins: [{display, port}] — firewall-block targets."""
+        """score_only pins: firewall-block targets."""
         return []

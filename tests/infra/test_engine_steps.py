@@ -1,20 +1,4 @@
-"""engine_cmd_ops: every remote step names itself when it fails, and secrets stay out of argv.
-
-engine_cmd_ops owns the pipeline's longest remote operations — bootstrap's apt install and
-`compose build` at 1800s, `compose up` at 600s, the template's `compose up` — and every
-one of them funnels through `_run_engine_cmd`. Before this, a timeout or a non-zero exit
-escaped as the raw CalledProcessError/TimeoutExpired, whose only content is an
-`ssh ... <cmd>` argv of the same shape for every step: an operator had to read the whole
-traceback to learn WHICH step died, and deploy's generic per-phase handler could not
-tell them apart. Now the step is in the exception message and the original exception
-rides along as __cause__.
-
-Also pinned here: the base64 wrapping of the Quotient .env secrets. The postgres/redis
-passwords are interpolated into the remote command that writes /opt/quotient/.env, so
-they must reach the box without ever appearing as a literal in argv — otherwise a
-traceback, `ps`, or an audit log leaks them. Offline: subprocess.run is stubbed and no
-ssh is executed.
-"""
+"""engine_cmd_ops: every remote step names itself when it fails, and secrets stay out of argv."""
 
 import base64
 import re
@@ -37,7 +21,6 @@ _CTX = {
     "scoring_engine_ip": "10.0.0.10",
 }
 
-# `echo '<blob>' | base64 -d` — the one shape every secret-bearing command uses.
 _BLOB_RE = re.compile(r"echo '([A-Za-z0-9+/=]+)' \| base64 -d")
 
 
@@ -46,8 +29,7 @@ class StepNaming(unittest.TestCase):
 
 
     def test_check_false_nonzero_returncode_still_returns(self):
-        # The check=False steps (apt-cacher-ng probe, growpart) must keep returning the
-        # CompletedProcess; only TimeoutExpired can be labelled there.
+        # check=False steps (apt-cacher-ng probe, growpart): only timeouts get labelled.
         sentinel = subprocess.CompletedProcess(["ssh"], 7, stdout="", stderr="")
         with mock.patch.object(subprocess, "run", return_value=sentinel):
             got = _run_engine_cmd(_CTX, "false", check=False, timeout=30, step="noop")
@@ -74,8 +56,6 @@ class SecretHygiene(unittest.TestCase):
         self.assertNotIn(self.PG, joined, "postgres password leaked into argv")
         self.assertNotIn(self.REDIS, joined, "redis password leaked into argv")
 
-        # ...but the box still receives both, so the wrapping did not regress into
-        # "secure but broken".
         blobs = [m.group(1) for arg in argv for m in [_BLOB_RE.search(arg)] if m]
         self.assertEqual(len(blobs), 1, "expected exactly one base64-wrapped .env write")
         decoded = base64.b64decode(blobs[0]).decode()
@@ -84,8 +64,6 @@ class SecretHygiene(unittest.TestCase):
 
     def test_failed_env_push_names_the_step_without_leaking_the_secret(self):
         def fake_run(argv, **kwargs):
-            # Realistic failure: the traceback carries the real argv, which is exactly
-            # the path a plaintext secret would leak through.
             raise subprocess.CalledProcessError(1, argv)
 
         with mock.patch.object(subprocess, "run", side_effect=fake_run):
@@ -100,8 +78,7 @@ class SecretHygiene(unittest.TestCase):
 
 
 class QuotientInjectPatch(unittest.TestCase):
-    """The inject-detail re-patch every bootstrap runs on the fresh clone. The
-    script is the artifact under test: run it here exactly as the engine does."""
+    """The embedded script is the artifact under test: run it exactly as the engine does."""
 
     STOCK = (
         '                from.className = ""\n'
@@ -147,8 +124,7 @@ class QuotientInjectPatch(unittest.TestCase):
 
 
     def test_missing_anchor_reports_failure(self):
-        # Upstream rewrote the pane: neither the legacy nor the fixed anchor is there,
-        # so the patch did NOT apply and must not be swallowed.
+        # Upstream rewrote the pane: a patch that does not apply must not be swallowed.
         r, path = self._run("<html>upstream rewrote the inject pane</html>")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("did not apply", r.stderr)

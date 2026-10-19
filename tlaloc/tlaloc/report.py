@@ -1,21 +1,4 @@
-"""Reports and the teardown contract.
-
-Three artifacts, all derived from world state + the audit log — nothing is
-re-rendered from memory:
-
-* ``report.md``            secrets-free after-action report (pressure, coverage,
-                           what blue did, and the restore table).
-* ``report-secrets.md``    the same, plus every secret (rotated passwords, key
-                           material) — written 0600 and organizer-facing only.
-* ``restore-table.json``   the machine-readable undo table the engine's
-                           `red-verdict` and destroy steps consume. One entry per
-                           recoverable mutation, with the effect that made it.
-
-Principle 6 lives here: every effect recorded its own undo when it ran, so the
-restore table is a projection of the effect log — not something a report writer
-has to reconstruct (the earlier agent kept restore knowledge in three places that
-drifted).
-"""
+"""Reports and the teardown contract."""
 
 import json
 from pathlib import Path
@@ -24,7 +7,6 @@ from .state.schema import atomic_write, now_iso
 
 
 def summarize(world, policy=None, sensors=None):
-    """Counts for the report + the dashboard."""
     impacts = world.impacts()
     artifacts = world.artifacts()
     footholds = world.footholds()
@@ -70,7 +52,7 @@ def _by_team(world, impacts):
 
 
 def restore_table(world):
-    """The machine-readable undo table (also consumed by the engine)."""
+    """Undo-table projection; the engine's red-verdict and destroy consume this."""
     return [
         {"effect": entry.get("effect"), "ip": entry.get("ip"),
          "service": entry.get("service"), "at": entry.get("at"),
@@ -81,7 +63,6 @@ def restore_table(world):
 
 
 def restore_commands(world):
-    """Flat list of undo commands (what an operator actually runs)."""
     out = []
     for entry in world.restore_table():
         recipe = entry.get("recipe")
@@ -95,7 +76,6 @@ def restore_commands(world):
 
 def render_report(world, *, policy=None, sensors=None, narrative=None,
                   decisions=None, summary=None):
-    """The secrets-free report body."""
     summary = summary or summarize(world, policy, sensors)
     lines = [f"# tlaloc after-action — {summary.get('comp') or 'unset competition'}",
              "",
@@ -141,7 +121,6 @@ def render_report(world, *, policy=None, sensors=None, narrative=None,
 
 
 def render_secrets(world, *, summary=None):
-    """The organizer-facing 0600 body: the same table plus every secret."""
     summary = summary or summarize(world)
     lines = [f"# tlaloc restore secrets — {summary.get('comp') or 'unset competition'}",
              "",
@@ -167,7 +146,6 @@ def render_secrets(world, *, summary=None):
 
 def write_artifacts(state_dir, world, *, policy=None, sensors=None, narrative=None,
                     decisions=None, out_dir=None):
-    """Write the three artifacts. Returns their paths."""
     out = Path(out_dir or state_dir)
     out.mkdir(parents=True, exist_ok=True)
     summary = summarize(world, policy, sensors)

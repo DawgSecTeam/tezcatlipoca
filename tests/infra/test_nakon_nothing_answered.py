@@ -1,18 +1,4 @@
-"""strict=False still fails when nothing answered — found in a scale soak.
-
-The phase-6 pre-domain pass runs `nakon deploy` with strict=False so a couple of flaky pins
-of 41 cannot abort a deploy. But a host that never answered cannot report a failing step,
-so an all-unreachable sweep finishes rc=0 with no FAILED lines — and that is exactly what
-happened: the sweep "succeeded" against 32 machines that did not exist, the caller
-checkpointed phase 5, and the next resume chased ghosts for ~40 minutes.
-
-The distinction the floor must draw:
-    2 flaky steps of 41   -> tolerated (that is what strict=False is FOR)
-    41 of 41 silent       -> raise    (the sweep shot at nothing)
-
-Driven through the real `run_nakon` (only the subprocess boundary is faked), so the argv
-it builds and the rc/JSON handling it does are the ones that ship.
-"""
+"""strict=False still fails when nothing answered: a sweep that ran zero steps raises."""
 
 import json
 import sys
@@ -65,7 +51,6 @@ def _machines(*steps_per_machine):
 
 class NothingAnsweredFloor(unittest.TestCase):
     def test_all_machines_silent_raises_even_with_rc0(self):
-        # The soak's shape: every machine unreachable, nakon rc=0, zero FAILED steps.
         with self.assertRaises(RuntimeError) as raised:
             _run_with(_machines([], [], []))
         msg = str(raised.exception)
@@ -73,23 +58,16 @@ class NothingAnsweredFloor(unittest.TestCase):
         self.assertIn("3 machine(s) ran zero steps", msg)
 
     def test_one_machine_that_ran_anything_is_tolerated(self):
-        # A partial sweep is a real outcome, not a broken one — escalating it would
-        # abort runs that are merely imperfect, which is what strict=False is for.
+        # a partial sweep is a real outcome; escalating it defeats strict=False
         result = _run_with(_machines([{"index": "000", "name": "ADDS", "rc": 1}], []))
         self.assertEqual(len(result.machines), 2)
 
-
-
     def test_result_glued_to_status_line_is_still_parsed(self):
-        # nakon's status line lost its trailing newline on the phase-7 run that
-        # found this, gluing the JSON onto it ("...exit 0.{...}"). Requiring the
-        # line to START with "{" dropped the whole result set, and the rc=0 floor then
-        # aborted a fully-green pass.
+        # nakon can emit the JSON glued onto its status line; it must still parse
         glued = ("[nakon] All configurations completed with exit 0."
                  + _machines([{"index": "000", "name": "nginx", "rc": 0}]))
         result = _run_with(glued)
         self.assertEqual(result.machines[0]["name"], "box1")
-
 
 
 if __name__ == "__main__":

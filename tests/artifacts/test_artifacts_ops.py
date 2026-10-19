@@ -1,10 +1,8 @@
 """Per-run test artifacts (artifacts_lib/artifacts_ops.py): the collector that runs at teardown.
 
-Why this suite exists: the collector's whole job is to be *honest about absence*. An empty
-artifact folder that could mean "the agent wrote nothing", "the pull failed", or "the VM was
-already destroyed" is the failure mode this feature was built to remove, so most of these tests
-are about which status a missing thing gets, and about a re-run not destroying what the first
-run proved. Offline; the transport is injected (there is no estate access here).
+The collector's whole job is to be honest about absence, so most of these tests pin which
+status a missing thing gets and that a re-run does not destroy what the first run proved.
+Offline; the transport is injected.
 """
 
 import json
@@ -23,8 +21,8 @@ sys.path.insert(0, str(_REPO))
 from artifacts_lib import artifacts_ops as ao
 from estate import state as estate_state
 
-# the red artifacts are pulled from the sudo-staged copies (/tmp/ba): the originals
-# are 0600 root, and one unreadable file must not mark the whole target unreachable
+# the red artifacts are pulled from the sudo-staged copies (/tmp/ba): the originals are
+# 0600 root, and one unreadable file must not mark the whole target unreachable
 RED_REPORT = "/tmp/ba/report.md"
 
 
@@ -40,10 +38,6 @@ def make_comp(root, *, run_id="run-1a2b3c4d", comp="demo"):
 
 
 def fake_transport(files, calls=None, unreachable=False, journal=None):
-# A transport whose `scp-jump` route answers from `files` (glob keys allowed).
-#
-#     `ssh-cmd` is faked too, and deliberately: a real one would dial red01 from a unit test. It
-#     answers `journal` when given, else reports the command as having produced nothing.
     import fnmatch
 
     def _fake(ssh, remote, dest, timeout=120):
@@ -89,7 +83,7 @@ class TestKey(unittest.TestCase):
 
     def test_missing_run_id_falls_back_to_a_stable_untagged_key(self):
     # A state document without a run id, and teardown is re-run until clean — a fresh
-    #         timestamp per invocation would split one run's evidence.
+    # timestamp per invocation would split one run's evidence.
         with tempfile.TemporaryDirectory() as tmp:
             comp = make_comp(tmp, run_id=None)
             first = ao.test_key(comp)
@@ -134,9 +128,8 @@ class TestEnsureTest(unittest.TestCase):
                              {"run_dir": "/a", "engine_evidence": "/b"})
 
     def test_record_paths_stores_absolute_paths(self):
-    # The manifest is read from a different CWD than the one that wrote it (teardown runs
-    #         from the repo root, the harness from its worktree), so a relative path here is a bug
-    #         waiting for a reader in the wrong directory.
+    # The manifest is read from a different CWD than wrote it (teardown from the repo root,
+    #         the harness from its worktree), so a relative path here is a bug.
         with tempfile.TemporaryDirectory() as tmp:
             comp = make_comp(tmp)
             path, _ = ao.ensure_test(comp, kind="scrim")
@@ -304,9 +297,8 @@ class TestWarningsAndStubs(unittest.TestCase):
 
 
     def test_a_synthesized_blue_narrative_reaches_the_canonical_document(self):
-        # Blue is present, every cycle timed out, so blue itself wrote no REPORT.md; the
-        # harness's narrative must still land as BLUE-TEAM.md and clear the collector's
-        # "present agent, missing canonical document" guard caught live.
+        # Blue is present but every cycle timed out, so blue wrote no REPORT.md; the harness's
+        # narrative must still land as BLUE-TEAM.md and clear the missing-canonical guard.
         from scrim import blue_agent
         ao.update_manifest(self.path, agents={"red": {"present": False},
                                               "blue": {"present": True, "teams": 1}})
@@ -329,8 +321,8 @@ class TestWarningsAndStubs(unittest.TestCase):
 
 
     def test_an_uncollected_report_is_not_called_absent(self):
-    # The source is still out there: saying "absent" would be a claim about a box nobody
-    #         asked. The stub must name the command that fixes it.
+    # The source is still out there: saying "absent" would claim a box nobody asked. The
+    #         stub must name the command that fixes it.
         ao.update_manifest(self.path, agents={"red": {"present": False},
                                               "blue": {"present": True, "teams": 1}})
         workdir = Path(self.tmp.name) / "blue-team1"
@@ -343,9 +335,8 @@ class TestWarningsAndStubs(unittest.TestCase):
         self.assertIn("test-artifacts.py collect", text)
 
     def test_a_wholesale_target_failure_is_not_reported_as_absent(self):
-    # red01 with no recorded address is never probed, so no per-file record exists — and
-    #         calling that "absent" would claim a box that was never asked. The target's own status is
-    #         the honest answer for the document it was meant to carry (found by the CLI agent).
+    # red01 with no recorded address is never probed, so no per-file record exists —
+    #         calling that "absent" would claim a box that was never asked.
         ao.update_manifest(self.path, agents={"red": {"present": True, "ssh": {}},
                                               "blue": {"present": False}})
         targets = [{"name": "red01", "route": "scp-jump", "kind": "remote", "ssh": {},
@@ -452,8 +443,8 @@ nothing
 
 
 class TestTeardownEntryPoint(unittest.TestCase):
-# collect_for_teardown is the call destroy-competition.py makes; it must leave a complete
-#     folder even when the harness that normally fills it never ran.
+    # collect_for_teardown is the call destroy-competition.py makes; it must leave a
+    #     complete folder even when the harness that normally fills it never ran.
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -531,18 +522,13 @@ if __name__ == "__main__":
     unittest.main()
 
 
+# The route pair retries once on a network-side flap (the red01 pull died on a
+# seconds-long no-route flap on the ENGINE's jump address and the report was lost).
 class ScpRetry(unittest.TestCase):
-# The route pair retries once on a network-side flap (the red01
-#     pull died on a seconds-long no-route flap on the ENGINE's jump address and the
-#     red report was lost; the destroy that ran next reached the same engine fine).
-#
-#     ao.time is the GLOBAL time module — patches must restore it or every later
-#     test in the process inherits a poisoned time.sleep (live-found in this same
-#     session: the full suite went 13-red until this was scoped).
+    # ao.time is the GLOBAL time module — patches must restore it or every later test
+    #     inherits a poisoned time.sleep (the full suite went 13-red until this was scoped).
 
     def _fake_run(self, successes_after, out_file):
-    # subprocess.run stub: from call N on it succeeds by creating the file;
-    #         earlier calls answer rc=1 with a no-route stderr.
         calls = {"n": 0}
 
         def run(cmd, capture_output=True, text=True, timeout=None):

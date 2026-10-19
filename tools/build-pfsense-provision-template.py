@@ -160,9 +160,6 @@ def seal():
     print(f"{NEWID} sealed as a template")
 
 
-# qemu-guest-agent retrofit
-
-
 FW_ADMIN = "admin"          # uid 0 on pfSense; the deploy key (proxmox.pub) is in its authorizedkeys
 QGA_VMID = int((config.active().knobs.pfsense_qga_vmid or 958))
 QGA_WORK_NAME = "pfsense-provision-qga"
@@ -197,9 +194,9 @@ def agent_clone():
         "newid": QGA_VMID, "name": QGA_WORK_NAME, "full": 1,
         "description": "pfsense-provision + qemu-guest-agent (build-pfsense-provision-template.py)"})
     wait_for_proxmox_task(n, up["data"])
-    # agent=1 must exist BEFORE the first boot: it adds the virtio-serial guest-agent
-    # channel the daemon (and our REST ping verify) need. net0/net1 both on the bridge:
-    # vtnet1 is the template's LAN 192.168.1.1; vtnet0 (factory WAN, unconfigured) is inert.
+    # agent=1 must exist BEFORE the first boot: it adds the virtio-serial channel the daemon (and
+    # the REST ping verify) need. net0/net1 both on the bridge — vtnet1 is the template's LAN
+    # 192.168.1.1, vtnet0 (factory WAN, unconfigured) is inert.
     proxmox_api("PUT", f"/nodes/{n}/qemu/{QGA_VMID}/config", data={
         "agent": 1,
         "net0": f"virtio,bridge={QGA_BRIDGE}",
@@ -307,9 +304,9 @@ def _agent_ping(node_name, budget_s=60):
 
 def _install_script(packages):
     lines = ["#!/bin/sh", "set -u",
-             # pfSense's 14-CURRENT kernel reports an older __FreeBSD_version than the
-             # packages were built on; syscall ABI is stable within the 14 major and
-             # the agent ping below is the functional proof.
+             # pfSense's 14-CURRENT kernel reports an older __FreeBSD_version than the packages were built
+             # on; the syscall ABI is stable within the 14 major and the agent ping below is the
+             # functional proof.
              "export ASSUME_ALWAYS_YES=yes IGNORE_OSVERSION=yes",
              f"cd {QGA_GUEST_STAGE}", "FAIL=0",
              "installed() { pkg info -e \"$1\" >/dev/null 2>&1; }",
@@ -328,11 +325,9 @@ def _install_script(packages):
               "[ -n \"$port\" ] || { echo NO_VTCON; exit 5; }",
               "printf 'qemu_guest_agent_enable=\"YES\"\\n' > /etc/rc.conf.local",
               "printf 'qemu_guest_agent_flags=\"-d -v -p /dev/vtcon/%s\"\\n' \"$port\" >> /etc/rc.conf.local",
-              # pfSense boot never runs /usr/local/etc/rc.d/* — find_local_scripts_new
-              # only globs *.sh — so the rc.conf enable alone is inert. The pfSense-
-              # native hook is <system><afterbootupshellcmd> in config.xml (/etc/rc.bootup
-              # mwexec's it at the end of bootup). Phase 5's generated configs carry the
-              # same tag (firewall_ops.generate_team_config).
+              # pfSense boot never runs /usr/local/etc/rc.d/* (find_local_scripts_new only globs *.sh), so
+              # the rc.conf enable alone is inert; the pfSense-native hook is
+              # <system><afterbootupshellcmd> in config.xml, which /etc/rc.bootup mwexec's.
               "if ! grep -q afterbootupshellcmd /cf/conf/config.xml; then "
               f"sed -i '' -e 's,<system>,<system><afterbootupshellcmd>{QGA_SHELLCMD}"
               "</afterbootupshellcmd>,' /cf/conf/config.xml; fi",

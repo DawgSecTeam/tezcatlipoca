@@ -1,20 +1,4 @@
-"""`--mode reset` — the cheapest-that-works ladder — and the hardening around it.
-
-Covers:
-
-* the ladder's escalation policy: a box the cheap rung fixed is never rebuilt, a box
-  the cheap rung cannot fix is never left behind, a wholesale rung failure escalates
-  instead of killing the reset, and PAM planted-box traps escalate one rung (the
-  tz-base disk is pre-plant) rather than jumping straight to rebuild;
-* the engine-vantage health probe (SSH/guest-agent + scored ports from the engine),
-  including the exact-token port matching (P2 must not match P22=OK);
-* mode_rebuild's ownership stamping: the clone marker rides the clone POST, the tags
-  PUT carries the full run ownership set, and the adoption note fires for every rebuilt box,
-  not just team1;
-* nakon_failed_steps is appended to, never clobbered — the deploy-time record belongs
-  to verify's plant-integrity line.
-
-Offline; no Proxmox, no SSH."""
+"""`--mode reset` — the cheapest-that-works ladder — and the hardening around it. Offline."""
 
 import io
 import json
@@ -45,7 +29,6 @@ LINUX_BOX = {"name": "web01", "template": "ubuntu-2204-web", "cpu": 2, "memory_m
 WIN_BOX = {"name": "win01", "template": "windows-server-2022", "cpu": 2, "memory_mb": 4096}
 
 
-# one (team, box) target: team1-<box> for team1, <identifier>-<box> otherwise
 def _target(box, vmid, team="team1", identifier=104):
     vm_name = f"team1-{box['name']}" if team == "team1" else f"{identifier}-{box['name']}"
     return {
@@ -165,8 +148,7 @@ class LadderTests(unittest.TestCase):
         self.assertEqual(calls["rebuild"], [[T1["vm_name"]]])
         self.assertEqual(calls["prepare"], 1)
 
-    # mode_rollback raises when NOTHING was restored — the ladder must carry the
-    # batch to the next rung, not abort the reset.
+    # mode_rollback raises when NOTHING was restored; the ladder must carry on, not abort.
     def test_wholesale_rung_failure_escalates_instead_of_dying(self):
         verdicts = {T1["vm_name"]: [("healthy", "d")]}
         out, calls = self._run(
@@ -296,8 +278,7 @@ class PortsClosedFromEngineTests(unittest.TestCase):
         return patch.object(redeploy_reset_ops, "ssh_on_gateway",
                             return_value=MagicMock(returncode=0, stdout=stdout))
 
-    # P2=OK must not satisfy a P22 probe (or vice versa) — matching is by whole
-    # whitespace token, not substring.
+    # P2=OK must not satisfy a P22 probe — matching is by whole token, not substring.
     def test_port_tokens_match_exactly(self):
         with self._engine("P2=CLOSED\nP22=OK\n"):
             closed = redeploy_reset_ops.ports_closed_from_engine(CTX, "192.168.104.10", [2, 22])
@@ -312,8 +293,8 @@ class PortsClosedFromEngineTests(unittest.TestCase):
 
 class ScoredPortsTests(unittest.TestCase):
 
-    # Bare catalog names resolve through quotient's own mapping; explicit ports
-    # win; plant_only pins emit no scored check.
+    # Bare catalog names resolve through quotient's mapping; explicit ports win; plant_only
+    # pins are unscored.
     def test_pins_resolve_to_scored_ports(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp = Path(tmp)
@@ -327,8 +308,8 @@ class ScoredPortsTests(unittest.TestCase):
 
 
 
-# mode_rebuild must stamp ownership onto the VM it recreates, not rely on
-# inheriting a golden's tags (a reused golden carries a stale run-<id>).
+# mode_rebuild must stamp ownership onto the VM it recreates, not inherit a golden's
+# tags (a reused golden carries a stale run-<id>).
 class RebuildStampingTests(unittest.TestCase):
     def _run_rebuild(self, target, state):
         calls = []
@@ -383,8 +364,8 @@ class RebuildStampingTests(unittest.TestCase):
 
 
 
-# A comp whose plants are all golden-stage has an empty postclone stage —
-# caught live: building a bundle from it crashed the whole replant.
+# A comp whose plants are all golden-stage has an empty postclone stage, and building a
+# bundle from it crashed the whole replant.
 class PrepareAssetsTests(unittest.TestCase):
     def test_empty_postclone_stage_yields_no_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -410,9 +391,8 @@ class PrepareAssetsTests(unittest.TestCase):
             redeploy_plant_ops.run_nakon_and_harden([T1], _rctx(ctx=ctx, comp_dir=Path(tmp)), stage, object())
         return p_run, p_fix
 
-    # caught live (pfsense-ad web01): every plant rides the golden clone, so the
-    # box is not in the post-clone stage; `nakon --only` then errored and the retry loop
-    # mistook it for a dead ssh session. Skip the plant, still harden.
+    # Every plant rides the golden clone, so the box is not in the post-clone stage; `nakon
+    # --only` errored and the retry loop mistook it for a dead ssh session.
     def test_a_box_absent_from_a_non_empty_stage_is_not_handed_to_nakon(self):
         p_run, p_fix = self._run_with_stage(["some-other-box"])
         p_run.assert_not_called()
@@ -424,9 +404,7 @@ class PrepareAssetsTests(unittest.TestCase):
         self.assertEqual(p_run.call_args.kwargs["only"], [T1["machine"]])
 
 
-# A reset DC wipes the entire AD content — every done-marker of that team's
-# domain chain is void (caught live: deleting only the ADDS marker left
-# svc-support missing and failed verify's domain gate).
+# A reset DC wipes the AD content, so every done-marker of that team's chain is void.
 class DomainMarkerCascadeTests(unittest.TestCase):
     def _markers(self, tmp, team="team1"):
         names = [f".nakon-domain-{team}-adds.json",
@@ -484,7 +462,7 @@ class DomainMarkerCascadeTests(unittest.TestCase):
             self.assertFalse(p_dom.call_args.kwargs.get("force_member_join"))
 
 
-# nakon_failed_steps: append, never clobber.
+# nakon_failed_steps: append, never clobber — the deploy-time record is verify's.
 class FailedStepsTests(unittest.TestCase):
     def _replant(self, state, failed):
         ctx = {"ssh_key_path": "/k", "scoring_engine_ip": "10.0.0.9"}
@@ -508,8 +486,8 @@ class FailedStepsTests(unittest.TestCase):
         self.assertEqual(state["nakon_failed_steps"],
                          ["deploy: mysql FAILED", "redeploy: nginx FAILED"])
 
-    # A clean replant preserves the deploy-time record: writing an empty list here
-    # would retroactively declare the deploy's failed steps resolved.
+    # A clean replant preserves the deploy-time record: an empty list would retroactively
+    # declare the deploy's failed steps resolved.
     def test_clean_replant_keeps_the_deploy_time_record(self):
         state = {"box_password": "pw", "nakon_failed_steps": ["deploy: mysql FAILED"]}
         state = self._replant(state, [])

@@ -1,12 +1,4 @@
-"""The config contract — the invariant that keeps red01's features alive.
-
-Every key the agent reads must be listed in `cli.CONFIG_CONTRACT`, because that
-list is what the deploy pipeline writes into `/etc/tlaloc/config.yaml` and what
-`tlaloc verify-config --pushed` diffs per field. A key that is read but not
-listed is dropped on the way to the VM: the feature is dead on red01 while every
-local test stays green. The earlier agent shipped exactly that bug (a whole
-feature absent from the push allowlist), and this file is the wall against it.
-"""
+"""The config contract: every key the agent reads must be in `cli.CONFIG_CONTRACT`, or the deploy drops it and the feature is dead on red01."""
 
 import re
 from pathlib import Path
@@ -16,9 +8,7 @@ import pytest
 from tlaloc import cli, config
 from tlaloc.effects import MODULES
 
-# Config paths the effect modules read, as a DATA TABLE (the plan bans source-text
-# tests for behaviour; this is a plumbing inventory, and the scan below is what
-# keeps the inventory honest rather than the reader's memory).
+# A plumbing inventory, not a behaviour test; the scan below keeps it honest.
 EFFECT_CONFIG_KEYS = {
     "c2.callback_max_age_sec": {"implant_channel", "lockout", "reestablish", "task_channel"},
     "c2.callback_wait_sec": {"implant_channel"},
@@ -64,26 +54,22 @@ def test_contract_covers_every_default_key():
 
 
 def test_contract_fields_resolve_in_defaults():
-    """The reverse direction: a contract field that is not a real config path is
-    a typo that makes every deploy diff report a phantom mismatch."""
-    # `is None` — an empty string / False / {} is a legitimate default value, and
-    # treating it as "missing" would flag half the contract.
+    """A contract field that is not a real config path makes every deploy diff
+    report a phantom mismatch."""
+    # `is None` — an empty string / False / {} is a legitimate default value.
     broken = [field for field in cli.CONFIG_CONTRACT
               if _resolve(config.DEFAULTS, field) is None]
     assert broken == [], f"contract fields that are not real config paths: {broken}"
 
 
 def test_verify_config_compares_effective_values_not_files():
-    """A diff-style push (the deploy writes only what it knows) must not report
-    every default-valued field as dropped — but a field whose effective value would
-    differ on the VM is a real problem."""
+    """A sparse push must not report every default-valued field as dropped; only a
+    field whose effective value would differ on the VM is a real problem."""
     import copy
     # An empty push means "everything is default" — and that is correct.
     assert cli.verify_config(copy.deepcopy(config.DEFAULTS), pushed={}) == []
 
     # A realistic render: the deploy writes the comp's own identity, nothing else.
-    # Only fields whose EFFECTIVE value differs may be flagged — before the
-    # effective-value fix this returned all 72 entries.
     sparse_push = {"run": {"comp": "x", "state_dir": "/var/lib/tlaloc"}}
     local = copy.deepcopy(config.DEFAULTS)
     local["limits"]["spray_delay_sec"] = 1.5        # set here, never pushed
@@ -110,8 +96,7 @@ def _resolve(cfg, dotted):
 
 
 def test_every_effect_config_read_is_declared():
-    """Each path in the table must exist in DEFAULTS and be covered by the
-    contract — the table is what an operator reads when a knob seems ignored."""
+    """Each path in the table must exist in DEFAULTS and be covered by the contract."""
     problems = {}
     for field in EFFECT_CONFIG_KEYS:
         if _resolve(config.DEFAULTS, field) is None:
@@ -122,13 +107,8 @@ def test_every_effect_config_read_is_declared():
 
 
 def test_the_effect_read_table_is_complete():
-    """The table above must name every config path the effect modules read.
-
-    This is the one place a source scan is the right tool: it is not asserting
-    behaviour, it is asserting that a plumbing INVENTORY matches the plumbing. A
-    new `ctx.cfg[...]` read in a phased module has to be declared, or this fails
-    and nobody ships a knob that the VM never receives.
-    """
+    """The one place a source scan is right: it asserts that a plumbing INVENTORY matches
+    the plumbing, so a new `ctx.cfg[...]` read has to be declared."""
     here = Path(__file__).resolve().parent.parent / "tlaloc" / "effects"
     chain = re.compile(r'\bcfg\b((?:\s*(?:\[\s*["\'](\w+)["\']\s*\]'
                        r'|\.\s*get\(\s*["\'](\w+)["\']))+)')
@@ -149,6 +129,5 @@ def test_the_effect_read_table_is_complete():
 
 
 def _declared_family(path):
-    """Parent-only reads (e.g. `cfg["c2"]`, `cfg["limits"]`) are covered when the
-    parent has contract entries, and carry no leaf of their own."""
+    """Parent-only reads (e.g. `cfg["c2"]`) are covered by the parent's entries."""
     return any(entry.startswith(path + ".") for entry in cli.CONFIG_CONTRACT)

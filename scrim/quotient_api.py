@@ -7,19 +7,15 @@ import threading
 from pathlib import Path
 
 
-# Cookie jars live per-run, not in the shared /tmp (see jar_path).
+# Cookie jars live per-run, not in the shared /tmp.
 JAR_DIRNAME = ".jars"
 
 
 _JAR_LOCKS = {}
 
 
-# /tmp/jar.<team> was a predictable name in shared /tmp, created by `curl -c` at the
-# driver's umask: any local account could read a live session cookie, and a second scrim
-# on the same host clobbered the first one's jar. The name must stay deterministic (the
-# generated qlogin/score.py helpers and this driver agree on one file), so a fixed
-# basename inside a 0700 run-dir subdirectory, seeded via mkstemp+rename so the mode is
-# 0600 by construction instead of by luck with the umask.
+# Name must stay deterministic (the generated qlogin/score.py helpers agree on one file); the 0700
+# run-dir + mkstemp+rename give 0600 by construction, not by umask luck, out of shared-/tmp reach.
 def jar_path(run_dir, account):
     d = Path(run_dir) / JAR_DIRNAME
     d.mkdir(parents=True, exist_ok=True)
@@ -32,20 +28,14 @@ def jar_path(run_dir, account):
     return str(path)
 
 
-# one re-entrant lock per Quotient account: the loops refresh per-team jars concurrently
-# and a login MAY invalidate the other refresher's cookie (the 2026-10-18 live probe did
-# not reproduce it; the lock stays so the behavior is safe either way — the documented
-# "three-round scoreboard mystery"). Re-entrant so a
-# helper refreshing while already holding the account lock (qget -> _qlogin) cannot
-# deadlock against itself.
+# Quotient allows ONE session per account: concurrent refreshers clobber each other's cookie.
+# RLock because qget -> _qlogin re-enters the same account lock.
 def jar_lock(account):
     return _JAR_LOCKS.setdefault(account, threading.RLock())
 
 
-# `'"error"' in body` flipped the verdict on any payload whose DATA contained that text
-# (a service or inject legitimately named "error…") and missed an error object written
-# with different spacing; a non-JSON body is NOT an error — callers json.loads() it and
-# fail loudly on their own
+# A JSON error object, not substring "error": a service or inject may be named error*.
+# A non-JSON body is not an error: callers json.loads() it and fail loudly.
 def json_error(body):
     try:
         data = json.loads(body or "")
@@ -54,11 +44,8 @@ def json_error(body):
     return isinstance(data, dict) and "error" in data
 
 
-# curl writes a private temp file renamed over the shared jar: never observed half-written
-# (`curl -c` truncates in place, so a concurrent reader could see a partial file), the
-# 0600 mode survives, and a FAILED refresh leaves the previous jar intact instead of
-# destroying a working session. Callers in the loops hold jar_lock(account); the lock
-# here covers the one-off callers too.
+# curl -c truncates the jar in place — partial reads, and a failed refresh wipes a working
+# session — so write a temp file and rename over. Loops already hold jar_lock; this covers one-off callers.
 def _qlogin(creds, user, jar):
     with jar_lock(user):
         fd, tmp = tempfile.mkstemp(prefix=f".{Path(jar).name}.", dir=str(Path(jar).parent))
@@ -94,8 +81,7 @@ def qget(creds, user, jar, path):
         return _get()
 
 
-# without the isinstance guard an error body made next(...) raise StopIteration/TypeError
-# from inside the monitor thread, which died silently (a harness audit finding)
+# Without the isinstance guard, next(...) raises StopIteration/TypeError in a silently-dead monitor thread.
 def _team_tid(creds, user, jar, team):
     r = qget(creds, user, jar, "/api/teams")
     try:
@@ -110,12 +96,8 @@ def _team_tid(creds, user, jar, team):
     return str(tid)
 
 
-# Last10Rounds is newest-first and at >=8 teams a poll can land mid-round: rounds[0] is
-# then the round in flight, with an empty Checks array that is not a verdict at all —
-# reading it as "no check passed" reports a phantom DOWN the soak's monitors, fire-tests
-# and scoreboard snapshots would all have believed. Take the newest round that actually
-# HAS checks; only when no round carries any is the service genuinely unmeasured, and
-# unmeasured stays down (fail closed) rather than being quietly promoted to up.
+# Last10Rounds is newest-first; a mid-round poll puts an empty-Checks round at [0] — a phantom DOWN.
+# Take the newest round with checks; with none, unmeasured stays down (fail closed).
 def services_to_rows(services):
     rows = []
     for s in services or []:

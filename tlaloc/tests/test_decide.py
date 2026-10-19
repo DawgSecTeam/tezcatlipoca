@@ -1,10 +1,4 @@
-"""The decision layer: thresholds, fallbacks, the arbiter, and offline replay.
-
-The replay suite is the plan's requirement made concrete: every logged decision
-carries its bundle, so the recorded bundles under tests/fixtures/ re-run through
-`decide.py` with a stubbed clef and the chain is asserted — no model endpoint, no
-range, no network.
-"""
+"""The decision layer: thresholds, fallbacks, the arbiter, and offline replay."""
 
 import json
 from pathlib import Path
@@ -32,7 +26,7 @@ def candidates_from(record):
 
 
 class StubLLM:
-    """The arbiter: a fixed reply, a chooser callable, or a failure."""
+    """A fixed reply, a chooser callable, or a failure."""
 
     def __init__(self, reply=None, chooser=None, boom=False):
         self.enabled = True
@@ -51,8 +45,7 @@ class StubLLM:
 
 
 def decider_for(tmp_path, clef, llm=None, cfg_over=None):
-    """`cfg_over` is a dict of config overrides (a bare `clef=` kwarg would
-    collide with the positional clef client)."""
+    # a bare `clef=` kwarg would collide with the positional clef client
     ctx = make_ctx(tmp_path, cfg=base_cfg(**(cfg_over or {})))
     policy = Policy(ctx.cfg, ctx.world, ctx.intel, sensors=ctx.sensors, rng=ctx.rng)
     ctx.policy = policy
@@ -61,7 +54,6 @@ def decider_for(tmp_path, clef, llm=None, cfg_over=None):
 
 
 def stub_for(record):
-    """A clef that replays one recorded answer."""
     probability = dict(record["probabilities"])
     answer = {"type": "choice", "choice": record.get("answer"),
               "probabilities": probability}
@@ -76,10 +68,8 @@ def stub_for(record):
 
 @pytest.mark.parametrize("record", records(), ids=lambda r: f"cycle{r['cycle']}")
 def test_replay_of_recorded_bundles(tmp_path, record):
-    # Replay reproduces the ENVIRONMENT that produced the record: a chain that
-    # recorded an arbiter decision had an arbiter available, one that recorded a
-    # deterministic pick did not (injecting an arbiter would legitimately change
-    # the outcome, which is the point of the gate).
+    # Replay reproduces the ENVIRONMENT that produced the record: only a chain that recorded
+    # an arbiter decision had an arbiter available.
     arbiter = (StubLLM(chooser=lambda options: {"id": options[0]["id"],
                                                 "why": "replay: first bounded option"})
                if record["source"] == "llm_arbiter" else None)
@@ -94,8 +84,7 @@ def test_replay_of_recorded_bundles(tmp_path, record):
         assert decision.chosen is not None
         assert decision.chosen["id"] == record["chosen"]
     elif record["source"] == "llm_arbiter":
-        # an unconfident HIGH-STAKES choice goes to the arbiter when one exists,
-        # and the arbiter is bounded to the candidate list
+        # the arbiter is bounded to the candidate list
         assert decision.source == "llm_arbiter"
         assert decision.chosen["id"] in [c["id"] for c in candidates]
     else:
@@ -321,7 +310,7 @@ def test_clef_client_cools_down_after_repeated_failures():
 
 
 def _wide_board(ctx, n=6, reason_pad=0):
-    """12 boxes with footholds + one eviction candidate per box."""
+    # 12 boxes with footholds + one eviction candidate per box
     for team_octet in (1, 2):
         for host in range(1, n + 1):
             ctx.world.add_foothold(f"192.168.{team_octet}.{host}0", "ubuntu",
@@ -333,9 +322,7 @@ def _wide_board(ctx, n=6, reason_pad=0):
 
 
 def test_compose_sends_the_whole_state_to_the_16k_endpoint(tmp_path):
-    """The endpoint takes a 16k-token batch, so a wide board is sent WHOLE:
-    full option list, every interesting box, and a real history window — no
-    compaction, nothing dropped off the digest."""
+    """At the 16k batch a wide board goes WHOLE — no compaction, nothing off the digest."""
     from tlaloc.decide import tokens_needed
     ctx, policy, decider = decider_for(tmp_path, StubClef())
     candidates = _wide_board(ctx)
@@ -347,8 +334,8 @@ def test_compose_sends_the_whole_state_to_the_16k_endpoint(tmp_path):
     # 8 candidates + the implicit "hold": the full option list, un-compacted
     assert len(questions["next_effect"]["criteria"]) == 9
     assert "_dropped" not in digest, f"the digest was trimmed: {digest.get('_dropped')}"
-    # The strongest form of "nothing was trimmed": byte-identical to the same
-    # frame built with an effectively unlimited budget.
+    # the strongest form of "nothing was trimmed": byte-identical to the frame
+    # built with an unlimited budget.
     untrimmed = policy.frame(ctx, candidates, recent=list(recent[-24:]), budget_tokens=10**9)
     assert digest == untrimmed
     assert len(digest["boxes"]) >= 5                             # a real board went out
@@ -359,10 +346,8 @@ def test_compose_sends_the_whole_state_to_the_16k_endpoint(tmp_path):
 
 
 def test_compose_still_compacts_against_a_small_batch(tmp_path):
-    """The fallback survives: against a 1k endpoint (a smaller clef, or another
-    model) the same call compacts the bundle and shrinks the digest to fit,
-    rather than composing a request the endpoint would reject. Measured on this
-    board: the full bundle needs ~1.9k, the compact one ~0.9k."""
+    """A 1k endpoint (a smaller clef, or another model) compacts the bundle and shrinks the
+    digest rather than composing a request it would reject."""
     from tlaloc.decide import tokens_needed
     ctx, policy, decider = decider_for(tmp_path, StubClef())
     candidates = _wide_board(ctx, reason_pad=140)                # fat reasons
@@ -374,11 +359,9 @@ def test_compose_still_compacts_against_a_small_batch(tmp_path):
 
 
 def test_a_batch_too_small_for_any_bundle_is_flagged_not_truncated(tmp_path):
-    """Below the floor, the request is FLAGGED (`clef_bundle_over_budget`, and
-    `_over_budget` on the digest) and the client refuses it, so the chain
-    degrades deterministically. Silently sending a shortened question — or a
-    digest that lost the ROE — is the failure mode this design bans.
-    Measured floor on a 12-box board with fat candidate reasons: ~577 tokens."""
+    """Below the floor the request is FLAGGED and the client refuses it, so the chain degrades
+    deterministically — a shortened question, or a digest that lost the ROE, is banned.
+    Measured floor on this board: ~577 tokens."""
     from tlaloc.decide import tokens_needed
     ctx, policy, decider = decider_for(tmp_path, StubClef())
     candidates = _wide_board(ctx, reason_pad=140)
@@ -392,7 +375,7 @@ def test_a_batch_too_small_for_any_bundle_is_flagged_not_truncated(tmp_path):
 
 
 def test_an_over_budget_rejection_is_learned_and_retried_once(tmp_path):
-    """The endpoint's own token count beats our estimate: learn it, shrink, retry."""
+    # The endpoint's own token count beats our estimate: learn it, shrink, retry.
     calls = {"n": 0}
 
     def poster(url, body, timeout):

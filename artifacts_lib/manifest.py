@@ -27,12 +27,8 @@ def save_manifest(test_path, manifest):
 
 def ensure_test(comp_dir, *, kind, run_id=None, key=None, script=None, label=None,
                 teams=None, boxes=None, endpoint=None, node=None, nodes=None, extra=None):
-# Open (or create) this run's test folder and return `(path, manifest)`.
-#
-#     Idempotent by design: both callers may run, in either order, any number of times. A caller
-#     that knows less than whoever created the manifest must not erase what it knows, so existing
-#     truthy values win. Refuses to reuse a key that belongs to a different run id — that is the
-#     guard against two worktrees sharing one folder.
+    # Idempotent: existing truthy values win, and a folder held by another run id is
+    # refused — that is the guard against two worktrees sharing one folder.
     comp_dir = Path(comp_dir)
     key = key or test_key(comp_dir, run_id)
     run_id = run_id if run_id is not None else run_id_from_state(comp_dir)
@@ -94,10 +90,7 @@ def ensure_test(comp_dir, *, kind, run_id=None, key=None, script=None, label=Non
 
 
 def record_phase(test_path, phase, *, t0=None, **fields):
-# Append a phase marker to the manifest (mirrors the harness's run.json `phase`).
-#
-#     This is the record that answers the question every crashed practice run raises: how far did
-#     it get before it died?
+    # Mirrors the harness's run.json `phase`: both the `phases` list and the scalar are written.
     manifest = load_manifest(test_path)
     manifest.setdefault("phases", []).append({"phase": phase, "at": iso(), "t0": t0})
     manifest["phase"] = phase
@@ -108,7 +101,6 @@ def record_phase(test_path, phase, *, t0=None, **fields):
 
 
 def update_manifest(test_path, **fields):
-# Merge fields into the manifest without touching `phases` (the harness's hot path).
     manifest = load_manifest(test_path)
     for field, value in fields.items():
         if value is not None:
@@ -118,12 +110,8 @@ def update_manifest(test_path, **fields):
 
 
 def _absolute(value):
-# Resolve a path against the writer's CWD, at write time.
-#
-#     The manifest outlives the process that wrote it and is read from a different CWD (teardown
-#     runs from the repo root, the harness from its worktree root), so a relative path in here is
-#     a bug waiting for a reader in the wrong directory. `record_paths` is the moment the writer
-#     still knows what it meant.
+    # Stored absolute: the manifest outlives the writer's process and is read from a
+    # different CWD (teardown from the repo root, harness from its worktree root).
     if value is None:
         return None
     if isinstance(value, (list, tuple)):
@@ -132,11 +120,8 @@ def _absolute(value):
 
 
 def record_paths(test_path, **paths):
-# Merge source paths into the manifest — the collector's map of where artifacts live.
-#
-#     Merged rather than replaced (the harness knows the run dir and blue workdirs, teardown learns
-#     the engine capture location, and neither should erase the other's knowledge), and stored
-#     absolute (see `_absolute`).
+    # Merged, not replaced: the harness knows the run dir and blue workdirs, teardown
+    # learns the engine capture location; neither may erase the other.
     manifest = load_manifest(test_path)
     known = manifest.setdefault("paths", {})
     for field, value in paths.items():
@@ -147,10 +132,7 @@ def record_paths(test_path, **paths):
 
 
 def resolve_recorded(value, comp_dir):
-# Best-effort absolute form of a path read back from a manifest.
-#
-#     Older manifests (and hand-written ones) can hold a relative path; try it against the CWD and
-#     against the competition directory rather than silently reporting the source as gone.
+    # Older/hand-written manifests can hold relative paths: try CWD, then comp_dir.
     if not value:
         return None
     path = Path(value)

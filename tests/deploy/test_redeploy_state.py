@@ -1,20 +1,4 @@
-"""The state document's atomic writer and the Linux hardening order in redeploy.
-
-Two incidents drive this file:
-
-* The state document holds the only copy of the box
-  passwords. Three of the four writers (two in redeploy-competition.py, plus the one at
-  the END of engine-recovery, which runs after the scoring DB was already wiped) used a
-  plain `write_text` + `chmod`. A torn write there leaves a live engine with unreadable
-  resume state and no second chance. Every redeploy persistence now goes through the
-  document's atomic writer.
-
-* D3 — docs/architecture.md pins the invariant that the NOPASSWD sudoers grant lands
-  BEFORE the DNS fix, whose `sudo` calls soft-fail until the grant exists. redeploy had
-  them inverted; it "worked" only via fix_dns_on_boxes' root guest-agent fallback, after
-  burning an 8x15s retry ladder per box.
-
-Offline; no Proxmox, no SSH."""
+"""The state document's atomic writer and the Linux hardening order in redeploy."""
 
 import json
 import os
@@ -29,7 +13,7 @@ from unittest.mock import MagicMock, patch
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 
-from config import config_ops  # noqa: E402  (the one atomic writer; also the torn-write test's patch target)
+from config import config_ops  # noqa: E402
 import pipeline_api  # noqa: E402
 from estate import state as estate_state  # noqa: E402
 from redeploy import redeploy_engine_ops  # noqa: E402
@@ -69,17 +53,10 @@ ORIGINAL_STATE = {"box_password": "old-secret", "engine_template_vmid": 9100}
 NEW_STATE = {"box_password": "new-secret", "teams": {"team1": {"password": "t1"}}}
 
 
-# The state file is swapped in whole, is 0600 from the instant it exists, and a
-# failed write can never damage the copy already on disk.
+# Swapped in whole, 0600 from creation, one writer for all redeploy persistence.
 class AtomicStateWriteTests(unittest.TestCase):
-    # One writer in the tree, not a local copy per call site: every redeploy persistence
-    # goes through the document's atomic writer.
-
-
-    # The torn-write proof: at the instant of the rename, the destination still
-    # holds the COMPLETE previous state and the temporary holds the COMPLETE new one.
-    # A reader therefore sees old-or-new, never a partial. The old write_text() code
-    # truncated the destination first, which is exactly the state this rules out.
+    # At the rename, old file complete and temp complete: readers see old-or-new,
+    # never a partial.
     def test_target_is_only_replaced_after_the_new_content_is_complete(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "estate-state.json"
@@ -103,16 +80,10 @@ class AtomicStateWriteTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), NEW_STATE)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
-    # Simulated crash right before the rename: the resume state a live range
-    # depends on must still be readable, byte for byte.
-
-
 
 class StateWriteCallSiteTests(unittest.TestCase):
-
-
-    # This is the D1 site: the write runs last, after the engine was re-cloned and
-    # the scoring DB wiped. It must also clear the stale phase-7 done-flags.
+    # The write runs last, after the engine was re-cloned and the scoring DB wiped —
+    # the only persistence left for the live range's resume state.
     def test_engine_recovery_persists_via_helper_after_clearing_phase7_flags(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
@@ -151,7 +122,8 @@ class StateWriteCallSiteTests(unittest.TestCase):
             self.assertNotIn(flag, state)
 
 
-# D3: the sudoers grant must land before the DNS fix (docs/architecture.md).
+# The NOPASSWD sudoers grant must land before the DNS fix: its sudo calls
+# soft-fail until the grant exists (docs/architecture.md).
 class HardeningOrderTests(unittest.TestCase):
     def _run(self, targets):
         ctx = {"ssh_key_path": "/tmp/id_ed25519", "scoring_engine_ip": "10.0.0.9"}
@@ -177,7 +149,6 @@ class HardeningOrderTests(unittest.TestCase):
     def test_auth_grant_lands_before_the_dns_fix(self):
         order, p_auth, p_dns = self._run([LINUX])
         self.assertEqual(order, ["auth", "dns"])
-        # Same linux-scoped target list for both — the order is the only change.
         self.assertEqual(p_auth.call_args.args[0], [LINUX])
         self.assertEqual(p_dns.call_args.args[0], [LINUX])
 

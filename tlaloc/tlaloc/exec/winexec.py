@@ -1,20 +1,4 @@
-"""Windows execution idioms — ONE owner.
-
-The earlier agent shipped six copies of two idioms across the tactics layer and
-they drifted (audited). The rules:
-
-* The landing shell on the base-windows-server template is cmd.exe
-  (DefaultShell), so a plain one-liner must be wrapped for powershell. The
-  wrap is double-quoted because cmd.exe mangles POSIX quoting; therefore a
-  wrapped line must never contain a double quote — an old invariant carried
-  by docstring in every earlier tactic. Here it is ASSERTED at ship time.
-* Multi-line or quote-heavy scripts ship as -EncodedCommand (base64,
-  UTF-16LE) — immune to the cmd->powershell quoting war; it is the cleanest
-  idiom the earlier agent ever produced (the Windows beacon installer ran on
-  it).
-
-Never mix: if you can't say it in one double-quote-free line, use ps().
-"""
+"""Windows execution idioms — ONE owner."""
 
 import base64
 
@@ -26,7 +10,6 @@ class WindowsQuoteError(AssertionError):
 
 
 def assert_shippable(line):
-    """The no-double-quote invariant, enforced in code."""
     if '"' in line:
         raise WindowsQuoteError(
             "Windows wrapped commands must never contain double quotes — "
@@ -38,17 +21,17 @@ def assert_shippable(line):
 
 
 def wrap(line):
-    """Legacy Command-wrap: a single double-quote-free PS line."""
+    # DefaultShell on the base-windows-server template is cmd.exe: the wrap is
+    # double-quoted, so a wrapped line must carry no double quote — ps() otherwise
     assert_shippable(line)
     return _PS_PREFIX + f'-Command "{line}"'
 
 
 def ps(script):
-    """EncodedCommand: any script, quotes included, one argument."""
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     return _PS_PREFIX + f"-EncodedCommand {encoded}"
 
 
 def ps_line(line):
-    """Explicit alias for the legacy single-line style (prefer ps())."""
+    """Alias for the legacy single-line style; prefer ps()."""
     return wrap(line)

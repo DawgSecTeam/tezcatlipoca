@@ -1,26 +1,9 @@
-"""Characterization tests for the teardown redesign: the seven invariants.
-
-These pin the guarantees through the teardown object model's public entry
-points (the machinery's gates and delete primitive, the pre-stop/sweep, the
-plan + engine, and destroy-competition.main()'s wiring). They passed against
-the pre-redesign code and are the acceptance harness: every one stays green
-under the new model, as a first-class property rather than an incidental
-string match.
-
-The seven invariants (docs/internals.md#teardown):
-  I1 ownership is total and verified (full tag set / clone marker / refusal)
-  I2 force by default, but only against owned targets
-  I3 evidence before destruction; a dead box never blocks
-  I4 resumable and idempotent; no flag needed to resume
-  I5 concurrent-safe (same-comp different-run is foreign everywhere)
-  I6 one refusal vocabulary: saw / expected / remedy
-  I7 exit 0 means the estate is clean for this ownership set
-
-Offline: the API is faked at EVERY owning module (infra.client/infra.ownership for the
-Inventory, ownership for the delete primitive) — a partial patch sends
-the other half LIVE, where the ownership guard will refuse it but the test
-would dial the node.
-"""
+"""Characterization tests for the teardown redesign's seven invariants (docs/internals.md#teardown)."""
+# I1 ownership total and verified; I2 force by default, only against owned targets;
+# I3 evidence before destruction, a dead box never blocks; I4 resumable without a flag;
+# I5 same-comp different-run is foreign everywhere; I6 refusals name saw/expected/remedy;
+# I7 exit 0 means the estate is clean for this ownership set. The API is faked at EVERY
+# owning module (infra.client/infra.ownership, teardown.machinery) or the test dials the node.
 
 import contextlib
 import importlib.util
@@ -69,8 +52,6 @@ destroy = load_destroy()
 
 
 class FakePVE:
-# Minimal PVE: node VM listings, per-VM configs, method/path capture.
-
     def __init__(self, nodes=None, cfgs=None, listing_fails=()):
         self.nodes = nodes or {}
         self.cfgs = cfgs or {}
@@ -106,9 +87,6 @@ def vm(vmid, name, tags, status="stopped"):
     return {"vmid": vmid, "name": name, "tags": tags, "status": status}
 
 
-# ── I1: ownership is total and verified ─────────────────────────────────────────
-
-
 @patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None)
 class OwnershipTotality(unittest.TestCase):
     def test_full_tag_set_is_the_only_tags_path_to_destroy(self):
@@ -125,9 +103,9 @@ class OwnershipTotality(unittest.TestCase):
             with self.assertRaises(Refusal) as ctx:
                 ownership.destroy_vm_if_exists("n", 11, expect_tags=OURS.tags)
         msg = str(ctx.exception)
-        self.assertIn("11", msg)                       # saw: the vmid
-        self.assertIn(OTHER_RUN, msg)                  # saw: the tags it carries
-        self.assertIn(RUN, msg)                        # expected: the missing tag
+        self.assertIn("11", msg)
+        self.assertIn(OTHER_RUN, msg)
+        self.assertIn(RUN, msg)
         self.assertEqual(ctx.exception.saw,
                          f"vmid 11 (theirs) carrying tags 'tezcatlipoca;comp-c1;{OTHER_RUN}'")
         self.assertEqual(fake.deleted, [])
@@ -142,8 +120,8 @@ class OwnershipTotality(unittest.TestCase):
                 machinery.load_ownership(comp)
             msg = str(ctx.exception)
             self.assertIn("no run id", msg)
-            self.assertIn("estate-state.json", msg)    # saw
-            self.assertIn("remove it by hand", msg)    # remedy
+            self.assertIn("estate-state.json", msg)
+            self.assertIn("remove it by hand", msg)
             self.assertTrue(ctx.exception.remedy)      # the vocabulary is complete
 
     def test_endpoint_mismatch_is_refused_with_both_endpoints(self):
@@ -156,22 +134,19 @@ class OwnershipTotality(unittest.TestCase):
                 with self.assertRaises(Refusal) as ctx:
                     machinery.load_ownership(comp)
             msg = str(ctx.exception)
-            self.assertIn("https://old:8006", msg)     # saw
-            self.assertIn("https://new:8006", msg)     # expected
-            self.assertTrue(ctx.exception.remedy)      # remedy names the next step
+            self.assertIn("https://old:8006", msg)
+            self.assertIn("https://new:8006", msg)
+            self.assertTrue(ctx.exception.remedy)      # every refusal carries a remedy
 
     def test_sweep_ignores_a_clone_marker_only_vm(self):
-    # The leftover sweep matches TAGS only; an interrupted clone (marker, no
-    #         tags) is reclaimable solely through the guarded delete primitive.
+    # The leftover sweep matches TAGS only; a clone-marker-only VM is reclaimable solely
+        # through the guarded delete primitive.
         fake = FakePVE(nodes={"n": [vm(12, "half-clone", "")]},
                        cfgs={12: {"description": ownership.clone_marker(COMP)}})
         with patch.object(machinery, "proxmox_api", fake), \
                 patch.object(machinery, "wait_for_proxmox_task", lambda *a, **k: None):
             machinery.sweep_tagged_leftovers(["n"], OURS)
         self.assertEqual(fake.deleted, [])
-
-
-# ── I2: force by default, but only against owned targets ────────────────────────
 
 
 class ForceByDefault(unittest.TestCase):
@@ -201,17 +176,12 @@ class ForceByDefault(unittest.TestCase):
         self.assertTrue(seq[-1][2].get("purge"), "destroy must purge (no clean shutdowns)")
 
 
-# ── I3 + I4 + I7: sequencing, resumability and the exit contract via main() ─────
-
-
 TEAMS = {"team1": {"identifier": "101", "password": "x"}}
 BOXES = [{"name": "dc01", "last_octet": 2, "template": "base-windows-server"}]
 
 
 class MainSequence(unittest.TestCase):
-# drives destroy-competition.main() offline with every destructive call
-#     replaced by a log entry — the ordering and the exit contract are the code
-#     under test.
+# drives destroy-competition.main() offline, every destructive call a log entry.
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -254,8 +224,8 @@ class MainSequence(unittest.TestCase):
             patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None),
             patch.object(infra_client, "live_vmids", lambda: []),
             patch.object(red01_ops, "recorded_identity", lambda *a, **k: {"vmid": 999, "ip": "", "node": ""}),
-            # The entry point refuses without the ambient estate identity (teardown's
-            # verify_clean needs it); this harness exercises the sequence, not the refusal.
+            # The entry point refuses without the ambient estate identity (verify_clean
+            # needs it); this harness exercises the sequence, not the refusal.
             patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://pve.invalid:8006"}),
             patch.object(sys, "argv", argv),
         ]
@@ -304,17 +274,11 @@ class MainSequence(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self._main(["--yes"], frozen={"frozen_at": "2026-01-01"})
         self.assertIn("FROZEN", self.out)
-        self.assertIn("--end-of-competition", self.out)     # remedy
+        self.assertIn("--end-of-competition", self.out)
         self.assertEqual(self.log, [])
 
 
-# ── I6: one refusal vocabulary (saw / expected / remedy) ─────────────────────────
-
-
 class RefusalVocabulary(unittest.TestCase):
-# Every refusal names what it saw, what it expected, and what would change
-#     its mind — as structured fields, not just prose.
-
     @patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None)
     def test_untagged_refusal_names_vmid_and_carries_all_three_fields(self):
         fake = FakePVE(nodes={"n": [vm(40, "mystery", "")]}, cfgs={40: {}})
@@ -324,7 +288,7 @@ class RefusalVocabulary(unittest.TestCase):
         self.assertIn("40", str(ctx.exception))
         self.assertIn("UNTAGGED", ctx.exception.saw)
         self.assertTrue(ctx.exception.expected)
-        self.assertIn("clone marker", ctx.exception.detail)  # the one thing that would change its mind
+        self.assertIn("clone marker", ctx.exception.detail)  # what would change its mind
         self.assertTrue(ctx.exception.as_line().startswith("TEARDOWN-REFUSAL "))
 
 

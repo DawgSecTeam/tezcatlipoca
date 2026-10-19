@@ -1,23 +1,4 @@
-"""Proxmox web console: mint a VNC ticket per click and relay the websocket.
-
-Flow (one console open):
-  1. mint(box)   — POST /nodes/<node>/qemu/<vmid>/vncproxy {websocket: 1} on the box's own
-                   Proxmox host, with this competition's console-only token. The {port, ticket}
-                   pair is parked under a random one-shot relay id (RELAY_TTL seconds).
-  2. take(id)    — the browser's noVNC opens /console/ws/<id>; the id is popped (single use).
-  3. relay(...)  — open wss://<host>:8006/.../vncwebsocket?port&vncticket with the token header
-                   and pipe frames both ways until either side closes.
-
-The token never leaves the portal: the browser holds only the relay id and the VNC ticket, which
-noVNC uses as the RFB password and which is useless without the relay. The same wire shape is
-proven live by infra.console.vnc_screenshot (the tools' shared screenshot helper), including
-PVE's quirk that the websocket only completes an RFB 3.3 handshake — the console page caps
-noVNC at 3.3 for that reason.
-
-TLS: Proxmox hosts carry self-signed certs. With a recorded sha256 fingerprint the peer cert is
-pinned (both the vncproxy POST and the websocket); without one the lab default applies — the
-same rule infra.client.proxmox_request uses on the deploy side.
-"""
+"""Proxmox web console: mint a VNC ticket per click and relay the websocket."""
 
 import asyncio
 import hashlib
@@ -49,13 +30,8 @@ class _FingerprintAdapter(HTTPAdapter):
 def vncproxy_mint(endpoint, token, pve_node, vmid, fingerprint=None, timeout=30):
     """Mint a PVE noVNC ticket: POST /nodes/<pve_node>/qemu/<vmid>/vncproxy {websocket: 1}.
 
-    Returns {port: int, ticket: str}. Deliberately self-contained: the portal IMAGE ships
-    only portal/ (portal/Dockerfile + portal.portal_ops._SHIP), so it must not import the
-    driver's `infra` package — `infra/__init__` imports `infra.gates`, which drags the whole
-    deploy driver into the container and dies there (caught live: the portal
-    container raised ModuleNotFoundError on both this import and `requests`). Wire shape and
-    TLS rule match infra.console.vncproxy_mint / infra.client.proxmox_request: pin the peer
-    cert with a recorded sha256, else the lab default (no CA these hosts lack).
+    Returns {port: int, ticket: str}. Self-contained by necessity: the portal image ships only
+    portal/, and importing `infra` drags the deploy driver into the container.
     """
     url = f"{endpoint.rstrip('/')}/api2/json/nodes/{pve_node}/qemu/{int(vmid)}/vncproxy"
     session = requests.Session()
@@ -76,7 +52,7 @@ class ConsoleError(RuntimeError):
 
 
 def _ssl_context():
-    # Verification is by fingerprint (below) or not at all — never by a CA these hosts lack.
+    # Verified by fingerprint (below) or not at all — these hosts have no CA.
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -121,8 +97,8 @@ def upstream_url(node, vmid, port, ticket):
 async def _default_connect(url, headers, node):
     from websockets.asyncio.client import connect
 
-    # ping_interval=None: pveproxy's websocket is a plain relay and is not relied on to
-    # answer pings; a missed pong would tear down a healthy console mid-session.
+    # ping_interval=None: pveproxy never answers pings, and a missed pong tears down a healthy
+    # console mid-session.
     ws = await connect(url, additional_headers=headers, ssl=_ssl_context(),
                        subprotocols=["binary"], max_size=None, ping_interval=None,
                        open_timeout=15)
@@ -136,8 +112,7 @@ async def _default_connect(url, headers, node):
     return ws
 
 
-# mints console tickets and holds the one-shot relay table; `proxy`/`connect` are injectable
-# so the whole flow runs offline in tests
+# `proxy`/`connect` are injectable so the whole flow runs offline in tests
 class ConsoleBroker:
     def __init__(self, nodes, ttl=RELAY_TTL, proxy=vncproxy, connect=_default_connect,
                  clock=time.monotonic):
@@ -159,7 +134,7 @@ class ConsoleBroker:
         for rid in [r for r, e in self._pending.items() if e["expires"] <= now]:
             del self._pending[rid]
 
-    # `owner` is bound to the relay id so only the session that minted it can open it
+    # `owner` is bound to the relay id, so only the minting session can open it
     async def mint(self, box, owner):
         if not self.available(box):
             raise ConsoleError("console access is not configured for this box")
@@ -175,8 +150,7 @@ class ConsoleBroker:
                                        "expires": now + self.ttl}
         return {"relay_id": relay_id, "password": got["ticket"]}
 
-    # a wrong-owner attempt still consumes the id: a leaked relay id is burned by the first
-    # try, whoever makes it
+    # a wrong-owner attempt still consumes the id: a leaked relay id is burned by the first try
     def take(self, relay_id, owner):
         with self._lock:
             now = self._clock()

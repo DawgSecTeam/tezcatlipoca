@@ -1,23 +1,4 @@
-"""persist_windows — the Windows families behind `persist`.
-
-Every test drives the PUBLIC path (`execute("persist", ...)`) against a scripted
-`FakeSSH`, so the handler is exercised exactly the way the loop calls it: family
-choice -> naming -> install -> verify -> record -> restore recipe.
-
-What is asserted, and why:
-
-* the **exact** command text, decoded out of the ``-EncodedCommand`` wrapper —
-  the brief's one hard Windows rule is that every command is composed by
-  ``exec/winexec.py``, so the test asserts `cmd == winexec.ps(<literal script>)`
-  rather than "some powershell ran";
-* `ok=False` with the transport's reason when a plant does not hold, and no
-  artifact / no restore entry recorded for it;
-* the idempotency contract: a second run of the same family is `ok=True` and
-  does NOT append a duplicate artifact (the box-side re-assert);
-* every artifact carries a `check_cmd` that survives the *legacy* wrap
-  (`run.py` re-runs it via `ssh(..., windows=True)` -> `winexec.wrap`, which
-  refuses a double quote) and a restore recipe that names what was planted.
-"""
+"""persist_windows — the Windows families behind `persist`."""
 
 import base64
 import re
@@ -35,8 +16,7 @@ WIN_IP = "192.168.1.20"
 LINUX_IP = "192.168.1.10"
 PASSWORD = "boxpw-1"
 
-# One pinned naming draw (what `artifactnames.windows_names` produces for a
-# plant). Pinning it is what makes "the exact command string" assertable.
+# pinned naming draw: what makes the exact command strings assertable
 NAMES = {
     "stem": "hvdiag",
     "mode": "full",
@@ -68,25 +48,21 @@ TICKS = "637000000000000000"
 TS_OUT = f"TS|{SCRIPT}|{TICKS}|{TICKS}|{TICKS}\n"
 
 
-# --- harness ------------------------------------------------------------------
-
 @pytest.fixture
 def pinned_names(monkeypatch):
-    """Freeze the draw so a plant's every command string is predictable."""
     monkeypatch.setattr(artifactnames, "windows_names",
                         lambda *args, **kwargs: dict(NAMES))
     return dict(NAMES)
 
 
 def decode(cmd):
-    """The PowerShell script inside a winexec.ps() EncodedCommand."""
     marker = "-EncodedCommand "
     assert cmd.startswith("powershell -NoProfile -NonInteractive " + marker), cmd
     return base64.b64decode(cmd.split(marker, 1)[1]).decode("utf-16-le")
 
 
 def scripted(ssh, rc=0, out="", err=""):
-    """Answer every call the same way (the fake's first-match rule wins)."""
+    """The fake's first-match rule wins."""
     ssh.on(lambda call: True, rc=rc, out=out, err=err)
     return ssh
 
@@ -109,7 +85,6 @@ def win_ctx(tmp_path, ssh, *, admin=True, seeded=False, **over):
 
 
 def assert_planted(ssh, script, *, password=PASSWORD):
-    """One round trip, and exactly the command this family is supposed to send."""
     assert len(ssh.calls) == 1, [decode(c["cmd"]) for c in ssh.calls]
     call = ssh.calls[0]
     assert call["ip"] == WIN_IP
@@ -124,10 +99,8 @@ def assert_planted(ssh, script, *, password=PASSWORD):
 def assert_checkable(artifact):
     check = artifact["check_cmd"]
     assert check and "\n" not in check and '"' not in check
-    winexec.assert_shippable(check)     # run.py re-runs it through the legacy wrap
+    winexec.assert_shippable(check)     # run.py re-runs check_cmd through the legacy wrap
 
-
-# --- the front end's contract -------------------------------------------------
 
 def test_the_handler_covers_every_family_persist_names():
     assert set(persist.AUTO_ORDER_WINDOWS) <= set(pw.FAMILIES)
@@ -146,8 +119,6 @@ def test_dry_run_plans_without_touching_the_box(tmp_path, pinned_names):
     assert ssh.calls == []
     assert ctx.world.artifacts() == [] and ctx.world.restore_table() == []
 
-
-# --- one test per family ------------------------------------------------------
 
 def test_scheduled_task_plants_a_system_task(tmp_path, pinned_names):
     ssh = scripted(FakeSSH())
@@ -169,7 +140,7 @@ def test_scheduled_task_plants_a_system_task(tmp_path, pinned_names):
     assert artifact["check_cmd"] == f"schtasks /Query /TN '{TASK}' >$null; {VERIFY}"
     recipe = ctx.world.restore_table()[0]["recipe"]
     assert f"schtasks /Delete /TN '{TASK}' /F" in recipe
-    # the dropped helper is moved aside, never deleted (ROE: move, not delete)
+    # ROE: move, not delete
     assert (f"Move-Item -Path '{SCRIPT}' -Destination "
             f"'{SCRIPT}.tlaloc-bak' -Force") in recipe
 
@@ -195,8 +166,7 @@ def test_runkey_plants_an_hklm_run_value(tmp_path, pinned_names):
                                      "{ exit 0 } else { exit 1 }")
     recipe = ctx.world.restore_table()[0]["recipe"]
     assert f"Remove-ItemProperty -Path '{key}' -Name '{RUN_VALUE}' -Force" in recipe
-    # the payload the box will run is winexec's own EncodedCommand: no hand-rolled
-    # command line survives anywhere in this module
+    # the payload is winexec's own EncodedCommand: no hand-rolled command line survives
     assert pw.SLEEP_CMDLINE in decode(ssh.calls[0]["cmd"])
     assert pw.SLEEP_CMDLINE == winexec.ps("Start-Sleep 600")
 
@@ -291,15 +261,13 @@ def test_watchpair_plants_a_mutual_watchdog_pair(tmp_path, pinned_names):
     assert len(calls) == 1
     script = decode(calls[0]["cmd"])
     assert calls[0]["cmd"] == winexec.ps(script)
-    # both tasks, the shared helper and both payload copies, all derived names
     assert f"-TaskName '{TASK}'" in script and f"-TaskName '{LOG_TASK}'" in script
     assert f"Set-Content -Path '{WATCH_HELPER}'" in script
     assert f"Copy-Item -Path $env:ComSpec -Destination '{WATCH_DIR}\\{TASK}.exe'" in script
     assert f"Copy-Item -Path $env:ComSpec -Destination '{WATCH_DIR}\\{LOG_TASK}.exe'" in script
     # the helper re-registers whichever task is missing — that is the mechanism
     assert "Register-ScheduledTask -TaskName $t" in script
-    # and the payload argv is winexec's EncodedCommand, not a hand-rolled string
-    # (doubled quotes: the helper ships as an array of single-quoted lines)
+    # doubled quotes: the helper ships as an array of single-quoted lines
     assert f"-ArgumentList ''/c {pw.SLEEP_CMDLINE}''" in script
 
     artifact = ctx.world.artifacts(WIN_IP)[0]
@@ -418,7 +386,6 @@ def test_decoy_creates_the_bait_service(tmp_path, pinned_names):
 
 
 def test_hide_covers_every_planted_path(tmp_path, pinned_names):
-    """Several paths in one call, and a check_cmd that verifies all of them."""
     other = f"{WATCH_DIR}\\{TASK}.exe"
     ssh = scripted(FakeSSH(), out=f"HIDDEN|{SCRIPT}\nHIDDEN|{other}\n")
     ctx = win_ctx(tmp_path, ssh, seeded=True)
@@ -441,8 +408,6 @@ def check_hides(check_cmd, path):
 
 
 def test_hide_reports_failure_when_nothing_ends_up_hidden(tmp_path, pinned_names):
-    """rc=0 with no HIDDEN line is NOT success — the earlier agent claimed the
-    plant here."""
     ssh = scripted(FakeSSH(), rc=0, out="")
     ctx = win_ctx(tmp_path, ssh, seeded=True)
     result = execute("persist", {"ip": WIN_IP, "family": "hide"}, ctx)
@@ -458,11 +423,8 @@ def test_timestomp_reports_failure_without_its_own_evidence(tmp_path, pinned_nam
     assert ctx.world.restore_table() == []
 
 
-# --- idempotency --------------------------------------------------------------
-
 def test_a_second_run_reasserts_without_a_duplicate_artifact(tmp_path,
                                                              pinned_names):
-    """The re-plant path: same family, same names, no duplicate artifact."""
     ssh = scripted(FakeSSH())
     ctx = win_ctx(tmp_path, ssh)
     first = execute("persist", {"ip": WIN_IP, "family": "scheduled_task"}, ctx)
@@ -481,12 +443,9 @@ def test_a_second_run_reasserts_without_a_duplicate_artifact(tmp_path,
     assert len(ssh.calls) == 2
     assert ssh.calls[1]["cmd"] == ssh.calls[0]["cmd"], \
         "the re-assert must be the same idempotent install script"
-    # the scripts are idempotent by construction, not by luck
     decoded = decode(ssh.calls[0]["cmd"])
     assert "/F" in decoded and f"schtasks /Query /TN '{TASK}'" in decoded
 
-
-# --- failure paths ------------------------------------------------------------
 
 def test_a_plant_that_does_not_hold_is_ok_false(tmp_path, pinned_names):
     ssh = scripted(FakeSSH(), rc=1, err="Access is denied.")
@@ -508,7 +467,7 @@ def test_a_transport_failure_is_a_failed_result_not_a_crash(tmp_path, pinned_nam
 
 
 def test_a_family_failure_does_not_poison_the_next_family(tmp_path, pinned_names):
-    # only the service plant fails; everything else the box answers cleanly
+    # first-match rule: the SERVICE rule must precede the catchall
     ssh = FakeSSH().on(lambda call: SERVICE in decode(call["cmd"]), rc=1,
                        err="denied")
     ssh.on(lambda call: True, rc=0)
@@ -518,8 +477,6 @@ def test_a_family_failure_does_not_poison_the_next_family(tmp_path, pinned_names
     assert later.ok, later.detail
     assert ctx.world.artifacts(WIN_IP)[0]["kind"] == "persist-decoy"
 
-
-# --- preconditions ------------------------------------------------------------
 
 def test_an_unknown_family_is_a_precondition_rejection(tmp_path, pinned_names):
     ssh = FakeSSH()
@@ -539,7 +496,7 @@ def test_a_user_foothold_is_a_precondition_rejection(tmp_path, pinned_names):
 
 
 def test_the_handler_itself_refuses_a_non_admin_foothold(tmp_path, pinned_names):
-    """Defense in depth: the seed pipeline calls the handler, not the effect."""
+    """The seed pipeline calls the handler, not the effect."""
     ssh = FakeSSH()
     ctx = win_ctx(tmp_path, ssh, admin=False)
     result = pw.apply(ctx, WIN_IP, "runkey", dict(NAMES))
@@ -563,8 +520,6 @@ def test_a_linux_family_is_not_offered_on_a_windows_box(tmp_path, pinned_names):
     assert ssh.calls == []
 
 
-# --- auto + the whole-catalogue contract --------------------------------------
-
 def test_auto_walks_the_order_and_skips_standing_families(tmp_path, pinned_names):
     ssh = scripted(FakeSSH())
     ctx = win_ctx(tmp_path, ssh)
@@ -578,10 +533,7 @@ def test_auto_walks_the_order_and_skips_standing_families(tmp_path, pinned_names
 
 @pytest.mark.parametrize("mode", ["full", "stem", "suffix"])
 def test_every_family_plants_with_the_real_naming_draw(tmp_path, mode):
-    """No pinned names: the handler must work against whatever `artifactnames`
-    draws, in every naming mode. This is the drift guard on the key names and on
-    the one-naming-theme rule (paths, tasks, services and values all come from
-    the draw, never from a literal in the module)."""
+    """Drift guard: works with whatever artifactnames draws, in every naming mode."""
     for family in sorted(pw.FAMILIES):
         seeded = family in ("hide", "timestomp")
         out = (f"HIDDEN|{SCRIPT}\n" if family == "hide"
@@ -610,8 +562,7 @@ def test_every_family_plants_with_the_real_naming_draw(tmp_path, mode):
 @pytest.mark.parametrize("family", sorted(pw.FAMILIES))
 def test_every_family_records_a_checkable_artifact_with_a_restore(tmp_path, family,
                                                                  pinned_names):
-    """The organizer's restore table is a projection of what each family records:
-    an artifact without a check_cmd or without its undo recipe is a blind spot."""
+    """The restore table is each family's record projected; a missing check_cmd or undo is a blind spot."""
     seeded = family in ("hide", "timestomp")
     out = HIDDEN_OUT if family == "hide" else (TS_OUT if family == "timestomp" else "")
     ssh = scripted(FakeSSH(), out=out)

@@ -1,10 +1,4 @@
-"""red01: the red team's VM, its network identity, engine rules and teardown.
-
-Red is a range component like the engine and the team boxes: this module clones it
-from the red template, pins its network, tags it for ownership, writes the engine's
-red-segment firewall, and destroys exactly what the run deployed. No sibling
-checkout, no external teardown vocabulary.
-"""
+"""red01: the red team's VM — clone, network identity, engine rules and teardown."""
 
 import base64
 import subprocess
@@ -22,18 +16,12 @@ from infra.ownership import clone_marker, destroy_vm_if_exists
 RED_USER = "sysadmin"
 NAME = "tlaloc-red01"
 DEFAULT_TEMPLATE = "base-ubuntu24.04-fix"
-# What the agent needs on the box: its config reader and the recon scan. Mythic's own
-# dependencies are Gaia's job.
 # python3-paramiko: tlaloc's SSH transport is paramiko (spray_access, the seed, the
 # implant); without it every box action fails with "No module named 'paramiko'" and the
 # day-0 seed plants nothing while exiting 0.
 DEPS = "python3-yaml python3-paramiko cloud-guest-utils lvm2 nmap"
 ROUTE_NOTE = "192.168.0.0/16"
 
-
-# --------------------------------------------------------------------------- #
-# identity: reserved once per competition, never a shared default
-# --------------------------------------------------------------------------- #
 
 def default_red_vmid(engine_vmid, slots_used):
     """One golden stride past this placement's last golden band."""
@@ -121,9 +109,8 @@ def record_identity(comp_dir, placement, *, vmid, ip, node):
     """Freeze the slot this run created into the state (and the placement, when there is one)."""
     from estate import state
     from multinode.placement_record import write_placement
-    # A single-node deploy has no placement document; the state's own `red` section is
-    # what teardown reads, so it must be written either way — otherwise a range that
-    # dies after the clone leaves a tagged red01 no teardown can claim.
+    # A single-node deploy has no placement document; the state's own `red` section is what
+    # teardown reads, so it must be written either way.
     document = state.EstateState.load(comp_dir)
     document.section("red").update(vmid=int(vmid), ip=ip, node=node)
     document.save()
@@ -133,10 +120,6 @@ def record_identity(comp_dir, placement, *, vmid, ip, node):
                           "explicit_ip": red01_ip_is_explicit(comp_dir)}
     write_placement(comp_dir, placement)
 
-
-# --------------------------------------------------------------------------- #
-# the VM
-# --------------------------------------------------------------------------- #
 
 def ssh_argv(ssh_key, host, remote, timeout=30, user=RED_USER):
     return ["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
@@ -240,9 +223,9 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     if dry_run:
         return {"ok": True, "vmid": vmid, "ip": ip, "node": node, "dry_run": True}
 
-    # 1. Clone (or adopt a resume) and stamp ownership. The clone POST carries the
-    #    competition's marker; the full tag set lands with the config PUT right after,
-    #    so a crash between the two still leaves a VM this competition's teardown claims.
+    # Clone (or adopt a resume) and stamp ownership. The clone POST carries the competition's
+    # marker and the full tag set lands with the config PUT right after, so a crash between
+    # the two still leaves a VM this competition's teardown claims.
     existing = _live(node, vmid, ownership)
     if existing is None:
         tpl = find_template(node, template)
@@ -263,14 +246,14 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     if red_bridge:
         data["net1"] = f"virtio,bridge={red_bridge}"
     _config(node, vmid, data)
-    # Record before any guest work: a range that dies on the next step must still leave a
-    # red01 the teardown can claim (the VM is this run's from the tag PUT onward).
+    # Record before any guest work: a range that dies on the next step must still leave a red01
+    # the teardown can claim (the VM is this run's from the tag PUT onward).
     record_identity(comp_dir, placement, vmid=vmid, ip=ip, node=node)
     start_vm(node, vmid)
     if not wait_for_guest_agent(node, vmid, timeout=420):
         raise RuntimeError(f"red01 vmid {vmid} started but its guest agent never answered")
-    # cloud-init can restart qemu-guest-agent while it installs upgrades, which drops the exec
-    # pid underneath this wait. The wait is idempotent, so re-attach and ask it again.
+    # cloud-init can restart qemu-guest-agent while it installs upgrades, dropping the exec pid
+    # underneath this wait. The wait is idempotent, so re-attach and ask it again.
     for attempt in range(3):
         try:
             _exec(node, vmid, "timeout 300 cloud-init status --wait >/dev/null 2>&1; true", 330)
@@ -280,11 +263,10 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
                 raise
             wait_for_guest_agent(node, vmid, timeout=300)
 
-    # 2. Pin the network ourselves: cloud-init is disabled on this box because a
-    #    kernel-upgrade reboot has come back with no IPv4 at all when it re-applied.
-    # net0 is the management NIC as PVE sees it; match it by MAC. Docker is already on
-    # this box by the time a resume re-pins the network, and picking the iface from the
-    # default route chose a docker bridge once (the mgmt IP landed on br-<hex>).
+    # Pin the network ourselves: cloud-init is disabled on this box because a kernel-upgrade
+    # reboot has come back with no IPv4 at all when it re-applied. net0 is the management NIC
+    # as PVE sees it, matched by MAC — picking the iface from the default route once chose a
+    # docker bridge and put the mgmt IP on br-<hex>.
     cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
     mac = _mac_from_net(cfg.get("net0", ""))
     ifaces = _exec(node, vmid, "ls /sys/class/net/ | grep -v lo").split()
@@ -307,7 +289,7 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     _exec(node, vmid, "rm -f /etc/netplan/50-cloud-init.yaml && netplan apply && "
                       f"ip -4 -brief addr show | grep -qF '{ip}'", 90)
 
-    # 3. The agent's apt dependencies (Mythic's are installed by Gaia).
+    # The agent's apt dependencies (Mythic's are installed by Gaia).
     _exec(node, vmid, "export DEBIAN_FRONTEND=noninteractive; "
                       "apt-get -o DPkg::Lock::Timeout=600 update -qq && "
                       "apt-get -o DPkg::Lock::Timeout=600 install -y -qq " + DEPS, 900)
@@ -342,13 +324,9 @@ def _write(node, vmid, path, content, mode):
     _exec(node, vmid, f"echo '{blob}' | base64 -d > {path} && chmod {mode} {path}", 60)
 
 
-# --------------------------------------------------------------------------- #
-# the engine side: the red segment's rules and the C2 callback
-# --------------------------------------------------------------------------- #
-
 def dnat_destinations(team_identifiers, callback_host=""):
-    """The addresses boxes dial for C2: their own gateway, plus the transit address
-    when an in-path firewall makes the engine reachable that way."""
+    """The addresses boxes dial for C2: their own gateway, plus the transit address when an
+    in-path firewall makes the engine reachable that way."""
     dsts = [f"192.168.{identifier}.1" for identifier in team_identifiers]
     if callback_host and callback_host not in dsts:
         dsts.append(callback_host)
@@ -440,8 +418,8 @@ def install_engine_rules(engine_ip, ssh_key, *, engine_user, team_identifiers,
 
 def remove_engine_rules(engine_ip, ssh_key, *, engine_user, runner=None, timeout=120,
                         team_identifiers=(), callback_port=None, callback_host=""):
-    """Best effort: stop the re-assert and remove the rules and unit (the engine survives
-    a teams-only teardown, so the red segment must not outlive its red01)."""
+    """Best effort: stop the re-assert and remove the rules and unit — the engine survives a
+    teams-only teardown, so the red segment must not outlive its red01."""
     dnat = ""
     if callback_port:
         for dst in dnat_destinations(team_identifiers, callback_host):
@@ -473,10 +451,6 @@ def remove_engine_rules(engine_ip, ssh_key, *, engine_user, runner=None, timeout
 def _tail(proc, n=300):
     return (((getattr(proc, "stderr", "") or "") + (getattr(proc, "stdout", "") or ""))[-n:])
 
-
-# --------------------------------------------------------------------------- #
-# teardown
-# --------------------------------------------------------------------------- #
 
 def destroy(comp_dir, *, ownership, node=None, vmid=None, engine_ip=None, ssh_key=None,
             engine_user=None, runner=None, team_identifiers=(), callback_port=None,

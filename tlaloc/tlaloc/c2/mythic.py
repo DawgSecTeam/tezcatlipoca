@@ -1,27 +1,4 @@
-"""Mythic client — tasking and callback evidence, nothing else.
-
-Mythic 4 removed the `/api/v1.4` REST surface; the data API is GraphQL at
-`/graphql` with a Bearer token (`POST /auth` still issues the access token, and
-built payload files still download from `/direct/download/<agent_file_id>`).
-This module is deliberately thin and injectable (`http=` for auth/download,
-`graphql=` for the data calls) so the whole C2 path is testable offline:
-
-    POST /auth                                  -> {access_token, ...}
-    POST /graphql/ callback(...)                -> [callback rows]
-    POST /graphql  createTask(...)              -> {id: <task id>}
-    POST /graphql  task(...) + response(...)    -> task row (status, output)
-    POST /graphql  createPayload(definition)    -> {uuid: ...}
-    POST /graphql  payload(where: {uuid})       -> build phase + agent_file_id
-    GET  /direct/download/{agent_file_id}       -> the binary
-
-Two behaviours worth stating because v1 got them wrong:
-
-* **liveness is a callback row with a fresh timestamp, never a process.** The
-  tavern lesson: a row survives the agent's death, so `callbacks()` reports
-  `seen_at` and every caller must ask "how old?" — `callback_max_age_sec`.
-* **attribution is the payload description**, set at build time to the box id, so
-  a callback maps to a box without guessing from IPs.
-"""
+"""Mythic 4 client: GraphQL tasking and callback evidence — callback rows survive the agent's death, so liveness is row freshness (c2.callback_max_age_sec), never a process; attribution is the payload description (= box id)."""
 
 import base64
 import json
@@ -32,13 +9,11 @@ from ..errors import C2Error
 
 DEFAULT_TRANSPORTS = ("http", "webhook")
 AGENT_BY_OS = {"linux": "poseidon", "windows": "apollo"}
-# Mythic matches `selected_os` against the payload type's supported_os strings, which are
-# capitalised ("Linux", "Windows", "macOS") — "linux" is rejected as unsupported.
+# selected_os must match the payload type's capitalised supported_os; "linux" is rejected.
 OS_NAME = {"linux": "Linux", "windows": "Windows", "macos": "macOS"}
 
-# Task statuses that mean the task is finished. Mythic reports `submitted`
-# while a task is only QUEUED, so treating it as terminal reported an empty
-# output as success — the exact shape of an unverified step.
+# Mythic reports `submitted` while a task is only queued — treating it as
+# terminal reads an empty output as success.
 TERMINAL_OK = ("completed", "processed", "success")
 TERMINAL_BAD = ("error", "failed", "cancelled", "canceled", "expired")
 
@@ -67,9 +42,7 @@ class MythicClient:
         self.operation_name = c2.get("operation") or ""
         self.verify_tls = bool(c2.get("verify_tls", False))
         self.callback_max_age = float(c2.get("callback_max_age_sec", 120))
-        # The build-time callback address (the engine's DNAT gateway as the team
-        # boxes see it). Passed to every payload build through the profile
-        # parameters; empty means "whatever the profile instance already sets".
+        # The engine's DNAT gateway as the team boxes see it; empty = profile default.
         self.callback_host = str(c2.get("callback_host") or "")
         self.callback_port = int(c2.get("callback_port") or 0)
         self.timeout = float(c2.get("timeout_sec", 30))
@@ -80,8 +53,6 @@ class MythicClient:
         self._token = None
         self.log = log
 
-    # -- plumbing -----------------------------------------------------------
-
     def _password(self):
         if self.password:
             return self.password
@@ -91,7 +62,7 @@ class MythicClient:
     def _request(self, method, path, body=None, *, raw=False, timeout=None):
         if self._http is not None:
             return self._http(method, path, body, timeout or self.timeout)
-        import requests                                     # lazy
+        import requests
         url = f"{self.base_url}{path}"
         headers = {"Content-Type": "application/json"}
         if self._token and path != "/auth":
@@ -124,9 +95,8 @@ class MythicClient:
             return self._graphql_fn(query, variables or {})
         if not self._token:
             self.login()
-        import requests                                     # lazy
-        # nginx exposes the Hasura schema at /graphql/ (no slash is a 301, and a POST
-        # that follows it loses its body), so the trailing slash is load-bearing.
+        import requests
+        # The trailing slash is load-bearing: nginx 301s /graphql and a followed POST loses its body.
         response = requests.post(
             f"{self.base_url}/graphql/",
             json={"query": query, "variables": variables or {}},
@@ -141,8 +111,6 @@ class MythicClient:
             message = (body["errors"][0] or {}).get("message") or body["errors"][0]
             raise C2Error(f"graphql error: {message}")
         return body.get("data") or {}
-
-    # -- evidence -----------------------------------------------------------
 
     CALLBACK_QUERY = """
 query Callbacks($operation: String!) {
@@ -221,12 +189,6 @@ query Payload($uuid: String!) {
         return rows
 
     def callbacks(self):
-        """{box_id: {"seen_at": epoch, "agent": str, "external_id": str}}.
-
-        `seen_at` comes from the row's `last_checkin`; a row with no parseable
-        timestamp is reported with `seen_at=None` so a caller cannot mistake it
-        for fresh.
-        """
         now = self._now()
         out = {}
         for row in self.callback_rows():
@@ -241,12 +203,11 @@ query Payload($uuid: String!) {
                            "host": row.get("host"), "user": row.get("user"),
                            "process": row.get("process_name")}
             if seen is None:
-                out[box_id]["seen_at"] = now      # row exists, age unknown
+                out[box_id]["seen_at"] = now
                 out[box_id]["stale"] = True
         return out
 
     def fresh_callbacks(self):
-        """Callbacks whose last check-in is inside `c2.callback_max_age_sec`."""
         now = self._now()
         return {box: rec for box, rec in self.callbacks().items()
                 if rec.get("seen_at") is not None
@@ -259,8 +220,6 @@ query Payload($uuid: String!) {
             return None
         return rec
 
-    # -- tasking ------------------------------------------------------------
-
     def callback_id_for(self, box_id):
         for row in self.callback_rows():
             if (row.get("description") or row.get("host") or "").strip() == box_id:
@@ -268,7 +227,6 @@ query Payload($uuid: String!) {
         return None
 
     def task(self, box_id, command, *, timeout=120, poll_interval=2.0):
-        """Create one task on the box's callback and wait for its output."""
         if not self.enabled:
             raise C2Error("c2 disabled (c2.enabled / c2.base_url)")
         callback_id = self.callback_id_for(box_id)
@@ -303,17 +261,11 @@ query Payload($uuid: String!) {
         return {"ok": False, "detail": f"task {task_id} not finished within {timeout}s",
                 "output": output, "task_id": task_id}
 
-    # -- payload prep (comp-prep; never mid-event) ---------------------------
-
+    # comp-prep only — never mid-event.
     def build_payload(self, box_id, os_name="linux", transport="http",
                       c2_profile="http", extra=None):
-        """Create a payload build for one box (description = the box id).
-
-        The C2 profile's own parameters ride the build: a payload built with the
-        profile instance's default callback (Mythic installs with a loopback
-        `callback_host`) is a beacon that can never reach the range, and it would
-        only show up as a channel that never checks in.
-        """
+        """The profile's callback params must ride the build: left on the
+        default loopback callback_host, the payload can never reach the range."""
         agent = AGENT_BY_OS.get(os_name, "poseidon")
         profile: dict = {"c2_profile": c2_profile}
         params = self.profile_parameters(extra)
@@ -334,7 +286,6 @@ query Payload($uuid: String!) {
                 "callback": self.callback_summary()}
 
     def profile_parameters(self, extra=None):
-        """`c2_profile_parameters` for a build, from config + per-call extras."""
         params = {}
         if self.callback_host:
             params["callback_host"] = self.callback_host
@@ -346,18 +297,15 @@ query Payload($uuid: String!) {
         return params
 
     def callback_summary(self):
-        """What a built payload was told to dial (recorded in the manifest)."""
         return {"host": self.callback_host, "port": self.callback_port}
 
     def wait_for_payload(self, uuid, timeout=600, poll_interval=3.0):
-        """Poll until the payload's build finishes; a build is asynchronous."""
         deadline = self._now() + timeout
         last = {}
         while self._now() < deadline:
             last = self.payload_status(uuid)
             phase = str(last.get("build_phase") or "").lower()
-            # Mythic 4 reports a finished build as "success"; the older REST shape was
-            # "built". Both mean the file exists.
+            # "success" is the Mythic 4 finished phase; "built" is the older REST shape.
             if phase in ("built", "success", "completed"):
                 return last
             if phase in ("error", "failed"):
@@ -385,7 +333,6 @@ query Payload($uuid: String!) {
         return path
 
     def operation(self):
-        """The competition's operation row (gives the loop a cheap liveness gate)."""
         return {"name": self.operation_name,
                 "callbacks": len(self.callbacks())}
 
@@ -404,7 +351,6 @@ def _epoch(value):
 
 
 def _responses_text(rows):
-    """Mythic stores agent output base64-encoded in `response.response_text`."""
     chunks = []
     for row in rows or []:
         if not isinstance(row, dict):
@@ -420,7 +366,6 @@ def _responses_text(rows):
 
 
 def _task_output(row):
-    """Mythic stores task output as a JSON string in `response`/`output`."""
     if not row:
         return ""
     for key in ("response", "output", "stdout"):

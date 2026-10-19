@@ -1,11 +1,4 @@
 """tlaloc CLI — one entry point for the operator, the engine and the seed stage.
-
-Every subcommand builds the same context (run.build_context) and goes through the
-same registry, so nothing here can do something the loop could not. Commands that
-touch a live range refuse to guess: `--dry-run` is explicit, a competition dir is
-required for a real event, and `verify-config` exists because the config the red
-VM actually reads is the one the deploy pipeline pushed — not the one in the repo
-(the lesson that cost a whole event's C2 channel).
 """
 
 import argparse
@@ -19,13 +12,8 @@ from . import run as run_mod
 from . import seed as seed_mod
 from .errors import ConfigError, TlalocError
 
-# The fields the red VM reads — one entry per leaf of config.DEFAULTS. Anything
-# the deploy pipeline pushes to /etc/tlaloc/config.yaml MUST carry all of these or
-# the feature is dead on the VM while every local test stays green (the earlier
-# agent shipped a whole feature that way). The engine imports this list from here (`tlaloc
-# verify-config --print-contract`) so there is exactly one definition, and
-# tests/test_config_contract.py fails if a DEFAULTS leaf is not listed — the list
-# is generated from DEFAULTS and kept honest by that test, not by memory.
+# Fields the deploy pushes to /etc/tlaloc/config.yaml; an unlisted DEFAULTS leaf is
+# dead on the VM while local tests stay green. The engine and tests/test_config_contract.py key off this list.
 CONFIG_CONTRACT = (
     "c2.base_url",
     "c2.callback_host",
@@ -118,18 +106,6 @@ def _dotted(cfg, path):
 
 
 def verify_config(cfg, *, pushed=None):
-    """Compare the EFFECTIVE config with what the red VM ends up with.
-
-    The pushed file is a diff against `config.DEFAULTS` — the deploy writes what
-    it knows and red01 falls back to the documented default for everything else —
-    so a field absent from it is NOT a defect by itself. The defect is a field
-    whose effective value on the VM would differ from the effective value here:
-    that is a feature silently running on the wrong knob (or dead) on red01 while
-    every local test stays green, which is the lesson this check exists for.
-
-    Returns a list of {field, problem} — a per-field diff, not a boolean (the
-    earlier agent's deploy failed opaquely).
-    """
     problems = []
     for field in CONFIG_CONTRACT:
         local = _dotted(cfg, field)

@@ -1,31 +1,12 @@
-"""The choke point: every action path passes through this gate.
-
-The earlier agent's central lesson in one file: safety that is a convention is
-safety that drifts (POSIX-only lint in front of cmd.exe, an unlinted FIFO RUN
-path, a plant tactic that forgot ensure_target, a dead ensure_retries). tlaloc:
-
-* ONE gate object, called by the shared effect execute() template — an effect
-  cannot forget ensure_target, the kill switch, or the lint.
-* danger_lint takes an OS and screens with the matching pattern set: the earlier
-  agent's lint was POSIX-only while the same path fronted cmd.exe/powershell —
-  del /f /s /q, format, Remove-Item -Recurse -Force, Stop-Computer, diskpart,
-  reg delete, cipher /w all sailed through. The Windows set below closes
-  exactly that audited list (deliberately blunt: a false positive just costs
-  one candidate; a false negative is unrecoverable).
-* Free-form command screening (length cap, one line) lives here too, so the
-  cap is not re-typed per effect.
-* clef never opens a gate: its command_intent classification informs
-  attribution and ranking; hard safety stays deterministic.
-"""
+"""The one gate every action path passes through via execute(); the model never opens it — hard safety stays deterministic."""
 
 import ipaddress
 import re
 
 from ..errors import GuardrailError
 
-# --- POSIX -------------------------------------------------------------------
-# Screened for LLM-authored commands (improvise, task_channel). Combined-flag
-# forms evade naive "-r ... -f" matching, so rm with ANY flags is banned.
+# Screened for LLM-authored commands (improvise, task_channel). rm with ANY
+# flags is banned: combined-flag forms evade naive "-r ... -f" matching.
 DANGEROUS_POSIX = [
     (r"\brm\s+(-|--)[A-Za-z]", "rm with flags (recursive/force)"),
     (r"\bfind\b[^;|&]*-exec\b[^;|&]*\brm\b", "find -exec rm"),
@@ -42,9 +23,7 @@ DANGEROUS_POSIX = [
      "root password change"),
 ]
 
-# --- Windows -------------------------------------------------------------------
-# The audited gap, closed: every pattern is one the earlier agent's POSIX lint
-# let through in front of cmd.exe / powershell.
+# Blunt by design: a false positive costs one candidate, a false negative is unrecoverable.
 DANGEROUS_WINDOWS = [
     (r"\bdel\b[^\n]*\s/[a-z]*[fs]", "del /f or /s (forced/recursive delete)"),
     (r"\brd\s+[^\n]*/s\b", "rd /s recursive delete"),
@@ -64,9 +43,8 @@ DANGEROUS_WINDOWS = [
 
 
 def danger_lint(command, os_name="linux"):
-    """Return a rejection reason for destructive shell input, else None.
-    Pattern-set choice by TARGET os — the audited defect was one shared POSIX set
-    in front of both."""
+    # The set MUST match the target os: the audited defect was one POSIX-only lint
+    # fronting cmd.exe, so every Windows destructive path ran unlinted.
     patterns = DANGEROUS_WINDOWS if str(os_name).lower() == "windows" else DANGEROUS_POSIX
     for pattern, why in patterns:
         if re.search(pattern, command, re.IGNORECASE if str(os_name).lower() == "windows" else 0):
@@ -92,9 +70,7 @@ class Gate:
             return
 
     def ensure_target(self, ip):
-        """Team subnets (+ explicit run.blue_ips) are the only reachable
-        targets. The engine, Proxmox, vulndb, C2 and the model endpoints are
-        structurally unreachable as targets."""
+        """Team subnets + run.blue_ips only — engine, Proxmox, C2, model endpoints are structurally unreachable."""
         addr = ipaddress.ip_address(ip)
         if not any(addr in net for net in self.networks + self.blue_nets):
             raise GuardrailError(
@@ -102,9 +78,6 @@ class Gate:
                 f"{[str(n) for n in self.networks]} — refusing")
 
     def ensure_retries(self, world, ip, key):
-        """Cap consecutive failures per (ip, key) so we do not hammer a dead
-        end. The earlier agent had this dead code; here the spray/reestablish
-        effects call it."""
         tries = world.target(ip).get("creds_tried", {}).get(key, 0)
         if tries >= self.max_retries:
             raise GuardrailError(
@@ -112,7 +85,6 @@ class Gate:
                 "— pick another target")
 
     def ensure_command(self, command, os_name="linux"):
-        """Full free-form screening: length, one-line, per-OS content lint."""
         if command is None or not str(command).strip():
             raise GuardrailError("empty command")
         cmd = str(command)

@@ -1,11 +1,4 @@
-"""Per-phase unit tests for the extracted deploy phases (deploy_lib/phases/).
-
-Only the decidable parts are tested — the branching, ordering and state writes each phase
-owns. Every infrastructure call is patched: none of these tests touches Proxmox, SSH or
-the network. They are the offline half of "the phase boundary is a call boundary"; the
-byte-identity of the shell/config these phases generate is covered by the modules that own
-that generation.
-"""
+"""Per-phase unit tests for the extracted deploy phases (deploy_lib/phases/), fully offline."""
 
 import contextlib
 import io
@@ -34,7 +27,6 @@ from nakonops.nakon_run_ops import NakonResult  # noqa: E402
 
 
 def _ctx(comp_dir, **overrides):
-# A DeployContext with harmless defaults; override what a test exercises.
     fields = dict(
         comp_dir=comp_dir, comp_name=comp_dir.name,
         state_path=comp_dir / "estate-state.json", from_phase=1, resuming=False,
@@ -65,9 +57,8 @@ def _nulltimed():
 
 
 class Phase1Cleanup(unittest.TestCase):
-    """Phase 1 no longer tears a range down: it reclaims the untagged interrupted clones
-    (infra.ownership.MARKER) at this deploy's own slots and resets the comp dir. Every VM a
-    run owns is preflight's business (infra.collisions refusal + destroy-competition.py)."""
+    """Phase 1 reclaims untagged interrupted clones (MARKER) at this deploy's own slots and
+    resets the comp dir; owned VMs are preflight's business, never destroyed here."""
 
     def _run(self, ctx, vms=(), verdicts=None):
         calls = types.SimpleNamespace(destroyed=[], markers=[])
@@ -105,8 +96,8 @@ class Phase1Cleanup(unittest.TestCase):
         self.assertIn("reclaiming", out)
 
     def test_a_range_leftover_is_never_destroyed_here(self):
-        # OWNED (this comp dir's own run) and MISSING (another worktree's) are both a
-        # leftover RANGE: preflight refuses the deploy, and phase 1 must not touch it.
+        # OWNED (this comp dir's own run) and MISSING (another worktree's) are both a leftover
+        # RANGE: preflight refuses the deploy, and phase 1 must not touch it.
         for verdict in (OWNED, MISSING):
             with self.subTest(verdict=verdict), tempfile.TemporaryDirectory() as d:
                 calls, _out = self._run(self._comp(d),
@@ -157,11 +148,9 @@ class Phase6PredomainPass(unittest.TestCase):
 
 
     def test_a_lineup_with_no_postclone_configs_records_a_clean_verdict(self):
-    # caught live: a lineup whose configs are ALL golden-stage
-    #         (same-type-2box) never reached record_stage_coverage, so
-    #         `plant_coverage_failed` was never created and verify's coverage gate failed
-    #         closed on a completely clean run — "coverage was never recorded (pre-tally
-    #         deploy?)". "Nothing to plant post-clone" is a clean result, not an absent one.
+    # A lineup whose configs are ALL golden-stage never reached record_stage_coverage, so verify's
+    #         coverage gate failed closed on a clean run. "Nothing to plant post-clone" is clean,
+    #         not absent.
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             ctx = _ctx(comp_dir)
@@ -179,15 +168,10 @@ class Phase6PredomainPass(unittest.TestCase):
 
 
 class Phase4GoldenCoverage(unittest.TestCase):
-# Phase 4 records the golden plant's coverage verdict like a post-clone stage's:
-#     the closure threaded into build_golden_set writes plant_coverage_failed (and the
-#     stage-prefixed tally on tolerated failures) and persists through ctx.save_state.
-#     The integration halves join here with the REAL check_plant_coverage — a golden-only
-#     lineup (same-type-2box shape) must come out PASS on a clean plant and FAIL, with
-#     the (golden-stage) annotation, on an alpine-tolerated one.
+    # The closure threaded into build_golden_set writes plant_coverage_failed and the
+    #     stage-prefixed tally, persisted through ctx.save_state.
 
     def _run_phase4(self, comp_dir):
-    # Run phase4_golden_set with build_golden_set faked; returns (ctx, coverage).
         captured = []
         ctx = _ctx(comp_dir, golden_hashes={}, golden_inputs={})
         with dpatch("load_template_hashes", return_value={}), \
@@ -211,9 +195,8 @@ class Phase4GoldenCoverage(unittest.TestCase):
 
     @staticmethod
     def _gate(comp_dir, machines):
-    # The real plant-coverage gate against a real comp dir.
-    #         Returns (gate, stdout); status compared by NAME — this helper loads its own
-    #         module copy, so the gate's Status enum is not the caller's object.
+    # The real plant-coverage gate; status compared by NAME — this helper loads its own
+        # module copy, so the gate's Status enum is not the caller's object.
         (comp_dir / "nakon-config.json").write_text(
             json.dumps({"machines": machines}))
         import verifier.state_gates as v_state_gates  # noqa: E402
@@ -259,9 +242,8 @@ class Phase4GoldenCoverage(unittest.TestCase):
         self.assertIn("apache (golden-stage)", out)
 
     def test_a_skip_verdict_never_erases_a_recorded_failure(self):
-    # result=None (reuse / checkpoint / pristine / cold): the record must come
-    #         into existence if absent, but an already-recorded failure survives — the
-    #         disk is proven by hash, not by a fresh plant.
+    # result=None (reuse / checkpoint / pristine / cold): the record must come into existence
+    #         if absent, but a recorded failure survives — the disk is proven by hash.
         with tempfile.TemporaryDirectory() as d:
             comp_dir = Path(d)
             ctx, coverage = self._run_phase4(comp_dir)
@@ -305,10 +287,9 @@ class Phase7Seed(unittest.TestCase):
 
 
     def test_hold_start_seeds_without_starting_and_defers_injects(self):
-    # --hold-start: teams are seeded (identifiers posted, clock NOT started), the
-    #         engine stays paused and injects are deferred to competition-ops start —
-    #         their windows anchor at creation time, so creating them here would
-    #         open them before T0.
+    # --hold-start: teams are seeded (identifiers posted, clock NOT started) and the engine stays
+    #         paused. Inject windows anchor at creation time, so creating them here opens them
+    #         before T0.
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), state={"hold_start": True}, injects=[{"title": "i1"}])
             with dpatch("wait_for_http",
@@ -346,8 +327,8 @@ class Phase7Seed(unittest.TestCase):
         self.assertIn("1 inject(s) failed to create: Bad inject", out.getvalue())
 
     def test_an_inject_added_after_the_first_run_is_not_skipped(self):
-    # The bug: `injects_created` was a bare boolean, so a new inject was never
-    #         posted on a resume — create_injects dedups on titles, but nothing re-ran it.
+    # `injects_created` was a bare boolean, so a new inject was never posted on a resume —
+    #         create_injects dedups on titles, but nothing re-ran it.
         with tempfile.TemporaryDirectory() as d:
             ctx = _ctx(Path(d), state={"seeded": True, "engine_unpaused": True},
                        injects=[{"title": "i1"}, {"title": "i2"}])
@@ -397,16 +378,13 @@ class Phase7Seed(unittest.TestCase):
 
 
 class Phase2EngineTemplate(unittest.TestCase):
-# The reuse-vs-rebuild decision, which is the whole point of the M4 hash gate.
-
     ENV = {"TEZ_PROXMOX_TEMPLATE_VM_ID": "9000", "TEZ_ENGINE_USERNAME": "ubuntu",
            "TEZ_SSH_PUBLIC_KEY": "ssh-rsa AAAA", "TEZ_PROXMOX_ENDPOINT": "https://pve:8006/",
            "TEZ_ENGINE_MGMT_GW": "10.0.0.1"}
 
     def _run(self, ctx, stored_node_hash):
         record = types.SimpleNamespace(destroyed=[], built=0, tf=[], retagged=[])
-        # ExitStack, not one giant with: this harness sits at Python's 20-block
-        # compile limit, and a 20th statically nested with-item is a SyntaxError.
+        # ExitStack, not one giant with: a 20th statically nested with-item is a SyntaxError.
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.dict(os.environ, self.ENV))
             for target, kwargs in [
@@ -423,8 +401,7 @@ class Phase2EngineTemplate(unittest.TestCase):
                 ("write_text_atomic", {}),
                 ("forget_engine_host_key", {}),
                 ("wait_for_ssh", {}),
-                # The estate seams: the engine/bridge create, its coordinates, and the
-                # guest-side netplan are all exercised by their own tests.
+                # Estate seams (engine/bridge create, guest-side netplan) have their own tests.
                 ("configure_engine_network", {}),
                 ("engine_context",
                  dict(return_value={"scoring_engine_ip": "10.0.0.99", "ssh_key_path": "/k",
@@ -455,8 +432,7 @@ class Phase2EngineTemplate(unittest.TestCase):
             record, _out = self._run(ctx, stored_node_hash="HASH")
         self.assertEqual(record.destroyed, [])
         self.assertEqual(record.built, 0)
-        # Reuse re-stamps ownership to this run (a template adopted from a
-        # pre-run-id deploy carries no run tag).
+        # Reuse re-stamps ownership: a template adopted from a pre-run-id deploy carries no run tag.
         self.assertEqual(record.retagged, [900])
         self.assertEqual(ctx.state["engine_template_vmid"], 900)
         self.assertEqual(record.engine_clone_id, 900)

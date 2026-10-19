@@ -1,16 +1,4 @@
-"""spray_access — the credential-spray port: candidates, caps, and honesty.
-
-What these tests are for (the defects from the earlier agent this effect is
-shaped by):
-
-* candidates come from intel per box, not from a table in the module;
-* the attempt cap and the per-login retry cap bound the work, and a cap hit with
-  no working credential is ``ok=False`` (the earlier agent returned ``ok=True``
-  there and the
-  seed recorded `access` for boxes it had never entered);
-* a box that stops answering costs two probes, not the whole cap;
-* nothing is planted, so nothing needs an undo recipe.
-"""
+"""spray_access — the credential-spray port: candidates, caps, and honesty."""
 
 from tests.helpers import DEFAULT_COMP, FakeSSH, base_cfg, make_ctx
 from tlaloc.effects import execute
@@ -23,8 +11,6 @@ WIN_IP = "192.168.1.20"
 
 
 def _ctx(tmp_path, ssh, cfg=None, **over):
-    """A live ctx on the fixture range, with the earlier agent's human-mimic
-    delay switched off."""
     cfg = cfg or base_cfg(limits={"spray_delay_sec": 0})
     ctx = make_ctx(tmp_path, cfg=cfg, comp_dir=FIXTURE, ssh=ssh, compfile=False,
                    **over)
@@ -33,7 +19,6 @@ def _ctx(tmp_path, ssh, cfg=None, **over):
 
 
 def _silent_intel():
-    """nakon with every credential fact taken away (an honest empty intel)."""
     from tlaloc.intel.nakon import NakonIntel
 
     class Silent(NakonIntel):
@@ -49,16 +34,14 @@ def _silent_intel():
     return Silent(FIXTURE)
 
 
-# --- candidates -----------------------------------------------------------------
-
 def test_candidates_are_intel_facts_first_then_bounded_guesses(tmp_path):
     ctx = _ctx(tmp_path, FakeSSH())
     pairs = candidate_pairs(ctx, IP)
     facts = list(ctx.intel.candidate_pairs(IP))
     assert facts and pairs[:len(facts)] == facts, \
         "intel's per-box facts are tried before any generic guess"
-    # nakon planted pam_permit on this box: any password authenticates, and that
-    # is one of the facts — not something this module knows about.
+    # a planted pam_permit makes any password authenticate — an intel
+    # fact, not module knowledge.
     assert ("root", PAM_ANY_PASSWORD) in facts
     assert len(pairs) > len(facts), "the generic pool follows the exact pairs"
 
@@ -66,10 +49,8 @@ def test_candidates_are_intel_facts_first_then_bounded_guesses(tmp_path):
 def test_windows_candidates_use_the_machine_account(tmp_path):
     ctx = _ctx(tmp_path, FakeSSH())
     pairs = candidate_pairs(ctx, WIN_IP)
-    assert pairs[0] == ("Administrator", "boxpw-1")           # nakon machine account
+    assert pairs[0] == ("Administrator", "boxpw-1")
 
-
-# --- planning -------------------------------------------------------------------
 
 def test_dry_run_plans_without_touching_the_box(tmp_path):
     ssh = FakeSSH()
@@ -80,11 +61,8 @@ def test_dry_run_plans_without_touching_the_box(tmp_path):
     assert ctx.world.foothold(IP) is None
 
 
-# --- the happy path --------------------------------------------------------------
-
 def test_spray_lands_a_foothold_with_the_exact_probe(tmp_path):
     ssh = FakeSSH()
-    # the first ground-truth pair is refused, the next one works
     ssh.on(lambda call: call["user"] == "ubuntu", rc="raise",
            err="ssh ubuntu@192.168.1.10: Authentication failed.")
     ssh.on(lambda call: call["user"] == "svc-backup", rc=0, out="svc-backup\n")
@@ -122,10 +100,8 @@ def test_windows_boxes_probe_with_whoami(tmp_path):
     assert ctx.world.foothold(WIN_IP)["windows"] is True
 
 
-# --- give-up paths ---------------------------------------------------------------
-
 def test_a_cap_hit_is_not_a_success(tmp_path):
-    ssh = FakeSSH().on("id -un", rc=0, out="")               # answers, never a login
+    ssh = FakeSSH().on("id -un", rc=0, out="")
     ctx = _ctx(tmp_path, ssh, cfg=base_cfg(limits={"spray_delay_sec": 0,
                                                    "cred_spray_max": 2}))
     result = execute("spray_access", {"ip": IP}, ctx)
@@ -156,8 +132,6 @@ def test_a_login_at_the_retry_cap_is_skipped_not_hammered(tmp_path):
     assert ssh.calls and all(call["user"] != "root" for call in ssh.calls)
     assert result.data["user"] == "ubuntu"
 
-
-# --- preconditions ---------------------------------------------------------------
 
 def test_check_rejects_a_box_with_nothing_to_spray(tmp_path):
     ssh = FakeSSH()

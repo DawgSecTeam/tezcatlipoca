@@ -2,25 +2,13 @@
 
 
 def record_coverage(state, stage_machines, result):
-# Record per-machine unplanted configs in state (M4 plant-coverage source).
-#
-#     The expectation side is implicit — nakon-config.json is verify's source of truth.
-#     This records only failures: machine -> [config names whose step reported rc != 0],
-#     or every config when a machine died before reporting any step.
-#
-#     The golden plant (phase 4) records through the same shape via build_golden_set's
-#     coverage callback, under '{box}-golden' keys (satellite slots: '{box}-golden-slot{N}')
-#     that verify maps onto every team copy of the box: a strict-mode failure aborts the
-#     deploy before anything is recorded, but an alpine_services-tolerated failure is a
-#     real gap on the golden disk and must reach the gate. A machine whose stage reported
-#     NO failed steps drops its stale entry: a recovered config (replanted by a later
-#     sweep) must not keep the coverage gate red forever (SMB v1 stayed 'failed' across
-#     three green replants on the run that found this).
+    # Records failures only (verify's expectation side is nakon-config.json).
+    # Golden-plant failures land under '{box}-golden' keys verify maps to team copies.
     failed = result.failed_configs()
     cov = state.setdefault("plant_coverage_failed", {})
     if not failed:
         for m in stage_machines:
-            cov.pop(m["name"], None)
+            cov.pop(m["name"], None)  # a recovered config must not keep the gate red
         return
     for m in stage_machines:
         bad = failed.get(m["name"])
@@ -33,28 +21,15 @@ def record_coverage(state, stage_machines, result):
 
 
 def record_stage_coverage(state, stage_machines, result, save_state):
-# Record one post-clone stage's coverage AND persist it, unconditionally.
-#
-#     record_coverage's stale-entry clearing only counts once it reaches disk. A phase-6
-#     guard on the nakon tally (`if state["nakon_failed_steps"]`) lost a fully-green pass's
-#     stale-pop at process exit and verify's coverage gate stayed red — re-creating the
-#     stale-entry bug this gate exists for ("SMB v1 stayed 'failed' across three green
-#     replants"). The window is narrow but real: phase-6 tally empty, final pass fully
-#     green, and the stale entry belongs to a final-only machine (one carrying just
-#     systemd-system-masked / hosts-redirect-linux, so predomain_machines never names it).
-#     save_state is injected so the always-persist invariant is testable without a real
-#     state file.
+    # Always save: a green pass's stale-entry pop is lost if persistence rides on
+    # the caller's "tally non-empty" condition, and verify's gate stays red.
     record_coverage(state, stage_machines, result)
     save_state()
 
 
 def record_clean_coverage(ctx):
-# Record the "nothing to plant here" verdict for a post-clone stage.
-#
-#     A stage with no configurations is a clean result, not an absent one: without the
-#     keys verify's coverage gate fails closed with "coverage was never recorded"
-#     (caught live). Shared by phase 6 (no pre-domain configs) and phase 7
-#     (no final-stage configs).
+    # A stage with nothing to plant is clean, not absent: without these keys
+    # verify's coverage gate fails closed ("coverage was never recorded").
     ctx.state.setdefault("plant_coverage_failed", {})
     ctx.state.setdefault("nakon_failed_steps", [])
     ctx.save_state()

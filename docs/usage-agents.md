@@ -1,6 +1,6 @@
 # Usage — agents
 
-Non-interactive driving: flags, pre-authored configs, machine-readable validation. One-time Proxmox/template setup is in [usage-people.md](usage-people.md#prerequisites-one-time-per-proxmox-host). Central runs + MCP: [tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard) (address/token: `infrastructure-status.md`, gitignored).
+Non-interactive driving: flags, pre-authored configs, machine-readable validation. One-time Proxmox/template setup is in [usage-people.md](usage-people.md#prerequisites-per-proxmox-host). Central runs + MCP: [tezcatlipoca-dashboard](https://github.com/DawgSecTeam/tezcatlipoca-dashboard) (address/token: `infrastructure-status.md`, gitignored).
 
 ## `create-competition.py`
 

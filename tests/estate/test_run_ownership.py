@@ -1,12 +1,4 @@
-"""Per-deploy run-identity ownership (a near-miss).
-
-Two worktrees deployed the SAME competition ID concurrently; every destruction
-guard matched on `comp-<name>` tags alone, so either session's phase 1 or teardown
-could destroy the other's VMs. The fix: a run id minted per competition directory,
-stamped on everything the deploy creates, and required by every destruction path.
-These tests pin the fail-closed behavior: an untagged VM, a same-comp VM from a
-DIFFERENT run, and a foreign VM all survive; only the full ownership set is
-touchable. Offline; fake Proxmox API."""
+"""Every destruction path requires the full ownership set (comp tag + per-comp-dir run id); untagged and other-run VMs are never touched — fail-closed."""
 
 import contextlib
 import io
@@ -64,11 +56,9 @@ from infra.plan import multinode_plan  # noqa: E402
 
 
 class FakePVE:
-# Minimal PVE: node VM listings, per-VM configs, DELETE/PUT capture.
-
     def __init__(self, nodes=None, cfgs=None, listing_fails=()):
-        self.nodes = nodes or {}          # node -> [vm dicts]
-        self.cfgs = cfgs or {}            # vmid -> config dict
+        self.nodes = nodes or {}
+        self.cfgs = cfgs or {}
         self.listing_fails = set(listing_fails)
         self.deleted = []
         self.puts = []
@@ -96,15 +86,12 @@ class FakePVE:
 
 
 def vm(vmid, name, tags, status="stopped", template=None):
-    # `template` is PVE's own flag on the qemu listing — the role templates a teams-only
-    # teardown keeps are exactly the entries that carry it.
+    # template= is PVE's own listing flag; keep_templates targets exactly those entries.
     return {"vmid": vmid, "name": name, "tags": tags, "status": status, "template": template}
 
 
 @patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None)
 class DestroyVmOwnership(unittest.TestCase):
-# The shared delete primitive: only proven ownership is touchable.
-
     def test_untagged_vm_is_refused(self):
         fake = FakePVE(nodes={"n": [vm(4150, "mystery-box", "")]},
                        cfgs={4150: {}})
@@ -131,8 +118,6 @@ class DestroyVmOwnership(unittest.TestCase):
         self.assertEqual(fake.deleted, [])
 
     def test_the_clone_marker_is_not_enough_when_a_run_must_be_proven(self):
-        # The orphan reclaim has no comp dir to consult, so the comp-level marker (which names
-        # no run) must not be adopted: it can be a live worktree's interrupted clone.
         fake = FakePVE(nodes={"n": [vm(4150, "half-clone", "")]},
                        cfgs={4150: {"description": infra.ownership.clone_marker(COMP)}})
         with patch.object(ownership, "proxmox_api", fake):
@@ -160,8 +145,6 @@ class DestroyVmOwnership(unittest.TestCase):
 
 
 class LeftoverSweep(unittest.TestCase):
-# sweep_tagged_leftovers: only the full run-id-scoped ownership set is swept.
-
     def test_run_scoped_sweep_leaves_other_runs_alone(self):
         fake = FakePVE(nodes={"n": [vm(2300, "ours", OURS),
                                     vm(2313, "other-run", OTHER, status="running"),
@@ -180,11 +163,7 @@ class LeftoverSweep(unittest.TestCase):
         self.assertEqual(fake.deleted, [])
 
     def test_a_teams_only_teardown_keeps_the_role_templates(self):
-        """--teams-only exists to keep the validated golden + engine templates. The deploy
-        re-stamps a reused template with THIS run's tag (so the strict guard recognizes it),
-        which put it inside the sweep's ownership match: caught live: run-ee5717cd swept
-        engine-template vmid 2241 on a teams-only teardown, so the next deploy rebuilt what
-        the practice run had just validated."""
+        # Regression: re-stamped reused templates match the sweep; keep_templates must spare them.
         fake = FakePVE(nodes={"n": [vm(2241, "engine-template", OURS, template=1),
                                     vm(2300, "leftover", OURS)]})
         with patch.object(destroy_sweep_ops, "proxmox_api", fake), \
@@ -202,8 +181,7 @@ class LeftoverSweep(unittest.TestCase):
 
 
 class PreStopOwnership(unittest.TestCase):
-# pre_stop_windows_boxes: a name match alone must not hard-stop another run.
-
+    # Ownership must be proven before a hard-stop: a name match alone is another run's box.
     TEAMS = {"team1": {"identifier": "101", "password": "x"}}
     BOXES = [{"name": "web01"}]
 
@@ -220,11 +198,6 @@ class PreStopOwnership(unittest.TestCase):
 
 
 class ReportRemainingClassification(unittest.TestCase):
-# verify_clean (the engine's exit contract) is the successor of
-#     report_remaining: every competition-tagged survivor is classified —
-#     OURS (a problem: the teardown failed on it), same comp DIFFERENT run
-#     (a note: another worktree's), or competition-tagged with no run tag.
-
     def test_ours_other_run_and_untagged_run_are_distinguished(self):
         from teardown import TeardownContext, TeardownEngine, Inventory
         fake = FakePVE(nodes={"n": [vm(2300, "ours", OURS),
@@ -296,8 +269,7 @@ class DeployContextTags(unittest.TestCase):
 
 
 class RunIdMinting(unittest.TestCase):
-# resolve_competition_teams + mint_competition_secrets: the run id is minted
-#     once per comp dir and reused forever after.
+    # The run id is minted once per comp dir and reused forever after.
 
     def _ctx(self, state_path, **kw):
         fields = dict(comp_name=COMP, credlist_usernames=[], state_path=state_path,
@@ -395,8 +367,7 @@ class MultinodePreflightRunAware(unittest.TestCase):
         self.assertIn("ANOTHER worktree", str(ctx.exception))
 
     def test_full_ownership_match_is_still_a_leftover(self):
-        # The engine tagged with the FULL set is this comp dir's own prior run: a fresh
-        # deploy never tears it down (resume it, or destroy-competition.py reclaims it).
+        # A fresh deploy never tears down a prior full-ownership run: resume it or destroy-competition.py.
         with self.assertRaises(SystemExit) as ctx:
             self._run(f"tezcatlipoca,comp-example,{RUN}")
         self.assertIn("destroy-competition.py", str(ctx.exception))

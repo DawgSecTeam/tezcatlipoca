@@ -6,8 +6,8 @@ destroys anything, because the red report and the blue logs live on machines tha
 gone.
 
 Implemented in the [artifacts_lib/](../artifacts_lib/) package, imported through the thin
-[artifacts_lib/artifacts_ops.py](../artifacts_lib/artifacts_ops.py) facade (the stable API: `ensure_test`, `collect`,
-`collect_for_teardown`, ... — callers and tests patch names there); inspected and sealed with
+[artifacts_lib/artifacts_ops.py](../artifacts_lib/artifacts_ops.py) facade (the stable API:
+callers and tests patch names there); inspected and sealed with
 [test-artifacts.py](../test-artifacts.py), whose subcommands live in `artifacts_lib/cli_*.py`.
 Module map: [internals.md](internals.md#artifacts_lib).
 
@@ -22,73 +22,60 @@ competitions/<comp>/.automated-tests/
     RED-TEAM.md              filed from red01's report.md, or an honest stub saying why not
     BLUE-TEAM.md             blue's authored report, sealed, or a stub
     REPORT.md                synthesis: incidents, run success, recommendations
-    evidence/
-      red/                   report.md, restore-table.json, report-secrets.md, world.json,
-                             events.jsonl, manifest.json, tlaloc-journal.log
-      engine/                final scoreboard, injects, per-team services (captured at run end)
-      blue/                  LOG.md, NOTEBOOK.md, feed.log, cycles/, sub*.md, submissions/
-      harness/               run.json, T0.txt, monitors, INTERACTION.md, alerts, timings sidecar
+    evidence/                red/ engine/ blue/ harness/ — see artifacts_lib/plan.py's manifest
 ```
 
-Red's files are root-owned 0600 on red01, so the collector first stages them to `/tmp/ba` with
-`sudo -n cp`, then scps the staged copies; it also captures `journalctl -u tlaloc --no-pager` as
-`evidence/red/tlaloc-journal.log`.
+Red's files are root-owned 0600 on red01, so the collector stages them through `/tmp/ba` before
+scping the copies.
 
 **The key is the run id, and that is the point.** `run-<8hex>` is minted once per competition
-directory, persisted in the state document, stamped on every VM as an ownership tag, reused
-across resume/redeploy, and required by every destruction path. So the artifact folder and the
-VMs it describes are keyed on the same identity, and two worktrees running the same competition ID
-cannot collide. A state document with no run id gets `untagged-<deploy timestamp>` —
-`artifacts_lib/paths.py::test_key` derives it from the state document's mtime, so re-running teardown
-does **not** create a second folder.
+directory, persisted in the state document, stamped on every VM as an ownership tag, and required
+by every destruction path. So the artifact folder and the VMs it describes are keyed on the same
+identity, and two worktrees running the same competition ID cannot collide. A state document with
+no run id gets `untagged-<deploy timestamp>`; `artifacts_lib/paths.py::test_key` derives it from
+the state document's mtime, so re-running teardown does **not** create a second folder.
 
 The whole tree is **gitignored, with no publish path** (`.gitignore` +
 `test_no_test_artifact_is_tracked`). These files quote flags, credentials and inject answers by
-construction: the red report ships a separate 0600 credlist table, and a password quoted in prose is
-exactly what `tests/hygiene/test_secret_hygiene.py`'s pattern net cannot catch. A recommendation leaves this
-folder by being written into [known-issues.md](known-issues.md) or a fixes plan, never by adding the
-artifact to git.
+construction, and a password quoted in prose is exactly what
+`tests/hygiene/test_secret_hygiene.py`'s pattern net cannot catch. A recommendation leaves this
+folder by being written into [known-issues.md](known-issues.md) or a fixes plan, never by adding
+the artifact to git.
 
 ## Who writes what
 
-| Writer | What it contributes |
-|---|---|
-| `run-agent-scrim.py` | Creates the folder at run start (identity, teams, boxes, phases), records red/blue identity and workdirs when they are known, and collects + generates the verdict **before** the red step destroys red01. |
-| `destroy-competition.py` | The safety net, and the one step guaranteed to happen: it captures the engine's own final scoreboard when the harness never did, then collects right after the confirmation prompt and before its first destructive call. This is what saves a run whose harness died. Its `--team` mode is the exception: a mid-event team removal has no artifact step because no declared artifact lives on a team box (the plan reads red01, the run dir, blue workdirs, the comp dir and the engine capture) — the removal is recorded in the state document's `deleted_teams` and in `teams.json`. |
-| `scrim-report.py` | `INTERACTION.md` — the interaction score and the `rehearsal-gates.md` gate table. Its verdict is folded into `test.json` verbatim; nothing here recomputes it. |
-| A human or agent | `REPORT.md`'s judgement: the incident classification and both recommendations sections. |
+- `run-agent-scrim.py` creates the folder at run start and collects + generates the verdict
+  **before** the red step destroys red01.
+- `destroy-competition.py` is the safety net, and the one step guaranteed to happen: it captures
+  the engine's own final scoreboard when the harness never did, then collects right after the
+  confirmation prompt and before its first destructive call. This is what saves a run whose
+  harness died. Its `--team` mode is the exception: a mid-event team removal has no artifact step
+  because no declared artifact lives on a team box — the removal is recorded in the state
+  document's `deleted_teams` and in `teams.json`.
+- `scrim-report.py` writes `INTERACTION.md`. Its verdict is folded into `test.json` verbatim;
+  nothing here recomputes it.
+- A human or agent writes `REPORT.md`'s judgement sections (see below).
 
-Collection **warns and proceeds** — a dead box never blocks a destroy. What could not be obtained is
-recorded in `collection.json`, restated in the affected document as a stub, and listed in the
-report's *Not verified / caveats*. There is deliberately no gate: an operator who needs to destroy a
-range must never be held hostage by a wedged guest. Two things keep a loss from being silent
-anyway: a `failed` transfer (the source answered, the transfer broke) is retried once before the
-destroy makes a second attempt impossible — `unreachable`/`unrecoverable` sources are not retried —
-and whatever is still lost is printed as a `verify_clean` note at the end of the destroy.
+Collection **warns and proceeds** — a dead box never blocks a destroy. There is deliberately no
+gate: an operator who needs to destroy a range must never be held hostage by a wedged guest.
+Three things keep a loss from being silent anyway: a `failed` transfer (the source answered, the
+transfer broke) is retried once before the destroy makes a second attempt impossible;
+`unreachable`/`unrecoverable` sources are not retried; and whatever is still lost is printed as a
+`verify_clean` note at the end of the destroy.
 
 ## The status vocabulary
 
-`collection.json` records one status per wanted item, from a closed set. This is what makes the
-folder honest — "no report" and "the pull failed" are different facts:
+`collection.json` records one status per wanted item from the closed set in
+`artifacts_lib/constants.py` (`STATUSES`; the warning-producing subset is `LOST`). This is what
+makes the folder honest — "no report" and "the pull failed" are different facts: `absent` is a
+claim about a box (the source answered, the file genuinely is not there), `failed` means the
+transfer broke, `unreachable`/`unrecoverable` are about the source. A target is only probed for
+its first file once it proves unreachable, so a dead red01 costs one connection timeout rather
+than five. What could not be obtained is recorded in `collection.json`, restated in the affected
+document as a stub, and listed in the report's *Not verified / caveats*.
 
-| status | meaning |
-|---|---|
-| `ok` | fetched |
-| `sealed` | local file copied, hashed, 0600 |
-| `absent` | the source was reachable and the file genuinely is not there |
-| `failed` | the source was reachable and the transfer failed |
-| `unreachable` | the source could not be reached at all (VM stopped, agent down) |
-| `unrecoverable` | the source is gone for good (VM already destroyed) |
-| `skipped` | not applicable to this run (the manifest records no red/blue agent), or not attempted after the target was found unreachable |
-
-`failed`, `unreachable` and `unrecoverable` are the ones that produce a warning. A target is only
-probed for its first file once it proves unreachable, so a dead red01 costs one connection timeout
-rather than five.
-
-A canonical document that could not be produced is still written, as a stub naming its own status —
-which adds one value to the vocabulary above that never appears in a collection record:
-**`not-collected`**, meaning the sources exist but nobody ran the collector (recoverable; the stub
-names the command). It is deliberately distinct from `absent`, which is a claim about a box.
+`not-collected` appears in no collection record — it is a canonical document's stub status,
+meaning the sources exist but nobody ran the collector (recoverable; the stub names the command).
 
 ## Reading a test
 
@@ -102,8 +89,8 @@ python3 test-artifacts.py archive <comp> --all         # copy outside the repo (
 ```
 
 `REPORT.md` is the document a person reads. It opens with the machine verdict (never a second
-opinion of the same numbers), then environment, timeline and cost, a seeded incident table, red and
-blue narratives, and two fixed recommendation headings — one for the competition, one for
+opinion of the same numbers), then environment, timeline and cost, a seeded incident table, red
+and blue narratives, and two fixed recommendation headings — one for the competition, one for
 tezcatlipoca. Every machine section is filled by teardown; judgement sections are marked
 `<!-- TODO(author) -->` and `test.json.writeup.status` stays `needs-writeup` until
 `test-artifacts.py verify --seal` confirms they are filled and re-hashes the collection. A second
@@ -114,21 +101,17 @@ teardown never overwrites a report that has been written.
 The competition dir is per-worktree, and practice runs must happen in a throwaway worktree
 ([AGENTS.md](../AGENTS.md)), so the folder is copied outside the repo —
 `${TEZ_ARTIFACTS_ARCHIVE:-~/.tezcatlipoca/automated-tests}/<comp>/<key>/` — automatically when
-teardown detects a linked worktree, and again when the write-up is sealed so the archive is not left
-holding a skeleton. Archive before `git worktree remove`.
+teardown detects a linked worktree, and again when the write-up is sealed so the archive is not
+left holding a skeleton. **Archive before `git worktree remove`.**
 
 ## What it does not do
 
 - **No engine submission bodies.** The engine capture is a copy of what the harness dumped before
-  the scoring DB died: `/api/injects` (each inject's `Submissions` array — `InjectID`,
-  `SubmissionFileName`, `SubmissionTime`, `Team`, `TeamID`, `Version`), per-team services and the
-  final scoreboard, under `evidence/engine/`. The submitted *file* itself is not in that dump; it is
-  captured only if the blue agent wrote it into its workdir (`sub*.md` → `evidence/blue/`).
-- **No bare-deploy stdout.** The harness writes `<run_dir>/deploy.log` for every deploy, success
-  included (stdout plus a `=== STDERR ===` section), and the collector takes it. A bare
-  `create-competition.py` leaves console scrollback only, so a run driven that way has its phase
-  timeline in `.deploy-timings.jsonl`, the harness phase markers, and the operator's own `tee` if
-  they made one ([e2e-testing.md](e2e-testing.md)).
+  the scoring DB died: injects, per-team services and the final scoreboard. The submitted *file*
+  is not in that dump; it is captured only if the blue agent wrote it into its workdir.
+- **No bare-deploy stdout.** A bare `create-competition.py` leaves console scrollback only, so a
+  run driven that way has its phase timeline in `.deploy-timings.jsonl`, the harness phase
+  markers, and the operator's own `tee` ([e2e-testing.md](e2e-testing.md)).
 - **No opinion about the run.** Success is the interaction score and the gates in
   [rehearsal-gates.md](rehearsal-gates.md); the artifact folder reports them, it does not redefine
   them.

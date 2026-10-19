@@ -1,13 +1,4 @@
-"""The deploy() sequencer after the phase split: phase order, checkpoint gating,
-the banner set (exactly one per phase, byte-identical), the estate-context hook
-between phases 2 and 3, and the mid-phase failure/resume hint.
-
-All offline: prepare() and the phase functions are stubbed, or the REAL phases are
-driven down their resume path (from_phase=9), which prints their banners and
-touches no infrastructure. The from_phase=9 run is what makes the banner set a
-regression test — the phase-extraction commits briefly emitted the phase 4-7 skip
-banners twice, and nothing caught it.
-"""
+"""The deploy() sequencer after the phase split: order, checkpoint gating, banners, resume."""
 
 import contextlib
 import io
@@ -35,7 +26,6 @@ SKIP_BANNERS = [
 ]
 
 def _ctx(comp_dir, from_phase, state=None):
-# A DeployContext carrying only what the sequencer and finish path touch.
     return deploy.DeployContext(
         comp_dir=comp_dir, comp_name=comp_dir.name,
         state_path=comp_dir / "estate-state.json", from_phase=from_phase,
@@ -59,7 +49,6 @@ def _ctx(comp_dir, from_phase, state=None):
 
 
 def _stub_phases(calls):
-# Eight stub phases recording their number; PHASES order is what is under test.
     def make(n):
         def phase(ctx):
             calls.append(("phase", n))
@@ -68,7 +57,7 @@ def _stub_phases(calls):
 
 
 class BannerSet(unittest.TestCase):
-# The [N/8] banners operators and incident logs key on. Byte-identical, once each.
+    # The [N/8] banners operators and incident logs key on. Byte-identical, once each.
 
     def _run_resume_from_9(self, comp_dir):
         ctx = _ctx(comp_dir, 9)
@@ -82,14 +71,11 @@ class BannerSet(unittest.TestCase):
 
     def test_resume_emits_every_skip_banner_exactly_once_in_phase_order(self):
         with tempfile.TemporaryDirectory() as d:
-            # Real phases: each prints its own skip banner and returns.
             out = self._run_resume_from_9(Path(d))
         emitted = [ln.rstrip("\n") for ln in out.splitlines() if "Skipped (resume)" in ln]
         self.assertEqual(emitted, SKIP_BANNERS)
 
 class Sequencer(unittest.TestCase):
-# deploy() walks PHASES, gates checkpointing, and hooks the estate-context read.
-
     def _run(self, comp_dir, from_phase, phases, calls, hold_start=False):
         ctx = _ctx(comp_dir, from_phase)
         with dpatch("prepare", return_value=ctx), \
@@ -112,9 +98,8 @@ class Sequencer(unittest.TestCase):
 
 
     def test_skipped_phases_do_not_checkpoint(self):
-        # from_phase=6 over a state file whose last completed phase was 3, and phase
-        # 6 dies: last_phase must stay 3. Checkpointing the skipped phases would
-        # move the resume guard's answer forward to 5 for phases this run never ran.
+        # Checkpointing skipped phases would move the resume guard's answer
+        # forward for phases this run never ran.
         def boom(ctx):
             raise RuntimeError("boom")
         calls = []
@@ -137,8 +122,7 @@ class Sequencer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             ctx = self._run(Path(d1), 1, _stub_phases(calls), calls, hold_start=True)
             self.assertTrue(ctx.state["hold_start"])
-            # A resume (prepare in real life reads the flag back from the state file —
-            # here the dict is carried over) keeps the hold without the flag being passed.
+            # prepare reads hold_start back from the state file; here the dict is carried over.
             ctx2 = _ctx(Path(d2), 8, state=dict(ctx.state))
             with dpatch("prepare", return_value=ctx2), \
                     dpatch("PHASES", _stub_phases(calls)), \
@@ -147,8 +131,6 @@ class Sequencer(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()):
                 deploy.deploy(Path(d2), assume_yes=True, from_phase=8)
         self.assertTrue(ctx2.state["hold_start"])
-
-
 
 
 class CancelledPrepare(unittest.TestCase):
@@ -162,8 +144,7 @@ class CancelledPrepare(unittest.TestCase):
                 result = deploy.deploy(comp_dir, assume_yes=False)
             self.assertIsNone(result)
             self.assertEqual(calls, [])
-            # The lock stays held (it is the process-lifetime flock), so a second
-            # deploy in this process refuses.
+            # The deploy lock is a process-lifetime flock; it stays held here.
             self.assertIn(str(comp_dir), dl_gates._DEPLOY_LOCKS)
 
 

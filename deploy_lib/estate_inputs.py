@@ -1,9 +1,4 @@
-"""Written per-competition inputs: the team roster with its passwords, and the absolute
-SSH key path the phases dial with.
-
-The state document carries the authoritative roster and secrets; what remains here is the
-on-disk teams.json the teardown and identifier defaults read, plus the resolved key path.
-"""
+"""Written per-competition inputs: the team roster with its passwords, and the resolved SSH key path."""
 
 import json
 import os
@@ -14,16 +9,10 @@ from estate import config
 
 
 def engine_mgmt_ip_from_env(override=None):
-# The engine's static management IP, defaulted and re-exported.
-#
-#     Static by default: a DHCP engine rebooted onto a different address mid-event while
-#     the saved record stayed stale (shakedown-5x4: .221→.243→.233). An explicit empty
-#     value keeps the old DHCP behavior. The default is MARKED as a default on purpose —
-#     the preflight's "explicitly set" escape hatch must not be satisfied by this code's
-#     own export (the .150 default is SSH-poisoned on the tailnet path, and reading this
-#     export as an operator choice killed a deploy 12 minutes in). `override` is this
-#     run's own --engine-mgmt-ip: it must beat both the ambient env and the node catalog,
-#     because two concurrent ranges on one node cannot share a management address.
+# Static by default: DHCP engines drifted mid-event; empty restores DHCP. The _IS_DEFAULT
+# marker stops this export from satisfying the preflight's "explicitly set" hatch — reading
+# a default as an operator choice killed a deploy. `override` beats env and the node
+# catalog: concurrent ranges on one node cannot share a management address.
     if override:
         config.active().activate({"engine.mgmt_ip": override})
         return override
@@ -36,22 +25,19 @@ def engine_mgmt_ip_from_env(override=None):
 
 
 def build_estate_inputs(ctx, comp_dir):
-# Write teams.json (0600 at creation), bind the SSH key path, open the state document.
     teams_json = json.dumps({
         team_key: {"identifier": team_data["identifier"], "password": team_data["password"]}
         for team_key, team_data in ctx.teams.items()})
     write_text_atomic(comp_dir / "teams.json", teams_json)
     ctx.ssh_key_abs = str(config.ssh_key_path())
-    # Default the gateway whenever the engine mgmt IP is static: an explicitly-set mgmt IP
-    # once skipped this and the engine template's ipconfig0 went out with an empty gw=
-    # (caught live — PVE 400 "Parameter verification failed").
+    # An explicit mgmt IP once skipped this default and the template's ipconfig0 went out
+    # with an empty gw= — caught live: PVE 400 "Parameter verification failed".
     if not config.active().engine.mgmt_gw:
         config.active().activate({"engine.mgmt_gw": DEFAULT_ENGINE_MGMT_GW})
     # A context built by hand (tests, recovery paths) may not carry its comp dir yet.
     ctx.comp_dir = ctx.comp_dir or comp_dir
     document = ctx.document()
-    # The document is self-describing from the start: teardown, verify and redeploy all
-    # read the host and engine coordinates from here rather than from the environment.
+    # teardown/verify/redeploy read host and engine coordinates from this section, not env.
     cfg = config.active()
     document.section("identity").update({
         "comp_name": ctx.comp_name,

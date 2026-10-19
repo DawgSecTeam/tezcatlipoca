@@ -1,23 +1,4 @@
-"""The LLM's *only* three jobs: author a command, arbitrate an unconfident
-high-stakes choice, write the after-action narrative.
-
-It is never the decider. `decide.py` calls it in exactly two places, both
-bounded: `choose()` may only return an id from the candidate list it was given,
-and `author_command()` may only return one line the gate will lint.
-
-The lessons from the earlier agent this module is built around:
-
-* **a reasoning model's `reasoning_content` is never the reply.** `chat()`
-  returns `content` only (empty is a legitimate answer) and keeps the thinking
-  on the side. Falling back to the reasoning text put raw chain-of-thought into
-  an engagement report's executive summary once; it will not happen by accident
-  again.
-* **a read timeout is terminal** — retrying the identical request just spends the
-  cycle twice.
-* **JSON output is salvaged, not trusted**: `extract_json` finds the first
-  balanced object in whatever came back, and an unparseable answer is an
-  `LLMUnparseable` the caller degrades from (never a crash).
-"""
+"""The LLM's only three jobs — author a command, arbitrate, write narrative; it is never the decider, chat returns content (never reasoning_content), and a read timeout is terminal (no retry)."""
 
 import json
 import os
@@ -41,14 +22,11 @@ class LLM:
         self.calls = 0
         self.last_reasoning = None
 
-    # -- transport ----------------------------------------------------------
-
     def api_key(self):
         return os.environ.get(self.api_key_env) or ""
 
     def chat(self, messages, *, max_tokens=None, temperature=0.2, json_mode=False,
              timeout=None):
-        """Return the assistant's CONTENT (never its reasoning)."""
         if not self.enabled:
             raise LLMError("llm disabled (llm.enabled / llm.base_url)")
         body = {"model": self.model or "llm", "messages": list(messages),
@@ -83,10 +61,8 @@ class LLM:
             raise LLMError(f"llm HTTP {response.status_code}: {response.text[:200]}")
         return response.json()
 
-    # -- the three jobs -----------------------------------------------------
-
     def choose(self, options, context=None, *, max_tokens=256):
-        """Arbitrate between bounded candidates. Returns {"id","why"} or None."""
+        """The returned id is not checked against `options` here; decide.py matches it or falls back to deterministic."""
         listing = "\n".join(
             f"- id={o['id']} effect={o['effect']} reason={o.get('reason', '')} "
             f"params={json.dumps(o.get('params', {}), separators=(',', ':'))}"
@@ -110,11 +86,7 @@ class LLM:
         return {"id": str(cid), "why": str(data.get("why") or "")}
 
     def author_command(self, goal, facts, os_name="linux", *, max_tokens=512):
-        """One shell command + a verification command for `goal`.
-
-        The command is linted by the gate before it runs (and the gate's verdict
-        is the authority — this method does not decide what is safe).
-        """
+        """The gate lints the command before it runs — this method does not decide what is safe."""
         shell = ("PowerShell (Windows, no double quotes: multi-line scripts are "
                  "encoded by the transport)" if os_name == "windows" else "bash")
         prompt = (
@@ -137,7 +109,6 @@ class LLM:
                 "why": str(data.get("why") or "")[:200]}
 
     def narrative(self, summary, *, max_tokens=900):
-        """The human-facing after-action prose. Never reasoning text."""
         prompt = (
             "Write a short after-action narrative for this CCDC red-team run. "
             "Plain prose, past tense, no headings, no bullet lists, at most six "

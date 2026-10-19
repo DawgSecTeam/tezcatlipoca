@@ -1,32 +1,4 @@
-"""rotate_credlist — change a credlist account's password, so the scoring engine's
-own authenticated checks fail while the service stays up.
-
-The credlist accounts (analyst / svc-backup / fieldtech …) are the accounts the
-engine authenticates with. Rotating one is the hardest realistic hit in this
-format: nothing is down, the credential is simply wrong, and only someone who can
-restore the original password brings it back.
-
-Ported from the earlier agent's `credlist_sabotage`, with four of its lessons
-load-bearing:
-
-* **never rotate red's own way in.** The account this foothold is logged in as,
-  the box account, root and every planted `svc-*` account are protected (the
-  earlier agent's `is_protected`): rotating red's own way in is how a credlist
-  hit turns into a self-lockout;
-* **the original comes from intel ground truth first** — a world cred is only a
-  fallback, and never one this effect wrote — or a second pass "restores" the
-  first pass's random password (caught live);
-* **a rotation is only real if the OLD credential stops working and the NEW one
-  starts.** Both are probed over SSH before `ok=True`, because the ledger and
-  the seed record are graded on that flag. If the old credential still
-  authenticates (a pam_permit stack accepts ANY password — nakon plants it), the
-  rotation achieved nothing and this reports `ok=False` with the box mutated, so
-  the artifact/restore are still recorded but no impact is claimed;
-* **the new password goes into state and the restore record, never into the
-  notes.** world creds keep red able to work the account; `restore.secrets`
-  renders only into the 0600 organizer artifact (report-secrets.md), while the
-  blue-visible report gets the fact of the rotation and no value.
-"""
+"""rotate_credlist — change a credlist account's password so the scoring engine's authenticated checks fail while the service stays up."""
 
 import re
 import secrets
@@ -38,31 +10,24 @@ from .base import Effect, Result, can_root, register
 from .block_port import run_root_script
 from .takedown import windows_admin
 
-# The account names that must never be rotated: the box's own admin identities.
 PROTECTED = ("root", "administrator", "admin")
 
 _USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
-# Same shape as the earlier agent's: long enough to be unguessable, plain alnum
-# so it survives every shell, `chpasswd` and `net user` quoting path unchanged.
+# Plain alnum so every shell, chpasswd and net user quoting path survives unchanged.
 _PASSWORD_LEN = 14
 _ALPHABET = string.ascii_letters + string.digits
 
 
 def gen_password(rng=None):
-    """A fresh password. `secrets` by default; pass an rng only for tests."""
     if rng is None:
         return "".join(secrets.choice(_ALPHABET) for _ in range(_PASSWORD_LEN))
     return "".join(rng.choice(_ALPHABET) for _ in range(_PASSWORD_LEN))
 
 
 def protected(user, ctx, fh):
-    """True for an account red must not rotate (its own access, or a plant).
-
-    Credlist names and our planted `svc-*` accounts share a namespace, so the
-    discriminator is the drawn-name set (`artifactnames.is_planted_account`) —
-    `svc-backup` is a credlist account and must stay rotatable.
-    """
+    """An account red must never rotate (self-lockout); planted `svc-*` names
+    collide with credlist ones, so `is_planted_account` is the discriminator."""
     from . import artifactnames as names_mod
     user = (user or "").strip()
     if not user:
@@ -77,7 +42,6 @@ def protected(user, ctx, fh):
 
 
 def eligible_users(ctx, ip, fh):
-    """Credlist accounts on this box that are safe to rotate, in intel order."""
     out = []
     for user in (ctx.intel.credlist_users() or []):
         user = (user or "").strip()
@@ -121,8 +85,6 @@ class RotateCredlist(Effect):
     tags = frozenset({"pressure", "impacty"})
     needs = {"foothold": True, "root": False, "c2": False, "os": "any"}
 
-    # -- preconditions ---------------------------------------------------------
-
     def check(self, ctx, params):
         super().check(ctx, params)
         ip = params["ip"]
@@ -155,8 +117,6 @@ class RotateCredlist(Effect):
             raise PolicyError(f"rotate_credlist already failed twice on {ip} — "
                               "inspect the box instead of re-running")
 
-    # -- the body --------------------------------------------------------------
-
     def run(self, ctx, params):
         ip = params["ip"]
         fh = ctx.world.foothold(ip)
@@ -187,8 +147,7 @@ class RotateCredlist(Effect):
         if not ok:
             return Result(False, why)
 
-        # The box changed: from here on the record must not depend on the claim
-        # holding (installed=True), which is what `installed` is for.
+        # The box has changed: every path from here records the mutation (installed=True).
         ctx.world.add_sabotage(ip, user, old or "", new)
         ctx.world.add_cred(user, new, self.id, ip)
         ctx.world.note(ip, f"credlist rotation: {user} password rotated — its "
@@ -197,14 +156,14 @@ class RotateCredlist(Effect):
         artifact = {"ip": ip, "kind": f"impact-{self.id}",
                     "detail": (f"credlist account {user} password rotated "
                                f"(original {'recorded' if old else 'unknown to red'})"),
-                    # No check_cmd: reading the shadow hash needs root, and a
-                    # check that fails for the wrong reason marks the artifact
-                    # dead — which switches off every pressure candidate on the
-                    # box (see policy._dead_artifacts). The restore table and
-                    # world sabotage are the record.
+                    # No check_cmd: reading the shadow hash needs root, and a failing
+                    # check marks the artifact dead — which switches off every
+                    # pressure candidate on the box (policy._dead_artifacts).
                     "check_cmd": None, "paths": []}
         data = {"user": user, "old": bool(old), "users_on_box": users}
 
+        # ok=True is gated on proof over SSH: a planted pam_permit stack accepts ANY
+        # password, so ok means the NEW credential authenticates and the OLD one does not.
         new_ok = self._authenticates(ctx, ip, user, new, windows)
         old_dead = None if old is None else not self._authenticates(
             ctx, ip, user, old, windows)
@@ -231,8 +190,6 @@ class RotateCredlist(Effect):
                               "detail": detail},
                       restore=restore, artifacts=[artifact], installed=True)
 
-    # -- pieces ----------------------------------------------------------------
-
     def _pick(self, ctx, ip, fh, params):
         requested = (params.get("user") or "").strip()
         if requested:
@@ -247,15 +204,13 @@ class RotateCredlist(Effect):
             return None, (f"no credlist account on {ip} is safe to rotate — all of "
                           "them are red's own or protected")
         known = ground_truth(ctx, users)
-        # Prefer an account whose original password intel knows: the organizer's
-        # undo is then exact instead of "restore it from your own inventory".
+        # Prefer an account whose original intel knows: the organizer's undo is exact.
         return next((u for u in users if u in known), users[0]), ""
 
     @staticmethod
     def _previous_original(ctx, ip, user):
-        """The last non-rotation password world saw for this account (the
-        earlier agent's fallback). Excludes our own rotations, or a second pass
-        would restore the first pass's random value."""
+        """Last non-rotation password world saw for this account; our own
+        rotations are excluded, or a second pass would restore the first's."""
         for cred in ctx.world.valid_creds(ip):
             if cred.get("user") == user and cred.get("source") not in (
                     "rotate_credlist", "sabotage"):
@@ -300,9 +255,7 @@ class RotateCredlist(Effect):
 
     @staticmethod
     def _authenticates(ctx, ip, user, password, windows):
-        """Probe one credential over SSH. Every failure mode is a plain "no":
-        an auth rejection, a closed login path, a dead link. A zero exit means
-        the session authenticated and the probe ran — the proof we can get."""
+        """Zero exit means the session authenticated; every failure mode is False."""
         probe = "whoami" if windows else "id"
         try:
             rc, _, _ = ctx.ssh.ssh(ip, user, password, probe, timeout=30,

@@ -5,43 +5,42 @@ because that is the definition that wins when a doc and the code disagree.
 
 ## Teams and identity
 
-| Term | Meaning | Owner |
-|---|---|---|
-| **competition** ("comp") | One event instance: a `competitions/<id>/` directory holding `Compfile`, `boxes.json`, `teams.json`, secrets, and state. `<id>` matches `[a-z0-9._-]`. | `config_ops` |
-| **team key** | The map key in the `teams` roster (`estate-state.json`'s `secrets.teams`): `team1`, `team2`, … Used for ordering, placement, and selection flags (`--teams team3`). | `config_ops.collect_teams` |
-| **team identifier** | The subnet's third octet as a **string**: `"101"`, `"102"`, …. Drives `192.168.<identifier>.<host>`, the bridge name `vmbr<identifier>`, and the vmid stride. `--teams 103` also resolves to a team by identifier. | `config_ops`, `targets`, `infra` |
-| **anchor team** | `team1` — the first roster key (`collect_teams` builds `team1`..`teamN`), the team whose boxes carry the `team1-<box>` names the golden set anchors on. On single-node it also hosts the golden set's IPs; on multi-node each node has its own anchor (see *anchor identifier*). | `common/targets.enumerate_targets`, `placement_record.anchor_identifier` |
-| **anchor identifier** | The **lowest** team identifier placed on a host — the subnet a node's golden boxes sit on (`192.168.<anchor>.<240+i>`). Slot 0 anchors on `team1`'s identifier, which reproduces the original golden math. | `placement_record.anchor_identifier` |
-| **slot** | A hosting position in a multi-node placement: slot 0 is the engine node, slots 1–4 are satellites (max 4). Golden vmids and jump vmids are slot-dimensioned. On single-node everything is slot 0, and nothing in `boxes.json`/`Compfile` mentions slots. | `placement_record`, `placement_record.golden_vmid_for_slot` |
-| **engine vmid** | The scoring engine's VM id: `--scoring-vmid` / the state document's `scoring_vm_id`, default `1000`. The whole vmid layout hangs off it (engine template `+140`, goldens `+150 + slot*10`, jump `+130 + slot`). | `constants`, `deploy_lib.inputs` |
-| **umbrella: `enumerate_targets()`** | One entry per `(team, box)` — the only place a target's `vmid`/`ip`/`vm_name`/`machine` are derived. Build from the full lists, then filter; never re-enumerate a filtered box list. | `targets` (enumerate_targets) — and note the `infra/` package |
+| Term | Meaning |
+|---|---|
+| **competition** ("comp") | One event instance: a `competitions/<id>/` directory holding `Compfile`, `boxes.json`, `teams.json`, secrets, and state (`config_ops`). |
+| **team key** | The map key in the `teams` roster (`estate-state.json`'s `secrets.teams`): `team1`, `team2`, … Used for ordering, placement, and selection flags (`--teams team3`) (`config_ops.collect_teams`). |
+| **team identifier** | The subnet's third octet as a **string**. Drives the team subnet, the `vmbr<identifier>` bridge name, and the vmid stride; `--teams 103` also resolves a team by identifier (`config_ops`, `common/targets`). |
+| **anchor team** | `team1` — the first roster key, whose box names the golden set anchors on. On single-node it also hosts the golden set's IPs. |
+| **anchor identifier** | The **lowest** team identifier placed on a host — the subnet a node's golden boxes sit on. Slot 0 anchors on `team1`'s identifier, reproducing the original golden math (`placement_record.anchor_identifier`). |
+| **slot** | A hosting position in a multi-node placement: slot 0 is the engine node, the rest are satellites. Golden and jump vmids are slot-dimensioned; on single-node everything is slot 0 and nothing in `boxes.json`/`Compfile` mentions slots (`placement_record`). |
+| **engine vmid** | The scoring engine's VM id (`--scoring-vmid`, state `scoring_vm_id`). The whole vmid layout hangs off it — the offsets are `common/constants.py` and `placement_record`'s `*_for_slot` helpers. |
+| **umbrella: `enumerate_targets()`** | One entry per `(team, box)` — the only place a target's `vmid`/`ip`/`vm_name`/`machine` are derived. Build from the full lists, then filter; never re-enumerate a filtered box list (`common/targets`). |
 
 ## Boxes and templates
 
 | Term | Meaning |
 |---|---|
-| **managed box** | Any box where `is_unmanaged(box)` is false: it gets cloud-init (Linux), the golden set, the nakon plant, pre-domain/fix_services, and scoring. This is the default. |
-| **unmanaged box** | `"unmanaged": true` — an appliance (a pfSense firewall) the pipeline must **not** plant, configure, score, or domain-join. It is cloned straight from its own template (no cloud-init identity), has **no golden**, and is kept in `boxes.json` so per-box-index vmids stay positional. Every plant/config/scoring path skips it via `utils.is_unmanaged()`. |
-| **in-path firewall** | `"unmanaged": true` + `"in_path": true` — the team's GATEWAY. `estate.apply.create_team_box` gives it two NICs, WAN first on the transit bridge `vmbrW<id>`; deploy phase 5 pushes the config that sets WAN `172.31.<id>.2/30` and LAN `192.168.<id>.1/24` on `vmbr<id>` and cuts the engine over, so every engine→box path routes through it. At most one per lineup, engine-node (slot 0) teams only; `last_octet` must be 1. `utils.is_in_path_fw()` is the predicate — it is a SUBSET of unmanaged, so every unmanaged skip applies to it too. |
-| **transit bridge** | `vmbrW<id>` — the per-team /30 (`172.31.<id>.0/30`) between the engine and the firewall's WAN. Built by `estate.apply.create_bridge` like `vmbr<id>`, reclaimed by `destroy-competition.py` (a leftover one refuses a fresh deploy's preflight). Absent entirely from lineups without an `in_path` box. |
-| **box type** | An entry in `boxes.json` (`name`/`template`/`cpu`/`memory_mb`/`disk_gb`/`last_octet`). Boxes are keyed by type, never per team: every team defends the identical set, which is what makes Quotient's wildcard-IP checks valid. |
-| **golden (golden set)** | One VM per box type, full-cloned from the base template, planted with the **golden stage** in strict mode, cloud-init-cleaned, stopped, and converted with `qm template`. Phase 4's clone pass (`estate.apply.create_team_boxes`) creates every team's box as a **linked clone** of it. Lives at `engine_vmid + 150 + slot*10 + box_idx`. |
-| **unbooted golden** | A golden that is deliberately **never booted** — the DC box type. Sysprep leaves the machine generalized, so each linked clone specializes its own SID before ADDS promotion and the team gets a unique DomainSID. Owned by `golden_ops.unbooted_golden_boxes()`; only a valid `domain_roles.json` can produce one. |
-| **engine template** | The per-competition Quotient template (`engine_vmid + 140`): base image → bootstrap → clean → `qm template`. The deployed engine is a linked clone of it, so every run starts from a known-clean disk with an empty scoring DB. |
-| **freeze / frozen** | A verified competition's template set is locked: config-class drift hard-fails, code-class drift warns and proceeds on the frozen template, and a full teardown of a frozen competition needs `--end-of-competition`. Recorded in the state document's `templates` section by `verify-competition.py --freeze`. |
+| **managed box** | Any box where `utils.is_unmanaged()` is false: it gets cloud-init (Linux), the golden set, the nakon plant, pre-domain/fix_services, and scoring. The default. |
+| **unmanaged box** | `"unmanaged": true` — an appliance the pipeline must **not** plant, configure, score, or domain-join. Cloned straight from its own template with no cloud-init identity and no golden, but kept in `boxes.json` so per-box-index vmids stay positional. |
+| **in-path firewall** | `"unmanaged": true` + `"in_path": true` — the team's GATEWAY, holding the team's `192.168.<id>.1`. Phase 5 pushes the generated config and cuts the engine over; `verify_in_path` then refuses a range that does not route through it. `utils.is_in_path_fw()` is the predicate, and it is a SUBSET of unmanaged, so every unmanaged skip applies to it. |
+| **transit bridge** | The per-team `/30` between the engine and the firewall's WAN, built like `vmbr<id>` and reclaimed by `destroy-competition.py`; a leftover one refuses a fresh deploy's preflight. |
+| **box type** | An entry in `boxes.json`. Boxes are keyed by type, never per team: every team defends the identical set, which is what makes Quotient's wildcard-IP checks valid. |
+| **golden (golden set)** | One VM per box type, full-cloned from the base template, planted with the **golden stage**, cloud-init-cleaned, stopped, and converted with `qm template`. Every team's box is a **linked clone** of it. |
+| **unbooted golden** | A golden that is deliberately **never booted** — the DC box type. Sysprep leaves the machine generalized, so each linked clone specializes its own SID and the team gets a unique DomainSID. |
+| **engine template** | The per-competition Quotient template: base image → bootstrap → clean → `qm template`. The deployed engine is a linked clone of it, so every run starts from a known-clean disk and an empty scoring DB. |
+| **freeze / frozen** | A verified competition's template set is locked: config-class drift hard-fails, code-class drift warns and proceeds. A full teardown of a frozen competition needs `--end-of-competition`. |
 
 ## Nakon: configs, stages, passes, bundles
 
 | Term | Meaning |
 |---|---|
-| **machine list / config file** | A JSON list of machines for nakon to act on (`id`/`name`/`ip`/`os`/`user`/`password`/`configurations`). `nakon-config.json` is the **full** per-machine expansion of the type-level selection. |
-| **stage** | A **subset of the configurations** that must be planted together because of an ordering constraint. Four: **golden** (identity-free, non-disruptive — rides the cloned disk), **pre-domain** (sshd/sudoers touchers — must land after cloning and before the domain pass), **final** (disruptive + boot-hostile — must land after the domain reboots), **last** (account-file mode pins — must land after the deploy's final account writer). Membership lives in `constants.PREDOMAIN_STAGE_CONFIGS` / `FINAL_STAGE_CONFIGS` / `ACCOUNT_FILE_MODE_CONFIGS`; the rationale is canonical in [architecture.md](architecture.md#data-flow). |
-| **stage config file** | The per-stage machine list `generate_stage_configs()` writes: `.nakon-golden.json`, `.nakon-predomain.json`, `.nakon-final.json`, `.nakon-late.json`, plus the combined `.nakon-postclone.json` view (`pre-domain ∪ final`) that redeploy replays — the last pass is replayed separately because it must follow redeploy's own hardening. Multi-node adds `.nakon-golden-slot<N>.json`. All carry `box_password` and are gitignored. |
-| **pass** | One `nakon deploy` **invocation**: one stage config + one bundle, run on the engine. A deploy runs four passes (golden in phase 4, pre-domain in phase 6, final and last in phase 7). AD steps get their own single-machine pass because they reboot the box. |
-| **bundle** | Nakon's content-addressed build output (`nakon build`), stored under `vendor/nakon/bundles/` and keyed by config hash. It carries the payloads (and no credentials) and is built **operator-side** — the engine never sees vulndb creds. One bundle per pass. |
-| **plant** | Actually applying a configuration to a box (what a pass does). Re-running a plant over an already-planted box is not supported — roll back to `tz-base` first. |
-| **misconfig** | A deliberately planted weakness (from `box_vulns.json`), scored by Quotient and never leaked into the competitor packet. Distinct from a **service**, which is a scored function the box should keep up. |
-| **credlist** | The account list Quotient's auth-checking families (Ssh/Smtp/Imap/Sql/Ftp) authenticate with: `linux.credlist` (and, for packet comps, `<name>.credlist`). The names must equal the accounts `fix_services_on_boxes()` creates, or healthy boxes score down. |
+| **machine list / config file** | A JSON list of machines for nakon to act on. `generate_stage_configs()` writes one per stage; `nakon-config.json` is the full per-machine expansion of the type-level selection. All carry the box password and are gitignored. |
+| **stage** | A **subset of the configurations** that must be planted together because of an ordering constraint. Membership and the naming live in `common/constants.py`; the rationale for the split is canonical in [architecture.md](architecture.md#data-flow). |
+| **pass** | One `nakon deploy` **invocation**: one stage config + one bundle, run on the engine. |
+| **bundle** | Nakon's content-addressed build output, keyed by config hash. It carries the payloads and **no credentials** — it is built operator-side, so the engine never sees vulndb creds. One bundle per pass. |
+| **plant** | Actually applying a configuration to a box (what a pass does). Re-planting an already-planted box is not supported — roll back to `tz-base` first. |
+| **misconfig** | A deliberately planted weakness (from `box_vulns.json`), scored by Quotient and never leaked into the competitor packet. Distinct from a **service**, a scored function the box must keep up. |
+| **credlist** | The account list Quotient's auth-checking families (Ssh/Smtp/Imap/Sql/Ftp) authenticate with. The names must equal the accounts `fix_services_on_boxes()` creates, or healthy boxes score down. |
 
 ## Packets and events
 
@@ -49,6 +48,6 @@ because that is the definition that wins when a doc and the code disagree.
 |---|---|
 | **packet** | The public competition document: box lineup, scored services/ports, IP scheme, default credentials, schedule, rules. Modelled as `packet.yaml`. |
 | **profile** | The hand-encoded `<comps-root>/<event>/packet.yaml` that `compile-packet.py` turns into a `competitions/<id>/` bundle. |
-| **fidelity** | Per-box/service/credential honesty label: `exact`, `substituted`, or `unsupported`, plus a `note`. Compiled into `packet-fidelity.md`; a rehearsal range never claims parity it does not have. |
+| **fidelity** | Per-box/service/credential honesty label (`exact`, `substituted`, `unsupported`) plus a note, compiled into `packet-fidelity.md`. |
 | **T0** | The event clock start: the moment the competition actually begins. Inject offsets are re-anchored to T0, not to deploy time. |
-| **freeze window / end** | `run-schedule.py` windows read from the packet's `schedule:` (`start`, `freeze`/`resume`, `end`). The engine has no schedule model — pausing *is* the schedule. |
+| **freeze window / end** | `run-schedule.py` windows read from the packet's `schedule:`. The engine has no schedule model — pausing *is* the schedule. |

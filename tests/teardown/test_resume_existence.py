@@ -1,21 +1,4 @@
-"""Resume existence gates.
-
-Attempts 9-11 of that soak resumed at `--from-phase 5/6` after a phase-4 death. Apply
-#2 had never run, so no team box existed; the phase-6 pre-domain pass is `strict=False`,
-so it "succeeded" against 32 nonexistent machines and wrote `last_phase=5`. The next
-resume read that stamp as proof the machines were there, every downstream wait raced a
-ghost, and the run spent ~40 minutes in `wait_for_windows_sshd` before anyone worked out
-why. `guard_resume_from_phase` could not catch it: it reads the checkpoint, and the
-checkpoint was the lie.
-
-These tests pin the two answers that fix it:
-  - `estate.state.team_vmids` reads the one artifact that records what was built (the
-    resource inventory), and refuses to report "nothing there" when it could not read it;
-  - `guard_resume_existence` refuses a resume whose skipped phases left nothing behind,
-    and names the phase to actually use.
-
-Offline: no Proxmox, no network — temp competition dirs and a fake API only.
-"""
+"""Resume existence gates: team_vmids reads the resource inventory; guard_resume_existence refuses a resume whose skipped phases left nothing built."""
 
 import json
 import sys
@@ -45,15 +28,10 @@ STATE_RESOURCES = [
 ]
 STATE_JSON = json.dumps({"version": 4, "serial": 14, "resources": STATE_RESOURCES})
 
-# The real team_box address keys are BOX NAMES, not vmids — the vmid lives in the
-# instance attributes (caught live: an address-shape parser read a fully
-# built range as "no team boxes at all" and failed the phase-4 checkpoint).
+# team_box address keys are box names, not vmids; the vmid lives in instance attributes.
 
 
 class InventoryReading(unittest.TestCase):
-# The resume gate's "is the work there" probe reads the recorded inventory.
-
-
     def _comp(self, tmp, rows=()):
         comp = Path(tmp) / "competitions" / "c1"
         comp.mkdir(parents=True)
@@ -72,8 +50,7 @@ class InventoryReading(unittest.TestCase):
 
 
     def test_a_corrupt_document_raises_instead_of_reporting_nothing(self):
-        # The distinction the whole gate rests on: "no machines" and "could not ask" must
-        # not look alike, or the gate hard-fails a healthy range.
+        # "no machines" and "could not ask" must not look alike, or the gate hard-fails a healthy range.
         with tempfile.TemporaryDirectory() as d:
             comp = self._comp(d, [("team1-web01", 221)])
             estate_state.state_path(comp).write_text("{not json")
@@ -84,8 +61,6 @@ class InventoryReading(unittest.TestCase):
 
 
 class ResumeExistenceGuard(unittest.TestCase):
-# The gate itself, with every probe injected (no Proxmox).
-
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.comp = Path(self._tmp.name)
@@ -110,7 +85,6 @@ class ResumeExistenceGuard(unittest.TestCase):
         self.assertIn("--from-phase 2", str(raised.exception))
 
     def test_engine_present_but_boxes_missing_is_refused(self):
-        # The soak's exact shape: 32 machines recorded, none of them real.
         with self.assertRaises(SystemExit) as raised:
             self._guard(5, vmids=(221, 222), live=(1900,))
         msg = str(raised.exception)
@@ -123,16 +97,14 @@ class ResumeExistenceGuard(unittest.TestCase):
         self.assertIn("no team boxes at all", str(raised.exception))
 
     def test_a_few_missing_boxes_still_refuses(self):
-        # Partial infrastructure is not a resume target: the phases downstream address
-        # every box by computed vmid.
+        # Partial infra is not a resume target: downstream phases address every box by computed vmid.
         with self.assertRaises(SystemExit):
             self._guard(5, vmids=(221, 222, 225), live=(1900, 221, 222))
 
 
     def test_phase_6_resume_is_accepted_without_a_sweep_marker(self):
-        # Regression: .postclone-swept is written only at the end of phase 6, so a phase-6
-        # failure leaves it absent. The old live-box probe refused the --from-phase 6 the
-        # failure hint tells the operator to run; the engine and boxes are the real check.
+        # Regression: .postclone-swept lands only at the end of phase 6, so a phase-6
+        # failure must still accept the --from-phase 6 its own hint prints.
         self.assertFalse((self.comp / ".postclone-swept").exists())
         self._guard(6)
 

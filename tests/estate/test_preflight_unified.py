@@ -1,5 +1,4 @@
-"""One preflight implementation: single-node is a one-share plan, multi-node is N shares, and
-both classify "ours" through ownership.ownership_verdict (the same proof destroy uses)."""
+"""One preflight implementation: single-node is a one-share plan, multi-node is N shares; "ours" via ownership.ownership_verdict, the same proof destroy uses."""
 
 import os
 import sys
@@ -66,9 +65,6 @@ class SlotMath(unittest.TestCase):
 
 
 class SlotBandsAreDisjoint(unittest.TestCase):
-    # The property test §6.5 asks for: for every (engine, identifier, boxes, slots) a
-    # placement can produce, the engine, engine-template, golden-per-slot, jump-per-slot,
-    # red and team bands are pairwise disjoint, and red sits below the lowest team block.
     ENGINES = (1000, 1300, 9000)
 
     def _permitted_identifiers(self, reserved):
@@ -117,14 +113,8 @@ class SlotBandsAreDisjoint(unittest.TestCase):
                                 f"in both {seen.get(vmid)} and {name}")
                             seen[vmid] = name
                     if min(team) > max(reserved):
-                        # The positional claim ("red below the lowest team block") holds for
-                        # team blocks ABOVE the engine's own span, which is all a permitted
-                        # block above it can be. It cannot hold in general: team vmids are
-                        # absolute (200+id*10) while red is engine-relative, so a low
-                        # identifier's block legitimately sits below red (engine 1300, id 101
-                        # -> 1210) and one below the span is still permitted and disjoint.
-                        # Disjointness above is the invariant that keeps both safe; this
-                        # mismatch is a design-document error, reported rather than hidden.
+                        # "red below the team block" holds only for team blocks above the engine
+                        # span: team vmids are absolute, red is engine-relative; disjointness is the invariant.
                         self.assertLess(red, min(team),
                                         f"engine {engine} slots {slots} id {identifier}: red "
                                         f"{red} is not below the team block {min(team)}")
@@ -140,8 +130,7 @@ class RedAddressSelection(unittest.TestCase):
             return select_red_ip(vms, claimed)
 
     def test_claimed_addresses_are_never_selected(self):
-        # The engine's own address and its gateway look free to a scan taken before that VM
-        # exists; they are the placement's claims and are excluded by construction.
+        # Engine/gateway IPs look free to a scan before their VMs exist; claimed excludes them.
         ip, _unchecked = self._scan({100: ["10.0.0.240"], 101: ["10.0.0.241"]},
                                     claimed={"10.0.0.240", "10.0.0.241", "10.0.0.240"})
         self.assertEqual(ip, "10.0.0.242")
@@ -222,18 +211,15 @@ class Collisions(unittest.TestCase):
         self.assertIn("ANOTHER worktree", str(cm.exception))
 
     def test_our_own_leftover_is_refused_not_tolerated(self):
-        # A fresh deploy never tears a range down, its own included: resume that run, or
-        # reclaim it with destroy-competition.py. A pre-existing bridge goes the same way.
+        # A fresh deploy tears down no range, its own included: resume it or destroy-competition.py.
         with self.assertRaises(SystemExit) as cm:
             self._run(_share(), [_vm(1000, f"tezcatlipoca;comp-c1;{RUN}")], bridges=["vmbr101"])
         self.assertIn("destroy-competition.py", str(cm.exception))
 
 
     def test_kept_templates_are_adopted_not_refused(self):
-        # The --teams-only loop: a practice run's engine template + goldens are kept on
-        # purpose and still carry the PRACTICE run id, while a fresh workspace mints a
-        # new one. They are cached build artifacts, not a leftover range — phase 2/4
-        # adopt or rebuild them by hash.
+        # The --teams-only loop keeps templates carrying the PRACTICE run id: cached
+        # build artifacts, adopted or rebuilt by hash (phase 2/4), not a leftover range.
         kept = [dict(_vm(1140, "tezcatlipoca,comp-c1,run-practice,engine-template"),
                      template=1),
                 dict(_vm(1150, "tezcatlipoca,comp-c1,run-practice,tezcatlipoca-golden"),
@@ -241,11 +227,8 @@ class Collisions(unittest.TestCase):
         self._run(_share(), kept)          # must not raise
 
     def test_our_own_dead_template_build_is_reclaimed_by_phase_2(self):
-        # A template build whose clone task failed leaves an untagged, unconverted clone on
-        # the reserved template vmid wearing the base image's own tags. It is this run's
-        # wreckage, not a leftover range: phase 2 adopts and rebuilds it. Refusing here left
-        # the deploy no way to clean up after itself (caught live:
-        # 'collides with VMs already on node: engine template vmid 2340').
+        # A failed template build leaves an untagged clone wearing the base image's tags:
+        # the run's own wreckage, adopted and rebuilt by phase 2, not a leftover to reclaim.
         self._run(_share(), [dict(_vm(1140, "cloud-init;template"), name="engine-template")])
 
     def test_another_competitions_range_in_a_template_slot_is_a_leftover(self):
@@ -254,8 +237,7 @@ class Collisions(unittest.TestCase):
 
 
     def test_an_interrupted_clone_is_left_to_phase_1(self):
-        # Untagged, but the clone POST's description carries our marker: no run owns it,
-        # so it is not a leftover for the operator to reclaim — phase 1 destroys it.
+        # Untagged, but the clone POST's description carries our marker: phase 1 destroys it.
         with patch("infra.collisions.proxmox_api", return_value={"data": []}), \
                 patch.object(ownership, "has_clone_marker", return_value=True):
             check_collisions(_share(), _plan(_share()), [dict(_vm(1000, ""), lock="clone")])

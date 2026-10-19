@@ -101,7 +101,6 @@ def build_parser():
 
 
 def print_plan(comp_name, comp_dir):
-# --plan-only: summarize the competition's boxes and run identity; touch nothing.
     boxes = json.loads((comp_dir / "boxes.json").read_text())
     print(f"\n  ── PLAN for '{comp_name}' — nothing has been deployed " + "─" * 20)
     for b in boxes:
@@ -123,7 +122,6 @@ def print_plan(comp_name, comp_dir):
 
 def write_new_competition(comp_dir, comp_name, scenario, difficulty,
                           box_username_flag=None, credlist_flag=None):
-# Write a new competition's Compfile, boxes.json (interactive picker) and users.json.
     (comp_dir / "Compfile").write_text(
         f"name {comp_name}\n"
         f"scenario {scenario}\n"
@@ -147,7 +145,6 @@ def _checked_comp_name(raw):
 
 
 def select_named_competition(args):
-# --competition NAME / --comp-dir PATH: reuse it when it has a Compfile + boxes.json, else scaffold it.
     comp_name = _checked_comp_name(args.competition or Path(args.comp_dir).name)
     comp_dir = resolve_comp_dir(comp_name, args.comp_dir)
     has_compfile = (comp_dir / "Compfile").exists()
@@ -167,7 +164,6 @@ def select_named_competition(args):
 
 
 def select_interactive_competition():
-# No --competition: list the previous ones and prompt for new-or-reuse.
     previous = load_previous_competitions()
     if previous:
         print("\nPrevious competitions:")
@@ -203,9 +199,7 @@ def select_interactive_competition():
 def main():
     args = build_parser().parse_args()
 
-    # Refuse before anything runs: every lifecycle path (teardown's verify_clean included)
-    # reads the ambient estate identity, which a nodes.json-only deploy never needed until
-    # teardown. --plan-only touches no infrastructure and no lifecycle path, so it is exempt.
+    # every lifecycle path (teardown's verify_clean) reads the ambient estate identity a nodes.json-only deploy lacks; --plan-only runs none, so it is exempt
     if not args.plan_only:
         config.require_proxmox_identity()
 

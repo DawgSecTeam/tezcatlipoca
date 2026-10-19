@@ -1,14 +1,4 @@
-"""The shared execute() template — the single path from decision to action.
-
-Order (and it is not negotiable, because every bypass in the earlier agent was
-an exception to this order): kill switch -> param shape -> ensure_target -> free-form lint ->
-effect precondition -> dry-run short-circuit -> run -> bookkeeping -> audit.
-
-GuardrailError propagates (the loop stops; the design was violated).
-PolicyError becomes a failed result (the candidate was rejected; the loop
-re-plans). Everything else becomes ok=False — an effect that dies does not
-take the event with it.
-"""
+"""The shared execute() template — the single path from decision to action."""
 
 from .base import (ALL_TAGS, ESCALATIONS, REGISTRY, Effect, Result, can_root, catalog,
                    get, register, root_cmd, validate_params)
@@ -18,10 +8,8 @@ __all__ = ["REGISTRY", "Result", "Effect", "execute", "get", "register",
            "catalog", "can_root", "root_cmd", "validate_params",
            "ALL_TAGS", "ESCALATIONS", "reload_registry", "MODULES", "MISSING_MODULES"]
 
-# The complete effect catalogue, in registry order, as file stems. tests/
-# test_registry.py asserts MISSING_MODULES is empty: a module that is not
-# written yet is skipped here so a phase can be tested in isolation, but the
-# suite refuses to call the catalogue complete until every name exists.
+# Catalogue as file stems, in registry order. Unwritten ones are skipped into
+# MISSING_MODULES; tests/test_registry.py fails while it is non-empty.
 MODULES = ("recon", "spray_access", "reestablish", "escalate",
            "takedown", "block_port", "rotate_credlist", "lockout",
            "persist", "implant_channel", "task_channel", "improvise")
@@ -30,7 +18,6 @@ MISSING_MODULES = []
 
 
 def execute(effect_id, params, ctx, *, source="deterministic", cycle=None):
-    """Run one effect through every invariant. Returns Result."""
     effect = get(effect_id)
     started = ctx.now()
     params = validate_params(effect, params)
@@ -96,12 +83,7 @@ def execute(effect_id, params, ctx, *, source="deterministic", cycle=None):
 
 
 def reload_registry():
-    """Import every effects module for its registration side effect.
-
-    A module whose FILE does not exist yet is recorded in MISSING_MODULES and
-    skipped (phased migration); a module that exists but fails to import
-    propagates — a broken effect module is never silently absent.
-    """
+    """A module that exists but fails to import propagates — never silently absent."""
     from importlib import import_module
     from pathlib import Path
 

@@ -16,9 +16,6 @@ from .verdict import ensure_verdict
 
 
 def finalize(test_path, *, manifest=None):
-# Stubs for any missing canonical document, then the report skeleton, then the index.
-#
-#     This is the step that turns a folder of bytes into a standard test artifact.
     test_path = Path(test_path)
     manifest = manifest or load_manifest(test_path)
     collection = load_collection(test_path)
@@ -40,10 +37,9 @@ def finalize(test_path, *, manifest=None):
             "warnings": warn_summary(collection, manifest, test_path)}
 
 
-# The same staging scrim/red_link.pull_red_state does for the harness, kept here so
-# the TEARDOWN path can read red's record too: /var/lib/tlaloc is 0600 root and the
-# collector scp's as the box user, so an unstaged target records absent — and for the
-# run whose harness died, this collection is the only copy of what red planted.
+# The staging scrim/red_link.pull_red_state does for the harness: /var/lib/tlaloc is 0600 root
+# and the collector scp's as the box user, so an unstaged target records absent — and for a dead
+# harness this collection is the only copy of what red planted.
 _STAGE_CMD = ("sudo -n mkdir -p /tmp/ba && sudo -n chmod 755 /tmp/ba; "
               "for f in world.json events.jsonl report.md report-secrets.md "
               "restore-table.json; do "
@@ -54,10 +50,8 @@ _STAGE_CMD = ("sudo -n mkdir -p /tmp/ba && sudo -n chmod 755 /tmp/ba; "
 
 
 def stage_red_artifacts(manifest, timeout=75):
-# sudo-stage red's artifacts where the collector can read them.
-#
-#     Returns True when the attempt was made (not when it worked). Never raises: a
-#     dead red01 must be recorded as unreachable, not hold up a teardown.
+# Returns True when the attempt was made, not when it worked. Never raises: a dead red01
+# must record as unreachable, not hold up a teardown.
     import shutil
     import subprocess
 
@@ -79,9 +73,8 @@ def stage_red_artifacts(manifest, timeout=75):
     return True
 
 
-# The harness mints a per-run folder now, so the folder to collect is the newest one
-# belonging to this deploy run id — not the base key. Shared with the teardown steps that
-# must write into the same folder before the collector seals it.
+# The harness mints a per-run folder, so the folder to collect is the newest one belonging to
+# this deploy run id — not the base key. Shared with the teardown steps that write into it.
 def test_folder_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=None,
                              nodes=None, script="destroy-competition.py"):
     comp_dir = Path(comp_dir)
@@ -97,53 +90,43 @@ def test_folder_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, n
 def collect_for_teardown(comp_dir, *, run_id=None, teams=None, boxes=None, node=None,
                          nodes=None, script="destroy-competition.py", transport=None,
                          dry_run=False, timeout=45, echo=print, stage_red=None):
-# Teardown's whole artifact step: the one call destroy-competition.py makes.
-#
-#     Ordering is the entire point. destroy-competition.py calls this after the confirmation
-#     prompt and *before* its first destructive call (the `collect_for_teardown` call ahead of the pre-stop): `pre_stop_windows_boxes` hard-
-#     stops every clone, and a stopped guest's agent can no longer answer, so anything not read by
-#     then is gone. Red01 is destroyed by the teardown's own red step, so
-#     this is the safety net for the run whose harness died, not the primary path.
-#
-#     Warns and proceeds; never blocks (deliberate operator decision): a dead box must not wedge a
-#     teardown. The failure is recorded in collection.json, in the stubs, and in REPORT.md, which
-#     is where a reader will actually see it.
-#
-#     Returns the collection dict.
+# Teardown's whole artifact step: the one call destroy-competition.py makes. Ordering is the
+#     entire point — it runs after the confirmation prompt and before the first destructive call,
+#     because pre_stop_windows_boxes force-stops every clone and a stopped guest's agent can no
+#     longer answer. Warns and proceeds: a dead box must not wedge a teardown, and the failure is
+#     recorded in collection.json and REPORT.md. Red01 is destroyed by the teardown's own red step,
+#     so this is the safety net for a dead harness, not the primary path.
     comp_dir = Path(comp_dir)
     if transport is None:
-        # Resolved through the public facade at call time so callers (and tests) that patch
-        # `artifacts_ops.default_transport` keep steering the teardown collector.
+        # Resolved through the public facade at call time so callers that patch
+        # `artifacts_ops.default_transport` steer the teardown collector.
         from artifacts_lib import artifacts_ops
         transport = artifacts_ops.default_transport()
     path, manifest = test_folder_for_teardown(
         comp_dir, run_id=run_id, teams=teams, boxes=boxes, node=node, nodes=nodes, script=script)
     if not (manifest.get("paths") or {}).get("run_dir"):
-        # The harness's run dir, for a harness that died before recording it: the test
-        # folder itself, which is where run-agent-scrim.py writes by default.
+        # The harness's run dir, for a harness that died before recording it: the test folder
+        # itself, where run-agent-scrim.py writes by default.
         if (path / "run.json").exists() or (path / "T0.txt").exists():
             record_paths(path, run_dir=str(path))
     update_manifest(path, teardown={"at": iso(), "by": script, "dry_run": bool(dry_run),
                                    "collector_timeout_s": timeout})
     manifest = load_manifest(path)
-    # Injectable like `transport`: the offline lifecycle tests must not reach the
-    # network at all (their whole point), and a fixture host would otherwise wait
-    # out a real connect timeout.
+    # Injectable like `transport`: the offline lifecycle tests must not reach the network, and a
+    # fixture host would wait out a real connect timeout.
     (stage_red or stage_red_artifacts)(manifest)
     collection = collect(path, plan_targets(manifest, comp_dir=comp_dir), transport=transport,
                          dry_run=dry_run, timeout=timeout)
     if not dry_run and any(f.get("status") == FAILED
                            for t in collection.get("targets", []) for f in t.get("files", [])):
-        # A failed transfer is transient by definition (the source answered): one retry,
-        # before the destroy makes a second attempt impossible. `unreachable` is deliberately
-        # not retried — the source is down, and each retry only re-pays its timeout.
+        # A failed transfer is transient by definition (the source answered): one retry, before
+        # the destroy makes a second attempt impossible. `unreachable` is not retried.
         echo("  Retrying the transfers that failed...")
         collection = collect(path, plan_targets(manifest, comp_dir=comp_dir),
                              transport=transport, timeout=timeout)
     # The verdict and gate table come from scrim-report.py, which reads only the run dir (no
-    # network, no API). The harness normally runs it; teardown runs it for the run whose harness
-    # died — otherwise a collected INTERACTION.md nobody parsed leaves REPORT.md verdict-less,
-    # which is exactly the run that most needs a write-up.
+    # network, no API). The harness normally runs it; teardown runs it for a dead harness —
+    # otherwise a collected INTERACTION.md nobody parsed leaves REPORT.md verdict-less.
     verdict = ensure_verdict(path, echo=echo, dry_run=dry_run)
     result = finalize(path, manifest=load_manifest(path))
     summary = collection.get("summary", {})

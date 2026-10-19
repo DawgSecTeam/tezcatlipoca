@@ -1,20 +1,4 @@
-"""Regression tests for the follow-up fixes (live-found in the reset
-matrix + scrim authoring):
-
-* The engine mgmt IP preflight must not treat the CODE-exported default as an
-  operator-set address: an unverifiable DEFAULT is refused, an explicit one warned.
-* ensure_packet_secrets compiles the packet's gitignored secret layer into a
-  comp dir that arrived without it (stage_author/manual copy/fresh clone), so the
-  machine list carries the packet-promised decoy accounts and the harness's pre-T0
-  `verify --packet` cannot abort the run.
-* A member that self-reports joined but has no machine account on the team's DC
-  is a dead trust and must not read as a pass (verify's _member_trusted).
-* reconcile_estate_state imports rebuilt boxes by their deterministic vmid;
-  a failed import warns instead of dying.
-* env_summary names the estate (endpoint/node/datastore/tpl/mgmt) so a
-  wrong-variant env copy shows in the banner.
-
-Offline; no Proxmox, no network."""
+"""Follow-up fix regressions: mgmt-IP gate, packet secrets, member trust, reconcile, env banner."""
 
 import json
 import os
@@ -31,7 +15,7 @@ from config import packet_ops  # noqa: E402
 from common.utils import env_summary  # noqa: E402
 
 from estate import state as estate_state  # noqa: E402
-from redeploy import redeploy_rebuild_ops as redeploy  # noqa: E402  (owns reconcile_estate_state)
+from redeploy import redeploy_rebuild_ops as redeploy  # noqa: E402
 from redeploy.redeploy_context import RedeployContext  # noqa: E402
 
 
@@ -39,11 +23,11 @@ def _rctx(comp_dir, teams, boxes, ctx=None, node="pve"):
     return RedeployContext(comp_dir=comp_dir, name="x", comp_name="x", node=node,
                            teams=teams, boxes=boxes, difficulty=None, state={},
                            state_path=None, ctx={} if ctx is None else ctx)
-from infra import collisions as mgmt_ip_mod  # noqa: E402  (owns the engine mgmt-IP gate)
+from infra import collisions as mgmt_ip_mod  # noqa: E402
 
 
 class EngineMgmtGateTests(unittest.TestCase):
-# "explicitly set" must mean the OPERATOR set it.
+    # "explicitly set" must mean the OPERATOR set it.
 
     GUEST = [{"vmid": 500, "name": "foreign-thing", "node": "n1", "status": "running",
               "tags": "", "template": 0}]
@@ -60,16 +44,15 @@ class EngineMgmtGateTests(unittest.TestCase):
 
     def test_unverifiable_operator_set_ip_warns_and_proceeds(self):
         env = {k: v for k, v in os.environ.items() if k != "TEZ_ENGINE_MGMT_IP_IS_DEFAULT"}
-        env["TEZ_ENGINE_MGMT_IP"] = "10.0.0.250"  # operator-set, hermetic to ambient env
+        env["TEZ_ENGINE_MGMT_IP"] = "10.0.0.250"
         with patch.dict(os.environ, env, clear=True), \
              patch.object(mgmt_ip_mod, "proxmox_api", side_effect=RuntimeError("no agent")):
-            self._gate()  # must not raise
+            self._gate()
 
 
 
 class EnsurePacketSecretsTests(unittest.TestCase):
-    # packet colocated with the comp dir: packet_source "packet.yaml" resolves
-    # comp-dir-relative, so the fixture needs no comps checkout at all.
+    # packet_source "packet.yaml" resolves comp-dir-relative: no comps checkout needed.
     COMPFILE = "name Test\npacket_source packet.yaml\n"
     PACKET = """
 event:
@@ -127,7 +110,7 @@ boxes:
 
 
 class MemberTrustedTests(unittest.TestCase):
-# the member's self-report is not the DC's truth.
+    # the member's self-report is not the DC's truth.
 
     def _job(self, role="member", team="team1"):
         return {"team_key": team, "role": role}
@@ -143,8 +126,6 @@ class MemberTrustedTests(unittest.TestCase):
 
 
 class ReconcileStateTests(unittest.TestCase):
-# import rebuilt boxes by deterministic vmid; warn, never die.
-
     def _target(self, vm_name, vmid, slot=0):
         return {"vm_name": vm_name, "vmid": vmid, "slot": slot}
 
@@ -174,9 +155,7 @@ class EnvSummaryTests(unittest.TestCase):
 
 
     def test_summary_reads_the_resolved_target_not_the_ambient_env(self):
-        """Placement and --engine-mgmt-ip move the run by activating the config, not the
-        environment. The banner must name what the run DIALS: failed once when a canary
-        deployed --engine-mgmt-ip 10.0.0.246 while every line printed 10.0.0.248."""
+        """The banner must name the activated config the run dials, not the ambient env."""
         from estate import config
         env = {"TEZ_PROXMOX_ENDPOINT": "https://203.0.113.10:8006",
                "TEZ_PROXMOX_NODE": "proxmox", "TEZ_PROXMOX_DATASTORE": "hdd",

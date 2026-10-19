@@ -1,35 +1,4 @@
-"""lockout — take blue's own logins away, in the ROE's lockout window only.
-
-Service takedowns are pressure; this is possession. In the last minutes of the
-event red stops being subtle: every blue login account — the credlist accounts
-the engine authenticates with, and the box account engineers actually work from —
-is password-locked, so blue cannot log in to fix what is still standing.
-
-Ported from the earlier agent's burndown + `firewall_lockout` (mode=lockout):
-
-* Linux  ``usermod -L <user>`` per account  (undo: ``usermod -U <user>``)
-* Windows ``net user <user> /active:no``    (undo: ``net user <user> /active:yes``)
-
-Four things are deliberately NOT the earlier agent's shape:
-
-* **the window is the only key.** A locked account's undo is organizer-facing, so
-  `check()` refuses this effect unless `policy.window_open("lockout")` — outside
-  that window a lockout is indistinguishable from vandalism, and the ROE does not
-  pay for it;
-* **red's own way in is never locked.** The foothold user, root, and every
-  planted `svc-*` account are out. On Windows the SSH path *is* Administrator, so
-  a lock list that would disable our own session is refused unless a live C2
-  channel covers the box — the channel built to outlive exactly that (the earlier
-  agent's `_live_beacon` rule);
-* **the lock is verified, not assumed.** The shadow hash of every account is read
-  back (a leading ``!``/``*``) and Windows' `Enabled` flag is read back, so
-  `ok=True` means the accounts are actually locked. Accounts that cannot be
-  verified are reported instead of claimed;
-* **the record survives the claim.** Locked accounts are recorded (impact row,
-  artifact, restore recipe) whenever the mutation landed — even when only some
-  accounts verified — because a partial lockout blue can see is still information
-  for the organizer's after-action.
-"""
+"""lockout — take blue's own logins away, in the ROE's lockout window only."""
 
 import re
 import shlex
@@ -46,20 +15,13 @@ LOCKED, UNLOCKED, MISSING = "L", "U", "N"
 
 _USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
-# `root` is the one account a lockout never touches: it is the box's own way out
-# of a broken state and red's last resort.
+# root is the box's own way out of a broken state; never lock it.
 NEVER = ("root",)
 
 
 def off_limits(user, fh, windows=False):
-    """True for an account the lockout must not touch.
-
-    Red's own plants are always out. On Linux our foothold user is out too — red
-    keeps working through it. On Windows the box account IS the SSH path red uses,
-    so it is NOT excluded here: the channel rule in `_plan` decides, because
-    leaving Administrator enabled on a Windows box means blue was never locked out
-    at all (the earlier agent's `keep_foothold_user` case).
-    """
+    """On Windows the box account is red's SSH path, so it is NOT excluded here —
+    the channel rule in `_plan` decides."""
     user = (user or "").strip()
     if not user:
         return True
@@ -73,7 +35,6 @@ def off_limits(user, fh, windows=False):
 
 
 def parse_status(out):
-    """{user: 'L'|'U'|'N'} from the read-back (the regex is (state, user))."""
     return {user: state for state, user in STATUS_RE.findall(out or "")}
 
 
@@ -98,8 +59,6 @@ class Lockout(Effect):
     }
     tags = frozenset({"endgame", "unrecoverable"})
     needs = {"foothold": True, "root": False, "c2": False, "os": "any"}
-
-    # -- preconditions ---------------------------------------------------------
 
     def check(self, ctx, params):
         super().check(ctx, params)
@@ -131,11 +90,7 @@ class Lockout(Effect):
             raise PolicyError(f"lockout already failed twice on {ip} — inspect the "
                               "box instead of re-running")
 
-    # -- the target list -------------------------------------------------------
-
     def _targets(self, ctx, ip, params, windows):
-        """Blue's login accounts on this box: intel's credlist + the box account,
-        minus red's own (the earlier agent's `_blue_accounts`)."""
         requested = params.get("users") or []
         if isinstance(requested, str):
             requested = [requested]
@@ -163,13 +118,8 @@ class Lockout(Effect):
         return out, ""
 
     def _plan(self, ctx, ip, params):
-        """(accounts to lock, why-not) with the Windows channel rule applied.
-
-        Disabling the account our own SSH path uses would cut red off, so it is
-        dropped from the list — unless a live C2 channel covers the box, which is
-        the whole reason that channel exists. If nothing is left to lock, the box
-        is refused (the earlier agent skipped it too).
-        """
+        """Disabling the account red's own SSH path uses would cut red off; drop it
+        unless a live C2 channel covers the box."""
         fh = ctx.world.foothold(ip)
         windows = bool(fh and fh.get("windows"))
         users, why = self._targets(ctx, ip, params, windows)

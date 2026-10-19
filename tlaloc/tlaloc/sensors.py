@@ -1,24 +1,10 @@
-"""Sensors: the read-only scoreboard mirror (Quotient) and the restore detector.
-
-Two jobs, both read-only (never POST anything but the login that establishes the
-scoreboard session):
-
-* **pressure measurement** — Quotient's latest scored round per team/service,
-  which is what the policy caps and the digest read;
-* **blue's behaviour** — a service that was DOWN and is UP again between two
-  polls is a blue restore: the strongest available signal that blue is working
-  the box, and the trigger for the ladder's mercy rule and for re-planting.
-
-The sensor is deliberately dumb. It reports; it never decides, never writes to
-the scoreboard, and never touches a team box.
-"""
+"""Sensors: read-only Quotient scoreboard mirror and blue-restore detector; reports, never decides."""
 
 import time
 
 from .errors import TlalocError
 
-# How long a scoreboard value is trusted. Quotient polls every ~70s; anything
-# older than this is stale and reported as such rather than silently used.
+# Quotient polls every ~70s; values older than this are reported stale, not silently used.
 STALE_AFTER_SEC = 300
 
 
@@ -66,7 +52,7 @@ class QuotientSensor:
                 for t in self._get("/api/teams")]
 
     def team_service_map(self):
-        """{team_name: {ServiceName: bool}} from the latest scored round."""
+        """Quotient's Last10Rounds are newest-first: rounds[0] is the latest scored round."""
         out = {}
         for team in self.teams():
             services = self._get(f"/api/services/{team['id']}") or []
@@ -83,8 +69,6 @@ class QuotientSensor:
 
 
 class Sensors:
-    """The loop's view: poll, compare with the last poll, report what changed."""
-
     def __init__(self, cfg, intel, world=None, log=None, client=None, now=None):
         sensors_cfg = cfg.get("sensors") or {}
         self.cfg = cfg
@@ -100,8 +84,6 @@ class Sensors:
         self._client = client
         self.polls = 0
 
-    # -- client -------------------------------------------------------------
-
     @property
     def client(self):
         if self._client is None:
@@ -115,10 +97,7 @@ class Sensors:
             self._client = QuotientSensor(url, password, timeout=self.poll_timeout)
         return self._client
 
-    # -- polling ------------------------------------------------------------
-
     def poll(self):
-        """{team: {service: up}} or None when the scoreboard is unusable."""
         if not self.enabled:
             return None
         client = self.client
@@ -138,12 +117,7 @@ class Sensors:
         return mapping
 
     def observe(self):
-        """One cycle's read: returns (service_map, down_counts, restores).
-
-        `restores` is a list of {team, service} that went DOWN -> UP since the
-        previous poll, recorded into world state as blue events (which is what
-        the ladder's mercy rule and the digest's `resp` section read).
-        """
+        """DOWN -> UP flips land in world state as blue events: read by the mercy rule and digest resp."""
         mapping = self.poll()
         if mapping is None:
             return self.last_map, self.counts(), []
@@ -161,7 +135,6 @@ class Sensors:
         return dict(self.last_map)
 
     def counts(self):
-        """{team: (up, down)} — the pressure gauge the caps read."""
         out = {}
         for team, status in (self.last_map or {}).items():
             up = sum(1 for ok in status.values() if ok)
@@ -180,11 +153,7 @@ class Sensors:
 
 
 def diff_restores(previous, current):
-    """Services that flipped DOWN -> UP between two polls (blue's work).
-
-    A service absent from either side is not a flip: the map only carries scored
-    services, and a service that disappears is a scoring change, not a restore.
-    """
+    """Absent from either side is a scoring change, not a restore."""
     out = []
     for team, status in (current or {}).items():
         before = (previous or {}).get(team) or {}

@@ -1,9 +1,4 @@
-"""escalate — one test per mechanism/label family (sudo, sudo_pw, escape:*,
-capexec:*, system), plus the no-op, the give-up paths and the precondition ones.
-
-The fixtures' comp-min plants `sudo-nopasswd` on 192.168.1.10 and a Windows DC
-on 192.168.1.20, so the intel hint is deterministic in these tests.
-"""
+"""escalate — one test per mechanism/label family, plus no-op, give-up and precondition paths."""
 
 import json
 
@@ -30,8 +25,6 @@ def _notes(ctx, ip=IP):
     return ctx.world.target_record(ip)["notes"]
 
 
-# --- dry-run ------------------------------------------------------------------
-
 def test_dry_run_plans_without_touching_the_box(tmp_path):
     ssh = FakeSSH()
     ctx = make_ctx(tmp_path, ssh=ssh, dry_run=True)
@@ -41,14 +34,11 @@ def test_dry_run_plans_without_touching_the_box(tmp_path):
     assert ssh.calls == []
 
 
-# --- label: sudo --------------------------------------------------------------
-
 def test_passwordless_sudo_is_discovered_proved_and_recorded(tmp_path):
     ssh = FakeSSH().on("sudo -n id", out=ROOT_ID)
     ctx = _ctx(tmp_path, ssh)
     result = execute("escalate", {"ip": IP}, ctx)
     assert result.ok, result.detail
-    # the proving command IS the routing command: exactly one, and reproducible
     assert ssh.calls[0]["cmd"] == "sudo -n id"
     assert ssh.sent("sudo -n id") == ["sudo -n id"]
     fh = ctx.world.foothold(IP)
@@ -56,7 +46,6 @@ def test_passwordless_sudo_is_discovered_proved_and_recorded(tmp_path):
     assert can_root(fh)
     assert root_cmd("id", fh) == ssh.calls[0]["cmd"]
     assert "sudo" in result.detail and result.data["label"] == "sudo"
-    # the ledger says why, and the undo is recorded
     assert any("escalate: intel hint: escalation label 'sudo'" in n for n in _notes(ctx))
     assert any("escalate: sudo proved root" in n or "escalate: passwordless sudo" in n
                for n in _notes(ctx))
@@ -64,8 +53,6 @@ def test_passwordless_sudo_is_discovered_proved_and_recorded(tmp_path):
     assert table and table[0]["effect"] == "escalate" and table[0]["recipe"]
     assert ctx.world.impacts() == []          # an escalation is not an impact
 
-
-# --- label: sudo_pw -----------------------------------------------------------
 
 def test_password_sudo_uses_the_foothold_credential_and_never_leaks_it(tmp_path):
     ssh = FakeSSH().on("| sudo -S", out=ROOT_ID)
@@ -90,8 +77,6 @@ def test_sudo_pw_is_skipped_without_a_password(tmp_path):
     assert not ssh.sent("sudo -S")
 
 
-# --- label: escape:* (SUID escape binary) -------------------------------------
-
 def test_suid_shell_escape_becomes_a_routable_label(tmp_path):
     ssh = FakeSSH()
     ssh.on("find / -xdev -perm -4000", out="/usr/bin/bash\n/usr/bin/find\n")
@@ -104,7 +89,6 @@ def test_suid_shell_escape_becomes_a_routable_label(tmp_path):
     assert ssh.sent("/usr/bin/bash -p -c id") == ["/usr/bin/bash -p -c id"]
     assert root_cmd("id", ctx.world.foothold(IP)) == "/usr/bin/bash -p -c id"
     assert "escape:" in label and result.data["family"] == "suid"
-    # the non-routable ones are still reported for improvise
     assert any("/usr/bin/find" in n for n in result.data["notes"])
     assert any("one-shot" in n for n in result.data["notes"])
 
@@ -129,9 +113,6 @@ def test_a_suid_binary_that_does_not_return_root_is_not_a_label(tmp_path):
 
 
 def test_one_shot_only_escape_is_reported_but_never_labelled(tmp_path):
-    """The earlier agent recorded escape:find; the router appends the command, so
-    find cannot round-trip. The box is rooted and the ledger says so — without a
-    lie."""
     ssh = FakeSSH()
     ssh.on("find / -xdev -perm -4000", out="/usr/bin/find\n")
     ssh.on("-exec /bin/sh -p -c", out=ROOT_ID)
@@ -144,8 +125,6 @@ def test_one_shot_only_escape_is_reported_but_never_labelled(tmp_path):
     assert any("PROVES root" in n for n in result.data["notes"])
     assert any("not routable" in n for n in _notes(ctx))
 
-
-# --- label: capexec:* (cap_setuid binary) -------------------------------------
 
 def test_cap_setuid_binary_becomes_a_capexec_label(tmp_path):
     ssh = FakeSSH()
@@ -169,8 +148,6 @@ def test_cap_setuid_without_a_known_invocation_shape_is_not_labelled(tmp_path):
     assert any("not routable" in n for n in result.data["notes"])
 
 
-# --- label: system (Windows) --------------------------------------------------
-
 def test_windows_administrator_takes_over_system_and_records_the_cleanup(tmp_path):
     ssh = FakeSSH().on("schtasks /Create", out="SYSTEM-OK")
     ctx = _ctx(tmp_path, ssh, ip=WIN, user="Administrator", password="boxpw-1",
@@ -187,7 +164,7 @@ def test_windows_administrator_takes_over_system_and_records_the_cleanup(tmp_pat
     assert '"' not in script, "the cmd.exe wrap forbids double quotes"
     table = ctx.world.restore_table()
     assert table and "schtasks /Delete" in " ".join(table[0]["recipe"])
-    assert ctx.world.artifacts() == []       # the one-shot is not a standing plant
+    assert ctx.world.artifacts() == []
     assert any("SYSTEM" in n for n in _notes(ctx, WIN))
 
 
@@ -207,8 +184,6 @@ def test_windows_without_an_admin_session_has_no_label(tmp_path):
     assert "Administrator" in result.detail
 
 
-# --- already root / stale label ----------------------------------------------
-
 def test_a_standing_label_is_re_verified_and_nothing_is_touched(tmp_path):
     ssh = FakeSSH().on("sudo -n id", out=ROOT_ID)
     ctx = _ctx(tmp_path, ssh, user="ubuntu", kind="root", escalation="sudo")
@@ -216,7 +191,7 @@ def test_a_standing_label_is_re_verified_and_nothing_is_touched(tmp_path):
     assert result.ok and "re-verified" in result.detail
     assert [c["cmd"] for c in ssh.calls] == ["sudo -n id"]
     assert ctx.world.foothold(IP)["escalation"] == "sudo"
-    assert ctx.world.restore_table() == []      # nothing changed
+    assert ctx.world.restore_table() == []
 
 
 def test_a_root_foothold_with_no_label_is_a_no_op_success(tmp_path):
@@ -228,7 +203,7 @@ def test_a_root_foothold_with_no_label_is_a_no_op_success(tmp_path):
 
 
 def test_a_stale_label_is_withdrawn_so_routing_cannot_ride_it(tmp_path):
-    ssh = FakeSSH()          # nothing on this box answers with root any more
+    ssh = FakeSSH()
     ctx = _ctx(tmp_path, ssh, user="ubuntu", kind="root", escalation="sudo")
     result = execute("escalate", {"ip": IP}, ctx)
     assert result.ok is False
@@ -238,10 +213,8 @@ def test_a_stale_label_is_withdrawn_so_routing_cannot_ride_it(tmp_path):
     assert any("withdrew stale label" in n for n in _notes(ctx))
 
 
-# --- no label applies ---------------------------------------------------------
-
 def test_no_label_applies_is_ok_false_with_the_discovery_in_the_notes(tmp_path):
-    ssh = FakeSSH()          # every probe answers, none of them with root
+    ssh = FakeSSH()
     ctx = _ctx(tmp_path, ssh)
     result = execute("escalate", {"ip": IP}, ctx)
     assert result.ok is False
@@ -268,13 +241,13 @@ def test_the_family_order_follows_the_intel_hint(tmp_path, monkeypatch):
     ssh = FakeSSH()
     ssh.on("getcap -r /", out="/usr/lib/.x2d cap_setuid=ep\n")
     ssh.on("/usr/lib/.x2d id", out=ROOT_ID)
-    ctx = _ctx(tmp_path, ssh, ip="192.168.1.11")     # db01: no sudo-nopasswd hint
+    ctx = _ctx(tmp_path, ssh, ip="192.168.1.11")     # the fixture's sudo hint is on .10 only
     monkeypatch.setattr(ctx.intel, "hints_for",
                         lambda ip: {"escalation": "capexec:pending-discovery"})
     result = execute("escalate", {"ip": "192.168.1.11"}, ctx)
     assert result.ok, result.detail
     assert result.data["label"] == "capexec:/usr/lib/.x2d"
-    assert "find / -xdev" in ssh.calls[0]["cmd"]      # binary families promoted
+    assert "find / -xdev" in ssh.calls[0]["cmd"]
     assert "getcap" in ssh.calls[1]["cmd"]
     assert not ssh.sent("sudo -n id"), "the hinted family won before sudo was tried"
 
@@ -298,8 +271,6 @@ def test_a_transport_blowup_is_ok_false_not_a_crash(tmp_path):
     assert ctx.world.foothold(IP)["escalation"] is None
 
 
-# --- preconditions ------------------------------------------------------------
-
 def test_no_foothold_is_a_precondition_rejection(tmp_path):
     ctx = make_ctx(tmp_path, ssh=FakeSSH())
     result = execute("escalate", {"ip": IP}, ctx)
@@ -317,15 +288,8 @@ def test_escalate_stops_re_probing_a_box_with_no_root_path(tmp_path):
     assert ssh.calls == []
 
 
-# --- the vocabulary itself -----------------------------------------------------
-
 def test_emitted_labels_stay_inside_the_shared_routing_vocabulary():
-    """The label vocabulary is the earlier agent's, and `can_root`/`root_cmd` must
-    route it.
-
-    `system` is the one exception by design: on Windows the routing is the
-    admin-equivalent SESSION (as in takedown.windows_admin), not a wrapper.
-    """
+    """`system` is the exception by design: Windows routes on the admin session, not a wrapper."""
     from tlaloc.effects.base import ESCALATIONS
     for label in ("sudo", "sudo_pw", "escape:/usr/bin/bash -p -c",
                   "capexec:/usr/lib/.an1d"):

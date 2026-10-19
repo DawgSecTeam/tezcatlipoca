@@ -1,9 +1,4 @@
-"""estate.destroy: teardown tier order, and a refusal that never aborts the tier.
-
-Linked clones share their golden's base volume (a teardown diagnostic log shows it), so the
-delete sequence is an invariant: clones, goldens, engine template, engine, bridges. A refused
-resource stays in state and is reported; everything else still dies. Offline: fake Proxmox API,
-a temp comp dir per test."""
+"""estate.destroy: teardown tier order, and a refusal that never aborts the tier."""
 
 import sys
 import tempfile
@@ -27,19 +22,12 @@ ENGINE_TEMPLATE = BASE | {"engine-template"}
 
 
 class FakePVE:
-    """Minimal PVE: node VM listings, per-VM configs, DELETE capture.
-
-    Network state is stateful on purpose: `/network` reports the PENDING config (a POST or
-    DELETE shows up at once) and only the reload PUT applies it, so a fake that always
-    reported vmbr101 present would hide both halves of the bridge bug live-found on
-    caught live: the name came from the wrong field, and the deletion was
-    never applied.
-    """
+    """`/network` reports the PENDING config; only the reload PUT applies it, like real PVE."""
 
     def __init__(self, nodes):
         self.nodes = nodes
-        self.deleted = []      # (node, vmid) in call order
-        self.bridges = []      # (node, bridge_name) in call order
+        self.deleted = []
+        self.bridges = []
         self.network = {"vmbr101"}
         self.pending_removed = set()
         self.reloads = 0
@@ -81,7 +69,6 @@ def vm(vmid, name, tags, status="stopped"):
 
 
 def full_state(comp_dir, tags_by_vmid=None):
-    """One resource of every kind, with the tags the deploy stamps (role tag included)."""
     tags_by_vmid = tags_by_vmid or {}
     state = EstateState.load(comp_dir)
     state.data["identity"] = {"comp_name": COMP, "run_id": RUN}
@@ -133,11 +120,11 @@ class TierOrder(FakeAPI):
                          ["bridge", "engine", "engine_template", "golden", "jump", "team_box"])
         self.assertEqual([vmid for _, vmid in fake.deleted], [2001, 2002, 1151, 1000, 1140])
         self.assertEqual(fake.bridges, [("pve", "vmbr101")])
-        # DELETE only stages: the removal must be applied, or the bridge stays up on the
-        # node while the row leaves the document caught live.
+        # PVE DELETE only stages the removal; without the reload PUT the bridge
+        # stays on the node while the row leaves the document.
         self.assertEqual(fake.reloads, 1)
-        # The cross-tier rule TIERS encodes, asserted on the flat sequence: every clone
-        # before its own base — the deployed engine IS a linked clone of the engine template.
+        # the deployed engine IS a linked clone of the engine template:
+        # every clone must die before its own base.
         self.assertLess(fake.deleted.index(("pve", 1151)), fake.deleted.index(("pve", 1000)))
         self.assertLess(fake.deleted.index(("pve", 1000)), fake.deleted.index(("pve", 1140)))
 
@@ -155,11 +142,11 @@ class RefusalNeverAborts(FakeAPI):
         self.assertIn("refusing to destroy", summary["refused"][0]["reason"])
         self.assertIn(RUN, summary["refused"][0]["reason"])
         self.assertEqual([e["vmid"] for e in state.resources(kind="team_box")], [2001])
-        # The golden is SKIPPED, not attempted: its clone (2001) is still live, so a delete
-        # could only fail on the base volume and abort the whole estate step.
+        # Golden is SKIPPED, not attempted: its clone (2001) is still live,
+        # deleting the base volume would abort the whole tier.
         self.assertEqual([e["vmid"] for e in summary["skipped"]], [1151])
         self.assertEqual([e["vmid"] for e in state.resources(kind="golden")], [1151])
-        self.assertEqual(len(summary["destroyed"]), 4)   # jump + engine + template + bridge
+        self.assertEqual(len(summary["destroyed"]), 4)
 
 
 class Idempotent(FakeAPI):
@@ -178,14 +165,14 @@ class BridgeAttribution(FakeAPI):
         fake = self.patch_api(state)
         fake.comment = bridge_comment("other", "run-99999999", "team")
         summary = destroy.destroy_estate(state, log=lambda *a: None)
-        self.assertEqual(fake.bridges, [])                    # nothing was deleted
+        self.assertEqual(fake.bridges, [])
         self.assertTrue(any(e["entry"]["kind"] == "bridge" for e in summary["refused"]))
         self.assertEqual([r["kind"] for r in state.resources()], ["bridge"])
 
     def test_an_uncommented_bridge_is_refused(self):
         state = full_state(self.comp)
         fake = self.patch_api(state)
-        fake.comment = "Quotient team 101 — isolated, no uplink"   # pre-change prose only
+        fake.comment = "Quotient team 101 — isolated, no uplink"   # no ownership marker
         summary = destroy.destroy_estate(state, log=lambda *a: None)
         self.assertEqual(fake.bridges, [])
         self.assertEqual([r["kind"] for r in state.resources()], ["bridge"])
@@ -229,9 +216,6 @@ class NodeFilter(FakeAPI):
 
 class BridgeSurvives(FakeAPI):
     def test_a_bridge_that_survives_its_delete_is_refused_not_forgotten(self):
-        """A teardown may not report an estate clean while a bridge of its own is still on
-        the node: the row stays in the document and the tier carries on (the refusal is a
-        verdict, not an abort)."""
         state = full_state(self.comp)
         self.patch_api(state)
         with patch.object(destroy, "destroy_bridge_if_exists", return_value=False):
@@ -239,7 +223,7 @@ class BridgeSurvives(FakeAPI):
         self.assertEqual([r["entry"]["kind"] for r in summary["refused"]], ["bridge"])
         self.assertIn("still on pve", summary["refused"][0]["reason"])
         self.assertEqual([r["name"] for r in state.resources("bridge")], ["vmbr101"])
-        # ...and the tiers after it still ran.
+        # refusal is a verdict, not an abort: the later tiers still ran.
         self.assertEqual([vmid for _, vmid in self.fake.deleted], [2001, 2002, 1151, 1000, 1140])
 
 

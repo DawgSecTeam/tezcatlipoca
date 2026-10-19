@@ -1,14 +1,4 @@
-"""Quotient event capture + pause, shared by run-schedule.py, competition-ops.py and the
-teardown engine-capture step.
-
-`end` semantics (the stage_capture lesson): capture the final scoreboard FIRST —
-the pause is what freezes the loop's last round, but a paused engine still answers
-these APIs — then pause. Capture is deliberately tolerant: the engine can answer 500
-or a non-JSON body mid-round, and the old `.json()` calls propagated straight out of
-main() BEFORE the pause ran, so the schedule said the event was over while scoring
-kept running (a harness audit finding). Every failure is recorded inside the dump instead, so
-the pause always gets its turn and the operator still gets (partial) evidence on disk.
-"""
+"""Quotient event capture + pause: capture the final scoreboard BEFORE pausing (a paused engine still answers these APIs), and never let a capture failure skip the pause."""
 
 import json
 import sys
@@ -34,18 +24,14 @@ def login_scoring(base_url, password):
 
 
 def dump_scoreboard(base_url, session, comp_dir, *, out_dir=None):
-# Capture the final scoreboard; returns the list of capture errors ([] = clean).
     out_dir = Path(out_dir) if out_dir else Path(comp_dir) / "evidence"
     out_dir.mkdir(parents=True, exist_ok=True)
     dump = {"captured_at": datetime.now().astimezone().isoformat(timespec="seconds")}
     errors = []
 
     def _get(path, label):
-        # Returns (payload, error). A 200 whose body is literally `null` is a failed read
-        # too: it used to return None without touching `errors`, and the callers then read
-        # `errors[-1]` off an empty list — IndexError, caught by the teardown's step wrapper
-        # and downgraded to a warning, so a teardown silently lost the engine's final
-        # scoreboard (proved with a stub session).
+        # A 200 whose body is literally `null` is a failed read too: callers do errors[-1],
+        # so every failure must append an error.
         try:
             r = session.get(f"{base_url}{path}", timeout=10)
             r.raise_for_status()
@@ -83,8 +69,7 @@ def dump_scoreboard(base_url, session, comp_dir, *, out_dir=None):
     else:
         dump["injects"] = injects
     out = out_dir / f"event-final-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    # Atomic + 0600 at creation: this is the only copy of the final scores once the
-    # engine is torn down, and a torn write here is unrecoverable (config_ops helper).
+    # 0600 + atomic: the only copy of the final scores once the engine is torn down.
     write_text_atomic(out, json.dumps(dump, indent=2), mode=0o600)
     if errors:
         print(f"  WARNING: scoreboard capture incomplete ({len(errors)} error(s)) → {out}")
@@ -96,7 +81,6 @@ def dump_scoreboard(base_url, session, comp_dir, *, out_dir=None):
 
 
 def pause_engine(base_url, session):
-# POST engine/pause True; returns (ok, detail). Never raises.
     try:
         r = session.post(f"{base_url}/api/engine/pause", json={"pause": True}, timeout=10)
     except requests.RequestException as e:
@@ -107,16 +91,12 @@ def pause_engine(base_url, session):
 
 
 def end_event(base_url, session, comp_dir):
-# Capture, then pause — the pause is attempted even when the capture fails.
-#
-#     Returns the process exit code: non-zero when the capture was incomplete OR the pause
-#     failed, because an event whose engine keeps scoring is not "over" however green the
-#     printed schedule looks.
+    # Non-zero exit unless capture AND pause both succeeded: an engine still scoring
+    # is not "over" however green the printed schedule looks.
     errors = []
     try:
         errors = dump_scoreboard(base_url, session, comp_dir)
     except Exception as e:
-        # Nothing the capture does may skip the pause below.
         print(f"  ERROR: scoreboard capture crashed: {type(e).__name__}: {e}", file=sys.stderr)
         errors = [f"capture crashed: {type(e).__name__}: {e}"]
     ok, why = pause_engine(base_url, session)

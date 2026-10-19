@@ -1,21 +1,4 @@
-"""Config: DEFAULTS < config.yaml < env allow-map. PURE — nothing aliases DEFAULTS.
-
-The earlier agent's defect (verified empirically in the audit): ``cfg = DEFAULTS``
-plus a shallow merge left every non-overridden sub-dict aliased into the
-module-level DEFAULTS, so one load_config() call leaked its env overrides into
-every later call in the process. tlaloc deep-copies and documents: config is
-frozen once the context is built — anything that needs to change mid-run lives in
-the Compfile or world state, not in cfg mutation.
-
-An explicit --config path that does not exist is a HARD error (the earlier agent
-silently fell back to DEFAULTS — the wrong-red_vmid incident). API keys never
-enter cfg: only the NAME of the env var to read them from.
-
-ROE lives in data: the ``red:`` block (ladder, caps, windows) mirrors the
-Compfile's ``red.*`` keys and is validated at load — the earlier agent's
-420-minute clock hardcoded in escalation.py misfired on shorter events; here
-every time is either an explicit minute value or a fraction of ``red.duration_min``.
-"""
+"""Config: DEFAULTS < config.yaml < env allow-map. PURE — nothing aliases DEFAULTS."""
 
 import copy
 import os
@@ -30,22 +13,22 @@ ENV_PREFIX = "TLALOC_"
 
 DEFAULTS = {
     "run": {
-        "comp": "",                # competition id, stamped into world.json
-        "state_dir": ".state",     # fresh dir per comp (cross-event leak fix)
-        "comp_dir": "",            # the comp's directory (set from --comp/deploy)
+        "comp": "",
+        "state_dir": ".state",     # fresh dir per comp — sharing one across events leaks state
+        "comp_dir": "",
         "kill_file": "",           # empty -> <state_dir>/KILL
         "dry_run": False,
-        "decision_window_min": 4,  # baseline cycle cadence
-        "focus_rotation_min": 12,  # how often the pressure focus rotates teams
+        "decision_window_min": 4,
+        "focus_rotation_min": 12,
         "jitter_pct": 15,
-        "endgame_cycle_min": 1.0,  # cadence while the final window is open
-        "error_halt_after": 8,     # consecutive cycle errors before the loop stops
-        "host_guard": True,        # refuse the live loop off red01 (see run.py)
+        "endgame_cycle_min": 1.0,
+        "error_halt_after": 8,
+        "host_guard": True,        # refuse the live loop off red01
         "blue_ips": [],            # extra IPs in scope (e.g. a human-blue laptop)
     },
     "red": {                       # the ROE block — mirror of Compfile `red.*`
         "assume_breach": "full",   # full | light | off   (seed pipeline reads it)
-        "depth": 3,                # seed depth 0..3 for `full`
+        "depth": 3,
         "duration_min": 150,       # the event clock — the ONLY clock source
         "ladder": {
             "enabled": True,
@@ -78,17 +61,14 @@ DEFAULTS = {
         "path": "/v1/systemone",
         "model": "clef-flash",
         "timeout_sec": 5,
-        # The endpoint's batch ceiling, in tokens. clef runs with a 16k
-        # context (was 512 at --ubatch-size 512), so the
-        # digest no longer has to be squeezed to fit: the whole state goes out.
-        # The truncation cascade in state/digest.py stays as a guard for a
-        # smaller endpoint or another model — it is sized against this number.
+        # Batch ceiling in tokens; the truncation cascade in state/digest.py is sized
+        # against it as a guard for a smaller endpoint.
         "max_request_tokens": 16384,
-        # Conservative estimate; ClefClient learns the endpoint's real ratio from
-        # its own "input (N tokens) is too large" message (see state/digest.py).
+        # conservative; ClefClient learns the real ratio from the endpoint's own
+        # "input (N tokens) is too large" message
         "tokens_per_char": 0.7,
         "theta": 0.60,               # default confidence gate (top probability)
-        "theta_by_question": {},     # per-question overrides from scrim logs
+        "theta_by_question": {},
         "high_stakes_effects": ["takedown", "lockout", "rotate_credlist"],
     },
     "llm": {                       # the arbiter/generator — never the decider
@@ -103,7 +83,7 @@ DEFAULTS = {
         "base_url": "",
         "username": "tlaloc",
         "password_env": "TLALOC_MYTHIC_PASSWORD",
-        "operation": "",           # one operation per comp, created at comp-prep
+        "operation": "",
         "verify_tls": False,
         "callback_wait_sec": 120,
         "callback_max_age_sec": 120,
@@ -136,10 +116,9 @@ DEFAULTS = {
         "action_timeout": 90,
         "max_retries_per_service": 6,
         "unreachable_halt_after": 8,
-        "command_max_len": 200,    # free-form commands (task/improvise)
+        "command_max_len": 200,
         "cred_spray_max": 40,
-        # spray_access: per-login probe deadline and the human-mimic gap between
-        # logins (the earlier agent's pacing; 0 in tests).
+        # spray_access: per-login probe deadline and human-mimic gap (0 delay in tests)
         "spray_probe_timeout": 20,
         "spray_delay_sec": 0.4,
         "nmap_top_ports": 200,
@@ -147,24 +126,19 @@ DEFAULTS = {
         "scan_timeout": 180,
     },
     "naming": {
-        # full <stem>-<suffix> | stem | suffix — see effects/artifactnames.py.
-        # The half blue matches on is the half to drop; `full` is the default
-        # because it is the most realistic, not because it is the safest.
+        # full | stem | suffix — see effects/artifactnames.py; `full` default = most realistic
         "mode": "full",
     },
     "effects": {
         "allow_ssh_takedown": False,   # scoring sshd down needs explicit opt-in
         "rekill_cron": True,           # persistence family: re-stop restored units
         "rotate_credlist": True,
-        "decoy": False,                # procfilter hunt-bait (optional flavour)
-        "mysql_udf": False,            # MySQL UDF OS-exec (optional flavour)
+        "decoy": False,
+        "mysql_udf": False,
     },
-    # Optional flavour ASSETS. Empty by default: the effects draw their own
-    # locations from effects/artifactnames.py, and these only point at a vendored
-    # asset (the earlier agent's preload .so / procfilter tree). They are read
-    # defensively — which
-    # is exactly why they must be declared: an undeclared key is a feature that is
-    # silently dead on red01, because the pushed config drops it.
+    # Vendored-asset pointers only — effects draw their own locations from
+    # effects/artifactnames.py. An undeclared key is dropped by the pushed config: a
+    # feature silently dead on red01.
     "evasion": {
         "preload_so": "",              # path to the hider .so on red01, if vendored
     },
@@ -173,9 +147,7 @@ DEFAULTS = {
     },
 }
 
-# env var -> dotted config path. Deliberately short: anything bigger belongs in
-# the config file (the earlier agent's sprawl lesson: three tracked configs, all
-# divergent).
+# env var -> dotted config path; anything bigger belongs in the config file
 ENV_MAP = {
     "TLALOC_STATE_DIR": "run.state_dir",
     "TLALOC_COMP": "run.comp",
@@ -195,7 +167,6 @@ _TRUE_FALSE = {"1": True, "true": True, "yes": True,
 
 
 def _coerce(text):
-    """'5'->5, '1.5'->1.5, 'true'->True, else the string."""
     low = text.strip().lower()
     if low in _TRUE_FALSE:
         return _TRUE_FALSE[low]
@@ -228,7 +199,6 @@ def _set_dotted(cfg, dotted, value):
 
 
 def load_dotenv():
-    """Read repo/.env then /etc/tlaloc/env into os.environ (never overrides)."""
     for path in (Path(__file__).resolve().parent.parent / ".env",
                  Path("/etc/tlaloc/env")):
         if not path.exists():
@@ -242,8 +212,6 @@ def load_dotenv():
 
 
 def load_config(path=None):
-    """Load the three layers, PURELY. Raises ConfigError on a missing explicit
-    path or an invalid ROE block; never mutates DEFAULTS."""
     load_dotenv()
     cfg = copy.deepcopy(DEFAULTS)
 
@@ -275,15 +243,7 @@ def load_config(path=None):
     return cfg
 
 
-# -- Compfile integration -----------------------------------------------------
-# The tezcatlipoca Compfile is `key value` lines (see the engine's
-# common/utils.py compfile_flag/compfile_value), NOT yaml. The contract:
-#   red.assume_breach full            dotted scalar keys
-#   red.caps.max_down 4
-#   red_yaml red.yaml                 pointer to a nested block (ladder etc.),
-#                                     path relative to the comp dir
 def load_compfile_red(comp_dir):
-    """Extract the red block from a comp dir's Compfile (may be {})."""
     comp_dir = Path(comp_dir)
     path = comp_dir / "Compfile"
     red = {}
@@ -308,9 +268,7 @@ def load_compfile_red(comp_dir):
 
 
 def apply_compfile(cfg, comp_dir):
-    """Merge the Compfile red block over cfg.red and revalidate. The Compfile is
-    the authority for ROE values (deploy-time contract); config.yaml provides
-    the agent's own settings."""
+    """The Compfile is the authority for ROE values; config.yaml is the agent's own settings."""
     red = load_compfile_red(comp_dir)
     if red:
         cfg["red"] = _deep_merge(cfg["red"], red)
@@ -320,12 +278,7 @@ def apply_compfile(cfg, comp_dir):
 
 
 def normalize(cfg):
-    """Fold YAML's booleans back into the enums they were written as.
-
-    `assume_breach: off` is three characters an operator WILL write, and YAML
-    1.1 parses it as `False` — which then fails validation with a message about
-    a value nobody typed. Normalize once, at load, in one place.
-    """
+    """YAML 1.1 parses `assume_breach: off` as False; fold booleans back into the enums."""
     red = cfg.get("red") or {}
     value = red.get("assume_breach")
     if isinstance(value, bool):
@@ -333,10 +286,7 @@ def normalize(cfg):
     return cfg
 
 
-# -- validation ---------------------------------------------------------------
-
 def validate_config(cfg):
-    """Fail loud at load (the deploy-time validation the plan demands)."""
     red = cfg.get("red") or {}
     if red.get("assume_breach") not in ("full", "light", "off"):
         raise ConfigError(f"red.assume_breach must be full|light|off, "
@@ -355,12 +305,9 @@ def validate_config(cfg):
         for i, tier in enumerate(tiers):
             name = tier.get("name") or f"tier{i}"
             if "at_min" in tier:
-                # earlier defect: at_min was divided by a hardcoded 420-min packet
-                # clock, so a 60-min scrim silently rescaled every tier.
-                # Conversion happens here, against THIS event's duration, and is
-                # written back into the list — a conversion nobody can observe
-                # would leave every tier at pct 0 and fire the whole ladder at
-                # T+0.
+                # Conversion against THIS event's duration is written back into the
+                # list: an unobserved conversion would leave every tier at pct 0 and
+                # fire the whole ladder at T+0.
                 if "at_pct" in tier:
                     raise ConfigError(f"ladder tier {name}: use at_pct OR at_min")
                 converted = dict(tier)

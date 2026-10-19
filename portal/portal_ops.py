@@ -38,8 +38,7 @@ from common.windows_ops import is_windows_template
 PORTAL_SRC = Path(__file__).resolve().parents[1] / "portal"
 REMOTE_DIR = "/opt/tez-portal"
 LOCAL_PORT = 8443
-# What ships to the engine: the backend files, plus the frontend SOURCE (the image builds it
-# with `npm ci` against package-lock.json — node_modules/ and dist/ never ship).
+# The image builds the frontend with `npm ci`; node_modules/ and dist/ never ship.
 _SHIP = ("Dockerfile", "compose.yaml", "requirements.txt", "auth.py", "console.py", "app.py", "ops_sync.py")
 _FRONTEND_SKIP = {"node_modules", "dist"}
 
@@ -51,19 +50,6 @@ def portal_enabled(comp_dir):
 def build_portal_config(*, comp_name, run_id, event_name, scoreboard_url, teams, boxes,
                         targets, placement, default_node, nodes, tokens,
                         firewall_console=True, public_host="", vpn=None):
-# portal.json: what the portal shows and which console token reaches which box.
-#
-#     teams    {team_key: {identifier, ...}}            (teams.json)
-#     boxes    boxes.json entries                       (template, unmanaged/in_path flags)
-#     targets  enumerate/load_targets output            (team_key, box_name, vmid, ip)
-#     nodes    console.node_targets output      (endpoint, pve_node, fingerprint)
-#     tokens   console.mint_console_tokens      (node_key -> token); a node without a
-#              token is left out of `nodes`, so its boxes list but cannot open a console
-#     vpn      {server_url, teams: {team_key: [{person, key}]}}  — the remote-access
-#              enrollment (phase-3 keys.json); None hides the dashboard's VPN section
-#
-#     Unmanaged boxes that are NOT the in-path firewall are left out (nothing a team operates);
-#     the in-path firewall is listed (teams own their pfSense) unless firewall_console=False.
     by_name = {b["name"]: b for b in boxes}
     out_teams = {k: {"identifier": str(v["identifier"]), "boxes": []} for k, v in teams.items()}
     for t in targets:
@@ -97,12 +83,8 @@ def build_portal_config(*, comp_name, run_id, event_name, scoreboard_url, teams,
 
 
 def tunnel_decision(hostname, comp_name, run_id, tunnel_token, fetch=None):
-# ("start" | "skip", why) for cloudflared on the stable hostname.
-#
-#     The tunnel token is one stable name; two connectors on it would split students across two
-#     ranges at random. So before starting ours, ask the hostname who answers: nobody (offline,
-#     error page, not our JSON) or THIS run -> start; another comp or run -> skip, and the
-#     portal stays reachable over ssh -L only.
+# One tunnel token is one stable hostname: two live connectors would split students across
+# ranges, so ask the hostname who owns it before starting ours.
     if not tunnel_token:
         return "skip", "TEZ_PORTAL_TUNNEL_TOKEN not set (LAN/ssh -L only)"
     if not hostname:
@@ -123,21 +105,10 @@ def tunnel_decision(hostname, comp_name, run_id, tunnel_token, fetch=None):
 
 def _env_file(session_secret, open_gate, tunnel_token, cookie_secure=True,
               ops_url="", ops_token=""):
-# The portal's .env on the engine.
-#
-#     cookie_secure gates SessionMiddleware's `https_only`. It must follow how the browser
-#     actually reaches the portal: with cloudflared the public side is HTTPS (Secure is
-#     correct and required), but the tunnel-less path documented in docs/portal.md is
-#     `ssh -L 8443:…` over plain HTTP — and any host that is not localhost/127.0.0.1 is not
-#     a secure context, so a Secure cookie is REJECTED by the browser and login is
-#     impossible (caught live: an operator forwarding the portal to a LAN address
-#     got 'Cookie "tez_portal" has been rejected because a non-HTTPS cookie can't be set as
-#     "secure"'). Callers pass use_tunnel.
-#
-#     TEZ_OPS_URL/TEZ_OPS_TOKEN wire the reset-request sync to the run-queue dashboard
-#     (portal/app.py ops sync): the DASHBOARD sets both in the deploy run's env, so only
-#     dashboard-submitted deploys get the channel. Without them the portal still records
-#     requests locally — they just never reach the operator's bell.
+# cookie_secure must match how the browser reaches the portal: over `ssh -L` to a non-localhost
+# address the browser REJECTS a Secure cookie and login is impossible. TEZ_OPS_URL/TOKEN are set
+# only in the dashboard's deploy env; without them ops sync records locally and never reaches
+# the operator's bell.
     lines = [f"PORTAL_SECRET_KEY={session_secret}",
              f"PORTAL_OPEN={'1' if open_gate else '0'}",
              f"PORTAL_COOKIE_SECURE={'1' if cookie_secure else '0'}"]
@@ -150,7 +121,6 @@ def _env_file(session_secret, open_gate, tunnel_token, cookie_secure=True,
 
 
 def bundle(config, env_text, src=PORTAL_SRC):
-# The tarball shipped to REMOTE_DIR: portal sources + portal.json + .env (0600).
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         def add_bytes(name, data, mode=0o644):
@@ -170,11 +140,7 @@ def bundle(config, env_text, src=PORTAL_SRC):
 
 
 def deploy_portal(ctx, env=os.environ):
-# Phase 8 tail: mint console tokens, write portal.json, ship and start the portal.
-#
-#     Idempotent on resume: tokens and the session secret are carried in the state document,
-#     the gate state under /opt/tez-portal/state survives a re-push, and compose up only
-#     recreates what changed. Never raises — every failure becomes a degradation.
+# Never raises — every failure becomes a degradation, never a broken range.
     if not portal_enabled(ctx.comp_dir):
         return
     print("  Student portal (Compfile `portal 1`)...")
@@ -189,9 +155,8 @@ def deploy_portal(ctx, env=os.environ):
 
 
 def vpn_config(comp_dir, teams, env):
-# The dashboard's VPN enrollment data — the phase-3 remote-access artifact plus the login
-#     server. keys.json is keyed by identifier (its "team" is the identifier string); None
-#     (remote access off, or no roster) hides the dashboard's VPN section.
+# keys.json is keyed by identifier (its "team" is the identifier string); None hides the
+# dashboard's VPN section.
     server_url = env.get("TEZ_HEADSCALE_URL", "")
     keys_path = Path(comp_dir) / "remote-access" / "keys.json"
     if not (keys_path.exists() and server_url):
@@ -210,8 +175,8 @@ def _deploy_portal(ctx, env):
     previous = ctx.state.get("portal_console_tokens") or {}
     minted, problems = mint_console_tokens(ctx.comp_name, ctx.run_id, nodes,
                                            previous=previous, env=env)
-    # A node that failed THIS attempt keeps the token an earlier attempt of the same run
-    # recorded (most failures here are transient API trouble, and that token still works).
+    # A node that failed this attempt keeps an earlier token of the same run: most
+    # failures here are transient and that token still works.
     tokens = {k: v for k, v in {**previous, **minted}.items() if k in nodes}
     ctx.state["portal_console_tokens"] = tokens
     ctx.state.setdefault("portal_session_secret", secrets.token_hex(32))
@@ -260,9 +225,8 @@ def _deploy_portal(ctx, env):
         _run_engine_cmd(ctx.tf_ctx, f"cd {REMOTE_DIR} && sudo docker compose --profile tunnel "
                         "rm -sf cloudflared >/dev/null 2>&1 || true",
                         timeout=120, step="portal tunnel stop")
-    # `restart portal` after `up`: portal.json is a bind mount read once at startup, and
-    # compose does not recreate a container whose image and service config are unchanged —
-    # without it a re-push (resume, re-created token) would keep serving the old config.
+    # `restart portal` after `up`: portal.json is read once at startup and compose never
+    # recreates an unchanged container, so a re-push would keep serving the old config.
     _run_engine_cmd(ctx.tf_ctx, f"cd {REMOTE_DIR} && sudo docker compose {profile}up -d --build "
                     f"&& sudo docker compose {profile}restart portal",
                     timeout=900, step="portal compose up")
@@ -295,7 +259,7 @@ def _gate_cmd(is_open, who):
 
 
 def set_access(tf_ctx, is_open, who="operator-cli"):
-# Open/close team console access without the UI (the portal re-reads it per request).
+# The portal re-reads the gate file per request — no restart needed.
     _run_engine_cmd(tf_ctx, _gate_cmd(is_open, who), timeout=30, step="portal gate")
 
 
@@ -309,8 +273,8 @@ def access_state(tf_ctx):
 
 
 
-# Runs ON the engine (stdlib only — the engine's python3 has no websockets/requests), against
-# the portal's 127.0.0.1 listener. Prints one JSON list of {check, ok, detail}.
+# Runs ON the engine, stdlib only (its python3 has no websockets/requests), against the
+# portal's 127.0.0.1 listener; prints one JSON list of {check, ok, detail}.
 _CHECK_SCRIPT = r'''
 import base64, json, os, socket, ssl, sys, threading, urllib.error, urllib.request
 A = json.loads(base64.b64decode(sys.argv[1]))
@@ -521,11 +485,10 @@ def check_portal(run_engine, comp_name, teams, admin_password, portal_config, co
 
 def teardown_portal(comp_dir, comp_name, run_id, state, teams, boxes, placement, default_node,
                     tf_ctx=None, env=os.environ):
-# Destroy-path step: copy access.log into the comp dir (artifact collection picks it up),
-#     then delete exactly this run's console user on every node. Warns and proceeds — a dead
-#     engine never blocks a teardown; the user deletion is retried by the next destroy run.
-    # The Compfile flag counts too: a crash between minting a user and saving the state
-    # leaves a user the state does not record — the deterministic name still finds it.
+# A dead engine never blocks a teardown; a missed console-user deletion is retried by the
+# next destroy run.
+    # A crash between minting a user and saving state leaves a user the state does not
+    # record — the Compfile flag still routes here and the deterministic name finds it.
     if not (state.get("portal_console_tokens") or state.get("portal_up")
             or portal_enabled(comp_dir)):
         return []

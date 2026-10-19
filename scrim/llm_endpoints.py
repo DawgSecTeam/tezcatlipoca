@@ -1,24 +1,4 @@
-"""The LLM endpoint table: what kind of endpoint a base_url names, and where its key lives.
-
-Why a table instead of a string test: a string test can only ask "is this the one cloud host I
-know", so EVERY public API that escaped the test — a keyed official API included — was driven as
-if it were an operator-side llama.cpp. Driving a public TLS API down that path causes:
-
-- blue's `opencode.jsonc` carrying the literal string ``local`` as its apiKey: a 401 on every
-  cycle, which makes a broken defense indistinguishable from an empty room;
-- red taking the slow-local profile (max_tokens 6144 / timeout 300 / json_retries 0);
-- `red_tunnel` opening a reverse SSH forward at the endpoint's TLS port and rewriting red's
-  base_url to `http://localhost:8180/v1` — plain HTTP onto a TLS port, i.e. red LLM-dead;
-- a missing key degrading to the literal ``local`` instead of raising.
-
-An entry is matched by HOST, so `https://api.deepseek.com` and `https://api.deepseek.com/v1` name
-the same endpoint. Anything NOT in the table is OPERATOR-SIDE by default: that is the behaviour
-operator llama.cpp / tailnet-host URLs rely on (no key, slower, reached by red01 over a reverse
-tunnel), so single-host rehearsals are unchanged.
-
-Model ids are the ENDPOINT's own (read from `GET /v1/models`). A gateway that fronts the same
-models under a different id is a different endpoint and needs its own entry.
-"""
+"""The LLM endpoint table: what kind of endpoint a base_url names, and where its key lives."""
 
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -37,6 +17,7 @@ class Endpoint:
     note: str = ""
 
 
+# Model ids are the endpoint's own (GET /v1/models); a gateway re-ids them and needs its own entry.
 ENDPOINTS = (
     Endpoint(name="deepseek", base_url="https://api.deepseek.com/v1", kind=PUBLIC,
              key_env="DEEPSEEK_API_KEY", models=("deepseek-flash", "deepseek-v4-pro"),
@@ -64,7 +45,6 @@ def _norm(base_url):
 
 
 def lookup(base_url):
-    """The table entry a base_url names, or None (None == operator-side)."""
     host = _host(base_url)
     if not host:
         return None
@@ -79,7 +59,6 @@ def lookup(base_url):
 
 
 def is_public(base_url):
-    """True for a cloud API the harness may dial directly and must send a real key to."""
     ep = lookup(base_url)
     return bool(ep and ep.kind == PUBLIC)
 
@@ -89,13 +68,11 @@ def is_operator_side(base_url):
 
 
 def provider_name(base_url):
-    """The provider name blue's opencode.jsonc declares for this endpoint."""
     ep = lookup(base_url)
     return ep.name if ep else "scrim-llm"
 
 
 def key_env(base_url):
-    """The env var that carries this endpoint's key ("" for operator-side: it has none)."""
     ep = lookup(base_url)
     if not ep or ep.kind != PUBLIC:
         return ""
@@ -103,7 +80,6 @@ def key_env(base_url):
 
 
 def describe(base_url):
-    """One line for the run log: which endpoint, which kind, which key env."""
     ep = lookup(base_url)
     if not ep:
         return f"{base_url} (operator-side: no key, may be tunnelled)"
@@ -112,7 +88,6 @@ def describe(base_url):
 
 
 def from_env(base_url):
-    """The configured key for a PUBLIC endpoint, or None (never a literal)."""
     import os
     var = key_env(base_url)
     if not var:

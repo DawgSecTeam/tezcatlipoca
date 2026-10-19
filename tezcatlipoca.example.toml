@@ -1,14 +1,7 @@
-# Copy to tezcatlipoca.toml and fill in real values; that file is gitignored. This is
-# the deployment surface: `estate.config` reads these keys, and every key also accepts an
-# env override named TEZ_ + the key upper-cased with dots as underscores
-# (proxmox.endpoint -> TEZ_PROXMOX_ENDPOINT; knobs.* drop the prefix, so knobs.thin_headroom
-# is TEZ_THIN_HEADROOM). The environment wins over this file, because the run-queue
-# dashboard injects per-run values into the process env. Point TEZ_CONFIG at another file
-# to use a per-node profile.
-#
-# Secrets are NEVER written here. The API token is read from the environment as
-# TEZ_PROXMOX_API_TOKEN; multi-node host tokens are referenced by name from nodes.json's
-# token_env.
+# Copy to tezcatlipoca.toml (gitignored) and fill in real values; TEZ_CONFIG selects a
+# different file. Every key also takes a TEZ_-prefixed env override and the env wins, which
+# is how the run queue injects per-run values. Naming and precedence: docs/architecture.md
+# § Secrets and state. Secrets never go in this file.
 
 [proxmox]
 endpoint = "https://PROXMOX-HOST:8006"
@@ -56,8 +49,8 @@ username = "sysadmin"
 # open = false
 
 [knobs]
-# Count this fraction of the *provisioned* disk math toward the datastore headroom
-# preflight, for thin-provisioned pools where provisioned >> used.
+# Fraction of the *provisioned* disk math the datastore headroom preflight counts, for
+# thin-provisioned pools where provisioned >> used.
 # thin_headroom = 0.5
 # Blue agent cycle budget in seconds.
 # cycle_timeout = 1500
@@ -67,6 +60,5 @@ username = "sysadmin"
 # competitions_root = ""
 # Where test-run folders are archived outside the repo.
 # artifacts_archive = ""
-# Gaia (the Mythic C2 installer) checkout on the engine host. The dashboard/portal
-# handoff variables (TEZ_DASHBOARD_*, TEZ_OPS_*) are internal, not config.
+# Gaia (the Mythic C2 installer) checkout on the engine host.
 # gaia_path = ""

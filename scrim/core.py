@@ -13,21 +13,14 @@ REPO = Path(__file__).resolve().parent.parent
 SSH_OPTS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 # The same two options as argv pairs, for the callers that build an ssh/scp argv list.
 SSH_NOCHECK = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
-# A blue cycle is a SCOPED visit, not a shift: an 1800 s budget let each
-# opencode run pace to its prompt's "25 wall-clock minutes" and the whole event
-# collapsed to a couple of TIMED OUT cycles instead of the gates' >= 8. A 600 s
-# hard cap + a prompt scoped to ONE change keeps the cadence honest: measured on
-# a mid-size local model, a cycle with real incident work needs 8-10 min — 540
-# killed 5 of 6 — so the cap gives the one-action scope headroom while the
-# target period keeps ~6 starts/hour.
-# TEZ_CYCLE_TIMEOUT overrides it for a slower LLM endpoint: with a several-minutes
-# per 10-token reply, every 600 s cycle timed out and blue never engaged at all.
-# Raising the budget trades cycle count for cycles that can actually finish.
+# A blue cycle is a SCOPED visit, not a shift: at 1800 s every run paced itself to its prompt
+# and the event collapsed to a couple of TIMED OUT cycles. Real incident work needs 8-10 min,
+# so the cap gives a one-action scope headroom; raising it (TEZ_CYCLE_TIMEOUT) trades cycle
+# count for cycles that can finish.
 CYCLE_TIMEOUT = int(config.active().knobs.cycle_timeout or 600)
 CYCLE_TARGET_PERIOD = 480
-# Board samples every minute: at 300 s a blue restoring in 2-5 min left every
-# DOWN->UP transition between samples — the scoreboard never showed a
-# down state, and restorations/max-simultaneous-down graded on nothing.
+# 60 s: at 300 s a blue restoring in 2-5 min left every DOWN->UP between samples, so
+# restorations/max-simultaneous-down graded on nothing.
 MONITOR_INTERVAL = 60
 
 
@@ -36,18 +29,12 @@ def log(msg):
 
 
 def write_evidence(path, text):
-    """Write an evidence file atomically, 0600.
-
-    Evidence files were written with a plain write_text at the process umask: the final
-    scoreboard and the per-team service dumps name every scored service and every error
-    string on the range, yet a report reader on a shared host could read them — and a torn
-    write during teardown was possible (a harness audit finding).
-    """
+    """Write an evidence file atomically at 0600 — they name every scored service on the range."""
     return write_text_atomic(path, text, mode=0o600)
 
 
 def secure_evidence(path):
-    """chmod an evidence file that some other tool copied in (scp/cp/shutil) to 0600."""
+    """chmod an evidence file some other tool copied in (scp/cp/shutil) to 0600."""
     with contextlib.suppress(OSError):
         os.chmod(path, 0o600)
     return path
@@ -65,26 +52,16 @@ def now_iso(ts=None):
 
 
 def vm_username():
-    """The provisioning user every ssh path to the engine/boxes/red01 logs in as."""
     return config.active().engine.username
 
 
 def is_local_endpoint(base_url):
-    """True for an operator-side LLM endpoint: slower, key-less, tunnelled.
-
-    Table-driven (`scrim/llm_endpoints.py`). The earlier body was
-    `"openrouter" not in base_url`, so every public API that was not openrouter.com — the
-    official DeepSeek API included — was classified operator-side and driven as if it were a
-    local llama.cpp (literal `local` as blue's apiKey, the slow-local red profile, a reverse
-    tunnel pointed at a TLS port). Unknown hosts stay operator-side: that is what local
-    rehearsals rely on.
-    """
+    """Table-driven in scrim/llm_endpoints.py; unknown hosts stay operator-side."""
     from scrim import llm_endpoints          # local: core is imported BY scrim/endpoints
     return llm_endpoints.is_operator_side(base_url)
 
 
 def read_comp_json(comp, name):
-    """Parse `<comp>/<name>` (boxes.json, box_services.json, estate-state.json, ...)."""
     return json.loads((Path(comp) / name).read_text())
 
 
@@ -95,7 +72,6 @@ def read_state(comp):
 
 
 def is_windows_box(box):
-    """A boxes.json entry whose template name contains "windows" (password auth, Administrator)."""
     return "windows" in str(box.get("template") or "")
 
 
@@ -105,12 +81,11 @@ def engine_ip_from(comp):
 
 
 def engine_proxy(key, user, engine):
-    """The `ssh -W` jump command that reaches a team subnet through the engine."""
     return f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p {user}@{engine}"
 
 
 def box_ssh_base(creds, connect_timeout=None):
-    """ssh argv prefix that reaches team boxes over the engine jump (host appended by caller)."""
+    """ssh argv prefix reaching team boxes over the engine jump (host appended by caller)."""
     base = ["ssh", "-i", creds["KEY_PATH"], *SSH_NOCHECK]
     if connect_timeout:
         base += ["-o", f"ConnectTimeout={connect_timeout}"]
@@ -119,14 +94,9 @@ def box_ssh_base(creds, connect_timeout=None):
 
 
 def ssh_key_path():
-    """The ssh key this RANGE was built with: the configured absolute path when there is one.
-
-    The configured key path is what the deploy itself resolved (estate/config.py) and
-    what a run host configures (e.g. /home/operator/tez-proxmox). The `<engine>/proxmox` fallback is
-    only right for a manual checkout, where the key really sits in the tree: under a central run
-    the engine is a per-run WORKTREE with no key in it, so anything that hardcodes a checkout path
-    reads a file that is not there — and red staging died that way only AFTER the range was
-    already built.
+    """The configured absolute path, falling back to the checkout's key — and that fallback is
+    only right for a manual checkout: under a central run the engine is a per-run worktree with
+    no key in it, so a hardcoded checkout path reads a file that is not there.
     """
     raw = (config.active().ssh.private_key_path or "").strip()
     if not raw:

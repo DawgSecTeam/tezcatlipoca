@@ -127,6 +127,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
                     timeout=1800, step="compose build")
 
     print("  Starting Quotient Docker containers...")
+    # 600s: the fresh volume's Postgres initdb is a cold start on every build.
     _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600,
                     step="compose up")
 

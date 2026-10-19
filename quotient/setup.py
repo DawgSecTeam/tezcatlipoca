@@ -8,8 +8,7 @@ import requests
 from common.constants import PIN_CHECK_OVERRIDES
 from common.utils import record_degradation
 
-# The event.conf box slices Quotient understands — also the valid `check` values for
-# score-only pins (upstream has only these; docs/internals.md).
+# Box slices Quotient understands; also the valid `check` values for score-only pins.
 _CHECK_SLICES = frozenset({"Web", "Dns", "Ssh", "Ftp", "Smtp", "Imap", "Sql", "Tcp"})
 
 _SERVICE_TO_CHECK = {
@@ -41,35 +40,31 @@ _SERVICE_TO_CHECK = {
     "New SMB Share":  ("Tcp", {"Display": "smb",   "Port": 445}),
     "RDP misconfigs": ("Tcp", {"Display": "rdp",   "Port": 3389}),
     "IIS HTTP":       ("Web", {"Display": "iis",   "Port": 80, "Scheme": "http", "Url": [{"Path": "/", "Status": 200}]}),
-    # CredLists authenticate against the linux.credlist accounts, which only exist on
-    # Linux boxes — a Windows box wanting port-open-only FTP scoring uses a plant_only
-    # pin plus a score-only {"check": "Tcp"} pin instead.
+    # CredLists authenticate against linux.credlist accounts, which exist only on Linux
+    # boxes — a Windows box wanting port-open-only FTP uses a plant_only pin + a
+    # score-only {"check": "Tcp"} pin instead.
     "IIS FTP":        ("Ftp", {"Display": "ftp",   "Port": 21,  "CredLists": ["linux.credlist"]}),
 
-    # Scored but not nakon-planted: domain_ops owns ADDS/Domain Join (phase 6 injects
-    # them with per-team vars); generate_nakon_config strips them from machine lists.
+    # Scored but not nakon-planted: domain_ops injects ADDS/Domain Join, and
+    # generate_nakon_config strips them from the machine lists.
     "ADDS":           ("Tcp", {"Display": "ldap",  "Port": 389}),
 
-    # AD DNS on the DC, scored with the same localhost A-record
-    # query the bind/named plants satisfy. The config plants post-promotion
-    # (FINAL_STAGE_CONFIGS) so the zone exists to hold the record.
+    # AD DNS on the DC, scored with the same localhost A-record query the bind/named
+    # plants satisfy; the config plants it post-promotion (FINAL_STAGE_CONFIGS).
     "ad-dns-localhost": ("Dns", {"Display": "dns", "Port": 53,
                                  "Record": [{"Kind": "A", "Domain": "localhost",
                                              "Answer": ["127.0.0.1"]}]}),
 
-    # Score-only pins ({"name": "score/tcp", "score_only": true, "display": ..., "port":
-    # ...}) never appear here — _resolve_pin builds their check directly. They score a
-    # NATIVE service the catalog can't plant (AD's own DNS on 53, the AD SYSVOL share on
-    # 445): no nakon plant, no catalog-check entry, a real scored check.
+    # Score-only pins score a NATIVE service the catalog can't plant (AD's own DNS on
+    # 53, the AD SYSVOL share on 445): no nakon plant, no catalog-check entry.
 }
 
 
 def _resolve_pin(pin):
     svc_name = pin if isinstance(pin, str) else pin.get("name")
     if isinstance(pin, dict) and pin.get("plant_only"):
-        # Mirror of score_only: the pin rides the machine list (a real plant) but
-        # emits no scored check — the service is scored by a separate score-only pin
-        # (e.g. IIS FTP plants the site, score/tcp:21 scores the port).
+        # plant_only mirrors score_only: the pin rides the machine list (a real plant) but
+        # emits no scored check — a separate score-only pin scores the service.
         return svc_name, None, None
     if isinstance(pin, dict) and pin.get("score_only"):
         check_key = pin.get("check") or "Tcp"
@@ -127,10 +122,8 @@ def expected_service_names(box_services: dict, boxes: list) -> set:
     return names
 
 
-# `scoring` is automation-only: least privilege and a separate audit trail. The old
-# one-session-per-account rationale was NOT reproduced on the 2026-10-18 live engine
-# (a second same-account login left the first cookie valid), so it is not the reason.
-# Optional — a caller without a scoring password gets the single `admin` entry.
+# Quotient allows ONE session per account: a scheduled login on `admin` would kill the
+# operator's/harness's cookie, so automation gets the separate `scoring` account.
 def _admin_accounts(ctx):
     accounts = [{"name": "admin", "pw": ctx["quotient_admin_password"]}]
     scoring_pw = ctx.get("quotient_scoring_password")
@@ -157,11 +150,6 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
             "Jitter": 10,
             "Points": 5,
         },
-        # TWO admin accounts, deliberately: `scoring` is for automation that
-        # authenticates on its own schedule (round-loop watchdog, unattended verify).
-        # The 2026-10-18 live probe did NOT reproduce same-account eviction, so the
-        # rationale is least privilege and a clean audit trail, not avoiding eviction.
-        # Its password is minted per competition like every other secret.
         "admin": _admin_accounts(ctx),
         "team":  [
             {"name": team_key, "pw": passwords[team_key]}
@@ -204,8 +192,7 @@ def build_event_conf(ctx: dict, box_services: dict) -> dict:
 
     if referenced_credlists:
         # Every credlist a check names must be declared AND pushed (push_event_conf
-        # writes the matching file). Historically that was always linux.credlist;
-        # packet dual-credit adds e.g. domain.credlist twins.
+        # writes the matching file); packet dual-credit adds e.g. domain.credlist twins.
         conf["CredlistSettings"] = {
             "Credlist": [{"CredlistName": name, "CredlistPath": name}
                          for name in sorted(referenced_credlists)]
@@ -278,9 +265,8 @@ def unpause_engine(host: str, ctx: dict) -> None:
     print(f"[quotient] engine unpaused → {r.status_code}")
 
 
-# the engine's actual pause state, or None when the endpoint won't say — lets a resume ask
-# the engine instead of blindly re-POSTing after a crash in the window between the unpause
-# POST and the state-flag save
+# The engine's actual pause state, or None when the endpoint won't say — a resume asks
+# instead of blindly re-POSTing after a crash between the unpause POST and the state-flag save
 def engine_paused(host: str, ctx: dict):
     host = _normalize_host(host)
     try:
@@ -297,9 +283,8 @@ def engine_paused(host: str, ctx: dict):
         return None
 
 
-# a resume re-runs safely (dedup on titles), so the deploy only records injects_created
-# when nothing failed. username defaults to the operator's `admin`; automation passes the
-# `scoring` account for least privilege (same-account eviction did not reproduce live).
+# Re-runs safely (dedup on titles), so the deploy records injects_created only when
+# nothing failed. Automation that must not evict `admin` passes the `scoring` account.
 def create_injects(host: str, admin_password: str, injects: list, username: str = "admin") -> tuple:
     if not injects:
         return 0, []

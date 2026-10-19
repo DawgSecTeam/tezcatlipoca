@@ -104,7 +104,7 @@ def type_line(text, inter_key_s=0.04, after_s=0.8):
 
 
 def console_screenshot(out_path):
-# PNG of the VM's VGA console via the shared infra.console RFB handshake.
+# VGA console PNG via the shared infra.console RFB handshake.
     from infra.console import vnc_screenshot
     return vnc_screenshot(config.require("proxmox.endpoint").rstrip("/"),
                           config.require("proxmox.api_token"), node(), VMID, out_path)
@@ -125,11 +125,10 @@ def _strip_ansi(text):
 
 
 def _guest_ssh(script=None, timeout=120):
-# Run `script` (CLI lines) through the guest over a REAL local PTY sized 24x80,
-#     expect-style: the next line goes in only after the transcript shows a prompt.
-#     Blind feeding loses twice on this image (caught live): bulk-written
-#     input wedges the CLI inside `save`, and save flushes the tty input queue on
-#     return, eating any line still queued behind it. Returns (returncode, transcript).
+# Run `script` (CLI lines) through the guest over a REAL local PTY sized 24x80, expect-style:
+#     the next line goes in only after the transcript shows a prompt. Blind feeding wedges the
+#     CLI inside `save`, which flushes the tty input queue on return and eats queued lines.
+#     Returns (returncode, transcript).
     import fcntl
     import pty
     import select
@@ -236,12 +235,9 @@ def create():
 
 
 def install():
-# Console-typed `install image`. The live ISO does NOT autologin (2026.03 stream):
-#     log in vyos/vyos first. The prompt sequence below matches the 2026.03 stream
-#     (verified caught live): continue → image name (default) → vyos password ×2 →
-#     console (default K) → disk (default /dev/sda) → delete-all-data Yes → free space
-#     (default) → boot config file (default 1). VERIFY with `shot` — when a prompt
-#     differs, finish the walk with `type`.
+# Console-typed `install image`. The live ISO does NOT autologin (2026.03 stream): log in
+#     vyos/vyos first. The prompt sequence below is version-specific — VERIFY with `shot`, and
+#     when a prompt differs, finish the walk with `type`.
     print("typing the installer walk (assumes the live-boot login prompt, ~90s after start)")
     type_line("vyos", after_s=2)             # login:
     type_line("vyos", after_s=3)             # Password: (live ISO default creds)
@@ -260,9 +256,8 @@ def install():
 
 
 def reboot_into_disk():
-# The installer left the ISO attached; detach it BEFORE rebooting or the live ISO
-#     boots again (boot order is ide2 first). The 2026.03 `reboot` op command asks for a
-#     confirmation.
+# The installer left the ISO attached; detach it BEFORE rebooting or the live ISO boots again
+#     (boot order is ide2 first); the 2026.03 `reboot` op command asks for a confirmation.
     n = node()
     print("detaching the ISO, then rebooting into the installed disk")
     proxmox_api("PUT", f"/nodes/{n}/qemu/{VMID}/config", data={"delete": "ide2"})

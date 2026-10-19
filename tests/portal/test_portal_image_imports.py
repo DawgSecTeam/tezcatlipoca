@@ -1,18 +1,4 @@
-"""The portal IMAGE must be self-contained.
-
-portal/Dockerfile installs ONLY portal/requirements.txt and copies the .py files named in
-`_SHIP` (portal/portal_ops.py ships exactly those, plus the frontend source). So an import in
-those files that is neither shipped nor declared is a runtime crash in the container, not at
-test time — the offline suite runs against the developer venv, where the whole driver and
-every dependency is importable.
-
-caught live (crimson-relay): the portal container crash-looped with
-    ModuleNotFoundError: No module named 'requests'
-because console.py imported requests but requirements.txt never listed it. The same class of
-defect — a driver import in an image that ships no driver (`from infra.console import
-vncproxy_mint`, and `infra/__init__` pulls in infra.gates and the whole deploy driver) — came
-from the later dedupe commit. Both are caught here.
-"""
+"""The portal image must be self-contained: unshipped or undeclared imports crash the container."""
 
 import ast
 import re
@@ -31,7 +17,6 @@ _FALLBACK_SHIP = ("Dockerfile", "compose.yaml", "requirements.txt", "auth.py", "
 
 
 def _shipped_files():
-    """The `_SHIP` tuple from portal/portal_ops.py (what actually lands in the image)."""
     try:
         tree = ast.parse((_REPO / "portal" / "portal_ops.py").read_text())
     except OSError:
@@ -59,12 +44,7 @@ def _declared_requirements():
 
 
 def _guarded_import_nodes(tree):
-    """Nodes inside a `try: ... except ImportError:` — the optional/dev-mode arm.
-
-    app.py imports `from portal.auth import ...` first and falls back to `from auth import ...`
-    (the flat layout the container uses), so a guarded import is not evidence the module is
-    required at runtime.
-    """
+    """try/except ImportError arms are optional fallbacks, not runtime requirements."""
     guarded = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Try):

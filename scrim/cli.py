@@ -26,14 +26,9 @@ from common.utils import valid_comp_name
 
 
 def main():
-    # Start-up umask: every evidence file, jar and log this run creates is private unless
-    # a call site explicitly widens it. Several evidence writes used to rely on the
-    # operator's umask (a harness audit finding).
+    # evidence files, jars and logs must be private regardless of the operator's umask
     os.umask(0o077)
-    # The deploy child reads .env itself, but the harness's IN-PROCESS paths (the
-    # end-of-event teardown runner, compworld) resolve their config from this process's
-    # environment: the run's teardown died with a missing TEZ_PROXMOX_ENDPOINT because
-    # only the child had loaded .env.
+    # the harness's IN-PROCESS paths (teardown runner, compworld) read config from this env, not the deploy child's
     from dotenv import load_dotenv
     load_dotenv(core.REPO / ".env")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -72,8 +67,7 @@ def main():
                    help="separate LLM base URL for team2's blue (default: same as --blue-base-url)")
     p.add_argument("--blue2-model", default=None,
                    help="model for team2's blue when --blue2-base-url is set")
-    # No default: `None` lets the resolver consult the comp's own reservation
-    # (Compfile `red01_ip`), else select a free red-band address at stage time.
+    # default None lets the resolver consult the comp's own reservation (Compfile red01_ip)
     p.add_argument("--red-ip", default=None,
                    help="red01 IP on the cluster; empty resolves the comp's own reservation "
                         "(Compfile red01_ip), else selects one from the red band")
@@ -111,13 +105,10 @@ def main():
     comp = resolve_comp_dir(args.competition, args.comp_dir)
     if args.resume_event:
         if not comp.is_dir():
-            # resolve_run_dir opens/creates the test folder under comp, so a typo must not
-            # mint a comp dir for a run that cannot exist.
+            # resolve_run_dir creates the comp dir — a typo must not mint one for a run that cannot exist
             sys.exit(f"no such competition: {comp}")
         lock_ops.acquire_scrim_lock(comp)
-        # The same folder the first run used: the test folder is keyed on this comp's run
-        # id, and a paths.run_dir already recorded in test.json is authoritative, so a
-        # resume can never mint a second key or fork the evidence (INV1).
+        # the run dir recorded in test.json is authoritative — a resume never forks the evidence
         run_dir, test_dir = test_folder.resolve_run_dir(comp, args)
         log(f"test folder: {test_dir}")
         manifest = run_manifest.load_manifest(run_dir)
@@ -133,10 +124,6 @@ def main():
             args.duration_min = int(manifest.get("duration_min") or args.duration_min)
         args.run_dir = str(run_dir)
         if t0 is None:
-            # No T0.txt and no manifest t0: the driver died before the event clock
-            # started (almost always inside stage_red, which deploys red01 for tens of
-            # minutes). There is nothing to re-enter, and saying so beats a bare
-            # "T0.txt missing" now that the pre-stage_red marker exists.
             where = f" (manifest phase={manifest.get('phase')!r})" if manifest else ""
             sys.exit(f"--resume-event: no event clock in {run_dir} (T0.txt and run.json "
                      f"t0 both missing){where} — the run never reached T0, so there is no "
@@ -163,8 +150,7 @@ def main():
         staging.stage_author(args)
     if not (comp / "Compfile").exists():
         sys.exit(f"no such competition: {comp}")
-    # Before any staging: one scrim per resolved range workspace (the deploy's engine lock
-    # only covers engine-touching work, and a --skip-deploy scrim takes no engine lock).
+    # the deploy's engine lock covers only engine-touching work; a --skip-deploy scrim takes no lock
     lock_ops.acquire_scrim_lock(comp)
 
     run_dir, test_dir = test_folder.resolve_run_dir(comp, args)
@@ -172,8 +158,7 @@ def main():
     args.run_dir = str(run_dir)
     log(f"run dir: {run_dir}")
     log(f"test folder: {test_dir}")
-    # stage_author ran before the run dir existed, so its marker lands here — the
-    # dashboard's stage list must still open with `author`.
+    # stage_author predates the run dir; re-record so the dashboard's stage list opens with `author`
     if args.new:
         run_manifest.record_phase(run_dir, args, "author")
 
@@ -195,9 +180,7 @@ def main():
     blue_agent.stage_blues(args, comp, run_dir, creds, time.time())
 
     red_setup_started = time.time()
-    # Marker BEFORE stage_red: red01 deployment takes tens of minutes, and a driver that
-    # dies in there used to leave nothing but a missing T0.txt for --resume-event
-    # (a harness audit finding).
+    # marker BEFORE stage_red: red01 deploys take tens of minutes; a death in there must leave a resume marker
     run_manifest.record_phase(run_dir, args, "red")
     red_stage.stage_red(args, comp, creds, run_dir)
     t0 = time.time()

@@ -1,45 +1,4 @@
-"""block_port — drop a scored check port with a local firewall rule.
-
-The most CCDC-authentic failure mode there is: the daemon keeps running, the
-port is unreachable, the check fails, and blue has to find the rule. The pin in
-`intel.port_checks_for()` is a *bare port check*, so it has no unit to stop —
-this is the only mechanism that touches it.
-
-One effect, three Linux mechanisms in preference order, all attempted in one
-script so the box itself says which one landed:
-
-* ``iptables`` ``-I INPUT -p tcp --dport <port> -j REJECT`` (the earlier agent's
-  mechanic)
-* ``ufw``      ``ufw insert 1 deny <port>/tcp`` (a different backend: on
-                firewalld hosts the iptables call can be a shim that says yes)
-* ``nft``      an ``inet`` table of OUR OWN, hooked at ``input`` — the lesson
-                the earlier agent learned after ``nft insert rule inet filter
-                input`` died with "No such file or directory" on a firewalld box
-                (caught live, three failed actions)
-
-Each mechanism echoes its own return code, so the box says which one landed
-(the earlier agent's `_picked_cleanup` fix, kept). What tlaloc adds is that an
-add's own rc is never taken as proof: a second pass reads every rule BACK, and
-only a rule that holds becomes an impact — the ledger is what scoreboard
-attribution is graded on. The restore recipe then names the mechanism(s) that
-hold and this activation's drawn table/rule name (never a fixed one blue can
-grep once and clear forever).
-
-Two bugs from the earlier agent are fixed in the mechanics themselves rather than
-copied:
-
-* the nft brace spec is single-quoted. Unquoted, the ``;`` inside the braces
-  ends the shell command and the trailing ``}`` is a syntax error — the earlier
-  agent's nft fallback could not have worked on any box;
-* the whole script runs under ONE root shell (``sh -c``, the earlier agent's own
-  root_cmd idiom). A bare ``sudo -n`` prefix binds to the first command only, so
-  ``sudo -n iptables …; echo …; ufw …`` would run everything after the first
-  ``;`` as the foothold user and silently half-apply.
-
-Windows is the Administrator path: a ``netsh advfirewall`` block rule (present
-on every SKU, unlike New-NetFirewallRule's module), verified by reading the rule
-back.
-"""
+"""block_port — drop a scored check port with a local firewall rule; only a rule read back from the box becomes an impact."""
 
 import re
 import shlex
@@ -49,7 +8,7 @@ from . import artifactnames as names_mod
 from .base import Effect, Result, can_root, register, root_cmd
 from .takedown import windows_admin
 
-# (mechanism, marker) in preference order: the first that HOLDS is what we claim.
+# (mechanism, marker) preference order: the first that HOLDS is what we claim.
 LINUX_MECHANISMS = (("iptables", "i"), ("ufw", "u"), ("nft", "n"))
 WINDOWS_MARKER = "TLALOC_BLOCK"
 
@@ -60,22 +19,16 @@ _MARKERS = re.compile(r"([a-z]+)=(\d+)")
 
 
 def run_root_script(ctx, ip, fh, script, timeout=60):
-    """Run ONE multi-command script under ONE root shell.
-
-    `root_cmd` only *prefixes* the escalation label, so a bare prefix covers the
-    first command of a `;`-separated script and nothing after it
-    (`sudo -n iptables -I …; echo …; ufw …` runs the ufw half unprivileged).
-    the earlier agent's root_cmd wrapped multi-command scripts in `sh -c`; this
-    is that idiom, kept in ONE place so the three pressure effects cannot drift
-    apart.
-    """
+    """Multi-command scripts need ONE root shell: `root_cmd` only *prefixes*, so a bare
+    escalation label covers the first command of a `;`-list and nothing after it."""
     return ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
                        root_cmd(f"sh -c {shlex.quote(script)}", fh),
                        timeout=timeout, key_path=fh.get("key_path"))
 
 
+# The nft brace spec must stay quoted: unquoted, the `;` inside the braces ends the
+# shell command and the trailing `}` is a syntax error.
 def add_script(port, table, chain):
-    """All three Linux mechanisms, each echoing its own rc."""
     return (
         f"iptables -I INPUT -p tcp --dport {port} -j REJECT 2>/dev/null; "
         f"echo i=$?; "
@@ -89,8 +42,7 @@ def add_script(port, table, chain):
 
 
 def verify_script(port, table, chain):
-    """Which rule actually HOLDS. The nft check reads the chain back, so a rule
-    that landed in an unhooked chain is not counted as a block."""
+    """The nft check requires the hook, so a rule in an unhooked chain is not a block."""
     return (
         f"iptables -C INPUT -p tcp --dport {port} -j REJECT >/dev/null 2>&1 "
         f"&& echo vi=1 || echo vi=0; "
@@ -111,14 +63,13 @@ def undo_command(mechanism, port, table):
 
 
 def windows_add(port, rule):
-    """The earlier agent's Windows mechanic: netsh exists on every SKU under an
-    admin shell."""
+    """Chosen over New-NetFirewallRule: netsh exists on every SKU under an admin shell."""
     return (f"netsh advfirewall firewall add rule name={rule} dir=in "
             f"action=block protocol=TCP localport={port}")
 
 
 def windows_verify(port, rule):
-    """Read the rule back; `show rule` prints the LocalPort and the Action."""
+    """`netsh show rule` prints the LocalPort and the Action."""
     return (f"$o = netsh advfirewall firewall show rule name={rule} 2>$null; "
             f"if ($o -match '{rule}' -and $o -match 'Block' -and $o -match '{port}') "
             f"{{ '{WINDOWS_MARKER}=ok' }} else {{ '{WINDOWS_MARKER}=no' }}")
@@ -128,15 +79,9 @@ def windows_undo(rule):
     return f"netsh advfirewall firewall delete rule name={rule}"
 
 
-# No `check_cmd` on these artifacts, deliberately. The loop's liveness check runs
-# a plain command as the foothold user, and there is no unprivileged,
-# mechanism-independent way to read a firewall rule back (iptables/ufw/nft all
-# need root, and `netsh show` needs elevation). A check that fails for the wrong
-# reason marks the artifact DEAD — and policy treats any dead artifact on a box
-# as "re-plant first, this box cannot be pressured", which would silently switch
-# off every takedown candidate there. A record that cannot lie is worth more than
-# one that can: the restore table and the impact ledger carry the block, and the
-# detail names the exact rule and its unblock command.
+# No check_cmd: reading a rule back needs root (or elevation), and a check failing for
+# the wrong reason marks the artifact DEAD — which switches off every pressure candidate
+# on the box. The restore table and impact ledger carry the block instead.
 def _artifact(ip, detail, paths=None):
     return {"ip": ip, "kind": "impact-block_port", "detail": detail,
             "check_cmd": None, "paths": list(paths or [])}
@@ -168,8 +113,6 @@ class BlockPort(Effect):
     tags = frozenset({"pressure", "impacty"})
     needs = {"foothold": True, "root": False, "c2": False, "os": "any"}
     failure_scope = "port"
-
-    # -- preconditions ---------------------------------------------------------
 
     def check(self, ctx, params):
         super().check(ctx, params)
@@ -204,8 +147,6 @@ class BlockPort(Effect):
     def _allow_ssh(params):
         return str(params.get("allow_ssh", "")).lower() == "true"
 
-    # -- the body --------------------------------------------------------------
-
     def run(self, ctx, params):
         ip, port = params["ip"], int(params["port"])
         display = params.get("display") or f"tcp/{port}"
@@ -238,10 +179,8 @@ class BlockPort(Effect):
         holding = [name for name, marker in LINUX_MECHANISMS
                    if seen.get(f"v{marker}") == "1"]
         if not holding:
-            # The objective is NOT met, so this is ok=False — but the rule the box
-            # accepted is real, so its undo is recorded (installed=True). An
-            # unnecessary `iptables -D` costs nothing; a missing one leaves blue's
-            # traffic blocked after the event.
+            # Objective not met -> ok=False, but the accepted rule is real: its undo is
+            # recorded (installed=True). A missing `-D` leaves blue blocked after the event.
             detail = (f"tcp/{port} block did not hold on {ip} — a rule was inserted "
                       f"({inserted}) but no mechanism reports it: "
                       f"{(err or out or '').strip()[:200]}")
@@ -286,8 +225,7 @@ class BlockPort(Effect):
                                       windows_verify(port, rule), timeout=45,
                                       key_path=fh.get("key_path"))
         if f"{WINDOWS_MARKER}=ok" not in (out or ""):
-            # Not verified: ok=False, but the rule the box accepted still gets its
-            # undo recorded (installed=True).
+            # Not verified: ok=False, but the accepted rule still gets its undo recorded.
             detail = (f"tcp/{port} block did not hold on {ip} — rule {rule} is not "
                       f"reporting Block: {(err or out or '').strip()[:200]}")
             return Result(False, detail,
@@ -301,8 +239,6 @@ class BlockPort(Effect):
                           installed=True)
         detail = f"tcp/{port} ({display}) blocked on {ip} via netsh rule {rule}"
         ctx.world.note(ip, f"impact: {detail}")
-        # The on-box check is `netsh show` (needs an elevated session, which is
-        # the same session the block needed).
         return Result(True, detail,
                       impact={"ip": ip, "service": display, "mode": "block_port",
                               "detail": detail},

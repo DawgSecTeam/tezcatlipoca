@@ -12,14 +12,7 @@ from scrim.core import log
 
 
 def write_verify_log(args, label, r):
-    """Keep the WHOLE verify output in the run folder, not just the tail the console shows.
-
-    The gate lines scroll past, and the per-config detail behind a FAIL — `'suid-find' present on
-    ['team1-web01'] but MISSING on ['team2-web01']`, `pin 'X' absent on every team` — is exactly
-    what a post-mortem needs and what the console tail drops. caught live: the
-    `misconfig` gate failed at BOTH verifies and the run's evidence held only the one-line summary,
-    so the failure could not be root-caused from the artifacts at all.
-    """
+    """Keep the whole verify output — the per-config detail behind a FAIL is what the console tail drops."""
     run_dir = getattr(args, "run_dir", None)
     if not run_dir:
         return None
@@ -28,9 +21,6 @@ def write_verify_log(args, label, r):
         fh.write(f"\n===== verify [{label}] rc={r.returncode} {core.now_iso()} =====\n")
         fh.write((r.stdout or "") + "\n=== STDERR ===\n" + (r.stderr or ""))
     core.secure_evidence(path)
-    # The outcome beside the log, with its label: the report's verify line has to say
-    # whether a failure it shows is the deploy-time (interim) reading or the authoritative
-    # pre-T0 one. The pre-T0 verify runs last, so its record is the one a finished run keeps.
     test_dir = getattr(args, "test_dir", None)
     if test_dir:
         from artifacts_lib import artifacts_ops
@@ -40,11 +30,8 @@ def write_verify_log(args, label, r):
     return path
 
 
-# label matters: this verify runs BEFORE red/blue are staged, and `pins_registered` in particular
-# is registered during that staging — the deploy-time result is an INTERIM reading, and the pre-T0
-# verify (red_stage, after staging) is the authoritative one. caught live: the same gate read
-# FAIL here and PASS three minutes later with nothing else changed, and the report reader has no
-# way to tell the two apart unless the run says which is which.
+# this verify runs BEFORE red/blue staging, so gates registered during it (pins_registered)
+# read interim; the pre-T0 verify after staging is the authoritative one
 def stage_verify(args, comp, creds, label="interim (pre-staging)"):
     log(f"verify-competition + fire test [{label}]")
     r = procs.run(compworld.verify_cmd(comp, creds, "--interim"),
@@ -65,26 +52,16 @@ def stage_verify(args, comp, creds, label="interim (pre-staging)"):
         return procs.run_tree(base + [f"{creds['BOX_USER']}@{web_ip}", cmd],
                               timeout=timeout, check=False)
 
-    # password on stdin, not an `echo` into the remote shell string: the old form put the
-    # password in the local process argv (readable from ps) and a single quote in a
-    # generated password would have been a shell syntax error aborting the fire test;
-    # same house pattern as the shared SSH helpers
+    # password via stdin, never argv: ps-readable and quote-breaking (same pattern as the shared SSH helpers)
     def sudo_web01(script, timeout=120):
         argv, stdin_text = procs.box_sudo_stdin(base, f"{creds['BOX_USER']}@{web_ip}",
                                                 creds["BOX_PW"], script)
         return procs.run_tree(argv, timeout=timeout, check=False, stdin_text=stdin_text)
 
-    # hand the whole fire test to run_fire_test — injectable runners keep it unit-testable
-    # offline.
     run_fire_test(args, comp, creds, ssh_web01, sudo_web01)
 
 
-# a paused engine cannot register a service going down: the harness PAUSES the scoring
-# loop at teardown (correct — the event is over) and the loop does not self-resume, so
-# the NEXT run's pre-T0 fire test watched a healthy web01 for its whole deadline and
-# aborted before T0 on one run — it only appeared to work because red01/loop
-# state happened to survive from the run before. Prove the scoring path against a live
-# loop: unpause first, with the same two POSTs verify's --fix-round-loop issues.
+# teardown leaves the scoring loop paused and it never self-resumes; a paused loop cannot register the down
 def _ensure_round_loop(comp, creds):
     base = f"http://{creds['ENGINE_IP']}"
     try:
@@ -115,8 +92,7 @@ def _ensure_round_loop(comp, creds):
         log(f"fire test: unpause failed ({e}) — the fire test will likely fail")
 
 
-# raises (aborting before T0) rather than warning: firing blue into an unproven scoring
-# path is how a whole event goes unscored (run-12)
+# raises rather than warns: firing blue into an unproven scoring path costs the whole event
 def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
 
     _ensure_round_loop(comp, creds)
@@ -124,7 +100,6 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
     web_ip = (frozen_roster(comp) or {}).get("targets", {}) \
         .get("team1-web01", {}).get("ip")
     web_ip = web_ip or f"192.168.{creds['TEAM1_ID']}.4"
-    # pick the unit that actually exists on this box (apache2 vs httpd across distros)
     probe = ('u=""; for c in %s; do systemctl list-unit-files "$c.service" --no-legend '
              '2>/dev/null | grep -q . && u=$c && break; done; echo "$u"' % " ".join(units))
     r = ssh_web01(probe)
@@ -133,10 +108,7 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
     log(f"fire test unit: {unit} on {web_ip} (port {svc_port})")
     port = config.active().knobs.scrim_web01_port or svc_port
 
-    # Residue guard: an aborted earlier fire test can leave the unit stopped (a web
-    # box's sshd died with the harness and the next attempt inherited the
-    # outage until a manual rollback). Restore BEFORE testing — a stop-then-restore cycle
-    # that starts from an already-down service proves nothing and heals nothing.
+    # an aborted fire test can leave the unit stopped; a stop-then-restore from an already-down service proves nothing
     st = ssh_web01(f"systemctl is-active {shlex.quote(unit)}")
     state = (st.stdout or "").strip().splitlines()[-1] if (st.stdout or "").strip() else "unknown"
     if state != "active":
@@ -167,12 +139,7 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
                            timeout=45, check=False)
         return (r.stdout or "").strip()
 
-    # watches the FIRED service's row (<box>-<display>): other scored services may
-    # legitimately start down (planted broken services blue must restore), and even a
-    # sibling web01 row can be down (the stale ssh row from
-    # an aborted attempt answered "down" for an nginx stop and then refused every nginx
-    # restore). Falls back to the first web01 row only when the expected name is not
-    # registered at all.
+    # watch only the fired service's row: other scored services may legitimately start down
     def scoreboard_down():
         try:
             rows = quotient_api.parsed_status(creds, "team1")
@@ -187,13 +154,7 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
             return None, f"{type(e).__name__}: {e}"
 
     sudo_web01(f"systemctl stop {shlex.quote(unit)}")
-    # The scoreboard lags reality: a round that started before the stop lands its
-    # result late, and Quotient's per-round cadence means "the latest completed round"
-    # can trail the actual service by a minute or two (the probe
-    # read 000 while the scoreboard still said UP at +150s, and the run aborted on a
-    # service that was demonstrably down). Poll until BOTH vantages agree the service
-    # is down, within a deadline — the engine-path probe is the fast truth, the
-    # scoreboard is the one that must eventually agree.
+    # the scoreboard lags a round or two: poll until the fast engine-path probe and it agree
     down = down_err = None
     http_down = ""
     deadline = time.time() + 360
@@ -209,11 +170,9 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
 
     restored = healed = False
     for attempt in (1, 2, 3):
-        # unmask first: run-12 left the unit unstartable and a plain start was a no-op
+        # unmask first: a masked unit makes start a silent no-op
         sudo_web01(f"systemctl unmask {shlex.quote(unit)}; "
                    f"systemctl start {shlex.quote(unit)}")
-        # same scoreboard-lag deal as the stop phase: poll for agreement, don't sleep
-        # a fixed slice and read one stale round
         up = up_err = None
         http_up = ""
         deadline = time.time() + (240 if attempt == 1 else 120)

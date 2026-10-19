@@ -1,8 +1,4 @@
-"""Read the competition's on-disk inputs: engine vmid, Compfile/boxes/users, prior state, injects.
-
-Loading only — every refusal (missing state, version, resume guards) lives in gates.py and is
-invoked from prepare().
-"""
+"""Read the competition's on-disk inputs: engine vmid, Compfile/boxes/users, prior state, injects."""
 
 import sys
 
@@ -15,15 +11,8 @@ from estate import state as estate_state
 
 
 def resolve_engine_vmid(ctx, comp_dir, from_phase, scoring_vmid):
-# Settle the scoring-engine VMID into `ctx` (it is resolved first: the lock keys on it).
-#
-#     A corrupt or absent state here falls back to the default rather than raising:
-#     load_prior_deploy_state reads the same document a few steps later and does the
-#     refusing, with a message that names the actual problem.
-    # Resolve this competition's scoring-engine VMID before taking the engine lock (the
-    # lock is keyed on it) and before phase 1 runs. On resume it is authoritative from the
-    # state document; on a fresh deploy it comes from the flag/arg (default
-    # SCORING_ENGINE_VMID).
+    # resolved before the engine lock (keyed on it) and phase 1: state is authoritative on
+    # resume; corrupt state falls back here, load_prior_deploy_state refuses later
     if from_phase > 1:
         try:
             ctx.engine_vmid = int(estate_state.load_flat(comp_dir).get(

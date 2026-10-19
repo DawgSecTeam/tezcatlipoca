@@ -1,31 +1,4 @@
-"""The decision layer: clef answers typed questions; everything else is a
-bounded fallback.
-
-The chain (plan §2), in order:
-
-    candidates (policy.py, deterministic)
-      -> typed question bundle -> clef (/v1/systemone) -> probabilities
-      -> confidence gate (top_prob >= theta)
-           act                        (high confidence)
-           LLM arbiter                (low confidence AND high stakes)
-           deterministic default      (low confidence AND low stakes)
-      -> hard gate (ROE allowlist, kill switch, per-OS lint, preconditions)
-      -> execute -> log EVERYTHING (bundle, answer, probabilities, threshold, source)
-
-Hard rules that this module exists to enforce:
-
-* **clef never opens a gate.** `command_intent` informs attribution and ranking;
-  safety stays deterministic (exec/gate.py).
-* **the run never depends on a model being up.** clef down -> deterministic
-  defaults; LLM down -> clef still does everything but command authoring; both
-  down -> the deterministic ladder. Every degradation is logged with its reason.
-* **the probabilities are used, not the rounded answer.** `score` answers carry
-  the expected value AND the per-level probabilities; the gate reads the top
-  probability.
-* **every decision is replayable offline.** A logged bundle re-runs through this
-  module with a stubbed clef (tests/test_decide.py) — no model, no
-  network, no range.
-"""
+"""The decision layer: clef answers typed questions; everything else is a bounded fallback."""
 
 import json
 import re
@@ -35,9 +8,7 @@ from dataclasses import dataclass, field
 from .errors import ClefError, LLMError, PolicyError
 from .state import digest as digest_mod
 
-# The question catalog. Small on purpose — every question has to earn its place
-# by replacing a heuristic that was wrong in the earlier agent (see the plan's
-# table).
+# Each question replaces a named heuristic (below); that is its admission test.
 CATALOG = {
     "next_effect": {"type": "choice", "replaces": "3 override gates + fallback ladder"},
     "pressure_count": {"type": "score", "replaces": "press_impacts_per_cycle heuristics"},
@@ -48,22 +19,14 @@ CATALOG = {
 }
 
 DEFAULT_THETA = 0.60
-# The most a state digest may cost, however big the endpoint's batch is.
+# Caps digest cost even when the endpoint's batch is bigger.
 DIGEST_BUDGET_CEILING = 8192
 INTENTS = ("takedown", "recon", "persistence", "benign")
 
 
-# --------------------------------------------------------------------------- #
-# the model client
-# --------------------------------------------------------------------------- #
-
 class ClefClient:
-    """POST /v1/systemone — typed questions in, probabilities out, no generation.
-
-    `poster` is injectable so the whole decision layer is testable offline; the
-    default poster uses requests (imported lazily: the repo must be usable on a
-    host without it, e.g. a bare red01 staging box).
-    """
+    """POST /v1/systemone — typed questions in, probabilities out. requests is
+    lazy: a bare red01 may not have it."""
 
     def __init__(self, cfg, poster=None, now=None):
         clef = cfg.get("clef") or {}
@@ -75,9 +38,8 @@ class ClefClient:
         self.max_request_tokens = int(clef.get("max_request_tokens", 16384))
         self.tokens_per_char = float(clef.get("tokens_per_char",
                                               digest_mod.TOKENS_PER_CHAR))
-        # The endpoint's own token count beats our estimate: when it rejects a
-        # request as too large it tells us the real number, so remember the ratio
-        # it implies and never send that size again.
+        # A "too large" rejection reports the endpoint's real token count; keep
+        # the ratio it implies so that size is never sent again.
         self.learned_ratio = None
         self._poster = poster
         self._now = now or time.time
@@ -88,8 +50,6 @@ class ClefClient:
         self.disabled_until = 0.0
         self.failure_threshold = int(clef.get("failure_threshold", 3))
         self.cooldown_sec = float(clef.get("cooldown_sec", 120))
-
-    # -- health -------------------------------------------------------------
 
     def available(self):
         if not self.enabled or not self.base_url:
@@ -107,10 +67,7 @@ class ClefClient:
         self.failures = 0
         self.last_error = None
 
-    # -- the call -----------------------------------------------------------
-
     def ask(self, state, questions):
-        """Returns {"answers": {...}, "usage": {...}} or raises ClefError."""
         if not self.available():
             raise ClefError("clef unavailable (disabled, unconfigured, or cooling "
                             f"down until {self.disabled_until:.0f})")
@@ -118,9 +75,7 @@ class ClefClient:
         ratio = max(self.tokens_per_char, self.learned_ratio or 0.0)
         estimate = tokens_needed(state, questions, ratio=ratio)
         if estimate > self.max_request_tokens:
-            # A design input, not a nuisance: the model rejects an oversized
-            # batch, so an over-budget bundle is a caller bug. Fail loudly here
-            # rather than letting the endpoint 500.
+            # caller bug, and the endpoint 500s anyway: refuse before sending
             raise ClefError(f"request is ~{int(estimate)} tokens at "
                             f"{ratio:.2f} tokens/char, over the "
                             f"{self.max_request_tokens}-token batch budget — the "
@@ -132,8 +87,6 @@ class ClefClient:
             text = str(exc)
             real = _too_large_tokens(text)
             if real:
-                # Learn the endpoint's real tokenizer cost and never send that
-                # size again; the caller may retry once with a smaller bundle.
                 chars = max(1, len(json.dumps(body, separators=(",", ":"), default=str)))
                 self.learned_ratio = min(1.0, (real + 16) / chars)
                 raise ClefError(f"over_budget: {text[:200]}") from exc
@@ -159,7 +112,6 @@ class ClefClient:
 
 
 def _too_large_tokens(text):
-    """The endpoint's reported token count from a 'too large' rejection."""
     match = re.search(r"input \((\d+) tokens\) is too large", text or "")
     if match:
         return int(match.group(1))
@@ -167,11 +119,7 @@ def _too_large_tokens(text):
 
 
 class StubClef:
-    """A recorded responder: `answers_by_question` or a callable.
-
-    Used by the replay tests and by `--dry-run` smoke runs that must exercise the
-    whole chain without a model endpoint.
-    """
+    """Recorded responder for the replay tests and --dry-run smoke chains."""
 
     def __init__(self, answers=None, responder=None):
         self.answers = dict(answers or {})
@@ -197,17 +145,9 @@ def _type_of(question):
     return (question or {}).get("type", "noul")
 
 
-# --------------------------------------------------------------------------- #
-# reading an answer
-# --------------------------------------------------------------------------- #
-
 def top_probability(answer):
-    """The gate's number, computed from the probabilities (never the labels).
-
-    `noul` answers carry a single yes-probability and no `probabilities` map, so
-    they are handled first — reading the map first silently made every yes/no
-    answer look like a 0.0-confidence answer.
-    """
+    """The gate's number. noul answers carry no probabilities map — checking the
+    map first reads every yes/no as 0.0-confidence."""
     if answer.get("type") == "noul" or ("noul" in answer and not answer.get("probabilities")):
         yes = float(answer.get("noul", 0.0) or 0.0)
         return max(yes, 1.0 - yes)
@@ -218,7 +158,6 @@ def top_probability(answer):
 
 
 def choice_of(answer):
-    """The winning option id, for a `choice` answer."""
     if answer.get("choice"):
         return answer["choice"]
     probs = _probabilities(answer)
@@ -228,7 +167,6 @@ def choice_of(answer):
 
 
 def score_of(answer):
-    """Expected value of a `score` answer (0..n-1), plus the level distribution."""
     probs = _probabilities(answer)
     if not probs:
         value = answer.get("score")
@@ -259,10 +197,6 @@ def _probabilities(answer):
     return out
 
 
-# --------------------------------------------------------------------------- #
-# the decision
-# --------------------------------------------------------------------------- #
-
 @dataclass
 class Decision:
     question: str
@@ -271,7 +205,7 @@ class Decision:
     top_prob: float = 0.0
     theta: float = DEFAULT_THETA
     source: str = "deterministic"      # clef | llm_arbiter | deterministic
-    chosen: dict = None                # the candidate (next_effect) or None
+    chosen: dict = None
     bundle: dict = None
     note: str = None
     meta: dict = field(default_factory=dict)
@@ -294,8 +228,6 @@ class Decider:
         self.llm = llm
         self.policy = policy
 
-    # -- thresholds ---------------------------------------------------------
-
     def theta(self, question):
         clef = self.cfg.get("clef") or {}
         overrides = clef.get("theta_by_question") or {}
@@ -305,12 +237,7 @@ class Decider:
             return DEFAULT_THETA
 
     def high_stakes(self, candidates, chosen_id=None):
-        """High stakes = the configured effect list OR an explicit candidate flag.
-
-        One rule, applied in one place: the candidate list carries the flag
-        (policy.candidates sets it) and the config carries the list, so a
-        candidate built by hand still gets the right treatment.
-        """
+        """Configured effect list OR explicit flag — hand-built candidates included."""
         effects = tuple((self.cfg.get("clef") or {}).get("high_stakes_effects")
                         or ("takedown", "lockout", "rotate_credlist"))
         def risky(candidate):
@@ -321,49 +248,33 @@ class Decider:
         hit = next((c for c in candidates if c.get("id") == chosen_id), None)
         return bool(hit and risky(hit))
 
-    # -- the chain ----------------------------------------------------------
-
     def ratio(self):
-        """The token/char ratio to size requests with (learned beats configured)."""
         return max(float(getattr(self.clef, "tokens_per_char",
                                  digest_mod.TOKENS_PER_CHAR) or 0.0),
                    float(getattr(self.clef, "learned_ratio", None) or 0.0))
 
     def compose(self, ctx, candidates, recent=None, *, cycle=0,
                 include_escalation=False, include_blue_check=False, extra_shrink=0):
-        """Questions first, then a digest sized to what is left of the batch.
-
-        The bundle is built first, its cost measured, and the digest gets the
-        remainder of the batch (minus a small envelope margin) — so a growing
-        question bundle can never silently push the request over the endpoint's
-        ceiling mid-event. The ceiling is 16k, which means the
-        first attempt (full bundle, full digest) is the normal path; the compact
-        and shrink attempts below survive as the fallback for a smaller endpoint.
-        """
+        """Questions first; the digest gets the remainder of the batch budget."""
         ceiling = int((self.cfg.get("clef") or {}).get("max_request_tokens", 16384))
         ratio = self.ratio()
         digest = questions = meta = None
-        # (compact?, digest shrink) attempts, cheapest first: a full bundle is
-        # better for the model, so it is only given up when the batch demands it.
+        # (compact?, shrink) cheapest first: drop bundle quality only when the batch demands it
         attempts = [(False, 0), (True, 0), (True, 60), (True, 120)]
         if extra_shrink:
             attempts = [(True, extra_shrink + shrink) for _, shrink in attempts]
         for compact, shrink in attempts:
-            # Compact mode also shortens the option list (4-5 rather than 8):
-            # against a small batch the option TEXT is what the budget is spent
-            # on, and the top five candidates carry the decision anyway.
-            # include_pressure=False: the loop asks `pressure_count` as its own
-            # (tiny) call, so bundling it here would spend the batch twice.
+            # compact also trims the option list: option text eats a small batch
+            # include_pressure=False: the loop asks pressure_count as its own
+            # tiny call; bundling it would spend the batch twice.
             questions, meta = self.policy.question_bundle(
                 None, candidates, ctx, cycle=cycle, compact=compact,
                 max_options=(3 if extra_shrink else 4) if compact else 8,
                 include_escalation=include_escalation,
                 include_blue_check=include_blue_check, include_pressure=False)
             overhead = tokens_needed({}, questions, ratio=ratio) + 24
-            # A digest is a decision input, not a data dump: cap what we will
-            # send even when the endpoint would take far more. The floor stays
-            # low on purpose — against a SMALL batch the digest has to be able to
-            # give ground, or the compact attempt can never fit either.
+            # a digest is a decision input, not a data dump; the low floor lets
+            # a small batch shrink it until a compact attempt fits
             budget = int(min(max(80, ceiling - overhead - shrink),
                              DIGEST_BUDGET_CEILING))
             digest = self.policy.frame(ctx, candidates, recent=recent,
@@ -374,10 +285,9 @@ class Decider:
                                   tokens=tokens_needed(digest, questions, ratio=ratio),
                                   ceiling=ceiling, tokens_per_char=round(ratio, 3))
                 return digest, questions, meta
-        # Nothing fit: hand back the smallest bundle we built. The client refuses
-        # an over-budget request (ClefError) and the chain degrades
-        # deterministically, which is a logged, designed behaviour — silently
-        # sending a truncated question is not.
+        # Nothing fit: return the smallest bundle; the client's over-budget
+        # refusal then degrades the chain deterministically — never a silent
+        # truncated send.
         self.log.emit("clef_bundle_over_budget", cycle=cycle,
                       tokens=tokens_needed(digest, questions, ratio=ratio),
                       ceiling=ceiling, tokens_per_char=round(ratio, 3),
@@ -387,13 +297,7 @@ class Decider:
 
     def _ask(self, cycle, digest, questions, bundle, *, ctx=None, candidates=None,
              recent=None, include_escalation=False, include_blue_check=False):
-        """Ask clef; on an over-budget rejection, recompose once and retry.
-
-        The endpoint is the authority on its own tokenizer: when it rejects a
-        request, the client records the implied ratio and we shrink the bundle
-        rather than spending the rest of the event on deterministic fallbacks.
-        One retry, never a loop.
-        """
+        """Ask clef; on an over-budget rejection recompute once and retry — never a loop."""
         out = {"digest": digest, "questions": questions, "bundle": bundle,
                "payload": None, "error": None}
         try:
@@ -419,13 +323,7 @@ class Decider:
 
     def next_effect(self, cycle, digest, candidates, *, ctx=None, recent=None,
                     include_escalation=False, include_blue_check=False):
-        """Pick one candidate from the bounded list, and log the whole chain.
-
-        `escalate_now` and `blue_hunting` are deliberately NOT bundled here: each
-        is asked as its own (tiny) call at the moment it matters, which keeps the
-        decision request inside the model's batch. The flags stay for a caller
-        that wants them in one request.
-        """
+        """Pick one candidate from the bounded list, log the chain; escalate_now/blue_hunting are separate tiny calls (batch budget)."""
         if not candidates:
             return self._log(cycle, Decision("next_effect", "hold",
                                              source="deterministic",
@@ -452,8 +350,8 @@ class Decider:
         meta = asked.get("meta", meta)
         payload = asked["payload"]
         if payload is None:
-            # Degradation ladder, rung 1: clef down -> the deterministic
-            # candidate #1 still acts. A model outage must not idle the run.
+            # degradation ladder rung 1: clef down -> deterministic #1 acts; a
+            # model outage must not idle the run.
             chosen = candidates[0]
             return self._log(cycle, Decision(
                 "next_effect", chosen["id"], source="deterministic", bundle=bundle,
@@ -477,8 +375,7 @@ class Decider:
                 return self._log(cycle, Decision("next_effect", picked, probs, prob,
                                                  theta, "clef", chosen, bundle,
                                                  meta=meta))
-            # clef named something that is not on the list (hallucinated id):
-            # the candidate list is the authority, so fall through.
+            # clef invented an id: the candidate list is the authority
             note = f"clef chose {picked!r}, which is not a candidate — falling back"
         else:
             note = (f"clef top probability {prob:.2f} < theta {theta:.2f}"
@@ -492,8 +389,6 @@ class Decider:
                     "next_effect", chosen["id"], probs, prob, theta, "llm_arbiter",
                     chosen, bundle,
                     note=f"{note}; arbiter chose {chosen['id']}: {why}", meta=meta))
-        # rungs 2 and 3 of the ladder: the deterministic candidate #1 always
-        # acts, so neither a dead clef nor a dead LLM idles the run.
         chosen = candidates[0]
         return self._log(cycle, Decision(
             "next_effect", chosen["id"], probs, prob, theta, "deterministic",
@@ -555,7 +450,6 @@ class Decider:
             note=f"expected {expected:.2f} from levels {levels}"))
 
     def noul(self, question, digest, instructions, *, default=False, cycle=None):
-        """A yes/no judgment (escalate_now, blue_hunting)."""
         questions = {question: {"type": "noul", "instructions": instructions}}
         theta = self.theta(question)
         try:
@@ -578,16 +472,8 @@ class Decider:
         return self._log(cycle, Decision(question, value, {"no": 1 - yes, "yes": yes},
                                          prob, theta, "clef"))
 
-    # -- LLM-authored commands ----------------------------------------------
-
     def classify_command(self, command, os_name="linux"):
-        """command_intent: inform attribution (never a gate).
-
-        Deterministic keyword classification is the fallback *and* the sanity
-        check: a `benign` classification from the model never turns an impacty
-        command into a benign one (the earlier agent's substring sniff both missed
-        real impact words and mis-attributed innocent ones).
-        """
+        """command_intent: informs attribution, never a gate. The deterministic keyword read is the floor."""
         base = keyword_intent(command)
         digest = {"cmd": str(command)[:120], "os": os_name, "kw": base}
         questions = {"command_intent": {
@@ -657,10 +543,8 @@ class Decider:
                             "deterministic", note=f"below theta — default {default}")
         return Decision(question, value, {"no": 1 - yes, "yes": yes}, prob, theta, "clef")
 
-    # -- logging ------------------------------------------------------------
-
     def _log(self, cycle, decision):
-        """Log one decision's whole chain (principle 7) and return it."""
+        """Log one decision's whole chain and return it."""
         if cycle is not None:
             record = decision.as_log()
             self.log.decision(cycle=cycle, question=record["question"],
@@ -673,20 +557,14 @@ class Decider:
         return decision
 
     def record(self, cycle=None, decisions=(), *, executed=None):
-        """Log a batch of decisions made outside the chain, plus what ran."""
         for decision in decisions:
             self._log(cycle, decision)
         if executed is not None:
             self.log.emit("decision_result", cycle=cycle, executed=executed)
 
 
-# --------------------------------------------------------------------------- #
-# deterministic helpers (also the replay fixtures)
-# --------------------------------------------------------------------------- #
-
-# Word-boundary regexes, not substrings: the earlier agent's substring sniff
-# matched "id" inside "hidden" and missed real impact words in flags, and its
-# mis-attribution went straight into the ledger. The order is the conservative one: impact first.
+# Word-boundary, not substring ("id" matched inside "hidden"); check order is
+# the conservative one: impact first.
 IMPACT_RE = re.compile(
     r"\b(stop|disable|mask|kill|lock|flush|sabotage|drain|deny|block|down)\b"
     r"|systemctl\s+(stop|mask|disable)|/active:no|-Recurse\b", re.IGNORECASE)
@@ -700,8 +578,6 @@ PERSIST_RE = re.compile(
 
 
 def keyword_intent(command):
-    """The deterministic read of a free-form command: the fallback for
-    command_intent and the conservative floor under the model's answer."""
     text = str(command or "")
     if IMPACT_RE.search(text):
         return "takedown"
@@ -713,13 +589,11 @@ def keyword_intent(command):
 
 
 def replay_answer(record):
-    """Rebuild the clef answer a logged decision was made from (replay tests)."""
     return {"type": "choice" if isinstance(record.get("answer"), str) else "noul",
             "choice": record.get("answer"),
             "probabilities": record.get("probabilities") or {}}
 
 
 def tokens_needed(state, questions, ratio=None):
-    """Budget estimate for a whole request, using the shared calibration."""
     from .state.digest import estimate_tokens
     return estimate_tokens({"state": state, "questions": questions}, ratio=ratio)

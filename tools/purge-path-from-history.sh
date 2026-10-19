@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
 # Purge a path from ALL git history, then verify it is really gone.
 #
-# Rehearsed 2026-10-01 against a bundle clone of this repo before running for real:
-#   - filter-branch rewrote 209 refs in ~5s
-#   - `git ls-tree` across every branch no longer showed the file
-#   - BUT the blob survived via refs/original/* (filter-branch's safety backups)
-#     and `git rev-list --objects --all` still found the token.
-#   - Deleting refs/original/* + reflog expire + gc --prune=now FINALLY pruned it.
-# That last step is the one everybody forgets. Without it the secret is still in
-# the object store and still cloneable.
+# The step everybody forgets is the last one: filter-branch leaves the blob alive under
+# refs/original/* and in the reflog, so without dropping those and `gc --prune=now` the
+# secret stays in the object store and stays cloneable. This script does all of it.
 #
 # Usage: purge-path-from-history.sh <path-relative-to-repo-root>
 # Run from the repo root. TAKE A BUNDLE BACKUP FIRST:

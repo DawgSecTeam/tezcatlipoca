@@ -10,7 +10,6 @@ from estate import state as estate_state
 
 
 def _tracked_team_identifier_defaults(comp_dir):
-# Read a packet's non-secret team identifier suggestions for fresh-worktree defaults.
     compfile = Path(comp_dir) / "Compfile"
     source = None
     if compfile.is_file():
@@ -30,7 +29,6 @@ def _tracked_team_identifier_defaults(comp_dir):
 
 
 def _fresh_identifier_defaults(comp_dir, previous_state):
-# Prefer identifiers from local history, then tracked packet metadata.
     saved = (previous_state or {}).get("teams") or {}
     identifiers = ([team.get("identifier") for team in saved.values()
                     if isinstance(team, dict) and team.get("identifier") is not None]
@@ -54,26 +52,17 @@ def _fresh_identifier_defaults(comp_dir, previous_state):
     return defaults
 
 
+# box_password is a golden-hash INPUT: re-minting it rebuilds every golden — reuse prior state's, mint only for a new comp
 def carry_box_password(previous_state):
-# box_password is a golden-hash INPUT (baked into /etc/shadow + cloud-init on the
-#     golden disk): re-minting it on a fresh deploy rebuilds every golden. Reuse the
-#     competition's existing one; mint only for a truly new competition.
     return (previous_state or {}).get("box_password") or random_password()
 
 
+# the run id reuses prior state so resume, crash-loop re-run and redeploy reclaim the SAME
+# lineage — a fresh mint orphans kept templates' ownership. Split from the mint so preflight can abort before secrets exist.
 def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None):
-# Resolve the run id and the team roster (carried on a resume), into `ctx`.
-#
-#     Deliberately split from the credential mint: preflight must be able to abort a
-#     fresh deploy before any secret exists to desync (see prepare()'s order note). The
-#     run id comes first so BOTH paths persist the same id (utils.mint_run_id): reused
-#     from prior state when the competition directory has one — a resume, a crash-loop
-#     re-run and a redeploy must reclaim and re-tag the SAME lineage, and a fresh mint
-#     would orphan every kept template's ownership.
     ctx.run_id = ctx.previous_state.get("run_id") or mint_run_id()
     if ctx.resuming:
-        # Re-read from disk rather than trusting the snapshot prepare() took: the document
-        # holds the only copy of the team passwords.
+        # re-read from disk: the state document holds the only copy of the team passwords
         ctx.state = estate_state.load_flat(ctx.state_path.parent if ctx.state_path
                                            else ctx.comp_dir)
         ctx.teams = {
@@ -81,7 +70,6 @@ def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None)
             for k, v in ctx.state["teams"].items()
         }
         ctx.number_of_teams = len(ctx.teams)
-        # Carried, not minted; fill gaps only (the mint step never runs on a resume).
         ctx.admin_password = ctx.state.get("admin_password") or random_password()
         ctx.scoring_password = ctx.state.get("scoring_password") or random_password()
         ctx.postgres_password = ctx.state.get("postgres_password") or random_password()
@@ -132,8 +120,7 @@ def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None)
             identifier_defaults=_fresh_identifier_defaults(
                 ctx.state_path.parent, ctx.previous_state),
             team_identifiers=team_identifiers)
-        # Skeleton only — the mint step adds the secrets after preflight. An abort at
-        # the gates leaves a state with the lineage (run id) but no credentials.
+        # skeleton only: an abort at preflight leaves the lineage (run id) with no credentials
         ctx.state = {
             "last_phase": 0,
             "pipeline_version": PIPELINE_VERSION,
@@ -144,20 +131,12 @@ def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None)
 
 
 def mint_competition_secrets(ctx):
-# Mint the fresh deploy's secrets into `ctx` and persist them (preflight has
-#     already passed — see prepare()'s order note).
     ctx.admin_password = random_password()
     ctx.scoring_password = random_password()
     ctx.postgres_password = random_password()
     ctx.redis_password = random_password()
-    # M4: box_password is a golden-hash INPUT (baked into /etc/shadow +
-    # cloud-init on the golden disk) — a fresh deploy that re-minted it would
-    # rebuild every golden and break the lifecycle's "2-team test run → 8-team
-    # competition must not rebuild anything". Reuse the competition's existing
-    # box password when prior state carries one; mint fresh only on a truly
-    # new competition. passwords.json (packet profile) outranks both: the
-    # packet's default credentials ARE the competition, and an operator edit
-    # to passwords.json is a deliberate re-key (goldens rebuild — correct).
+    # passwords.json outranks carried state: the packet's credentials ARE the competition, and
+    # an operator edit to it is a deliberate re-key (goldens rebuild — correct)
     ctx.box_password = ((ctx.packet_pw or {}).get("box_password")
                             or carry_box_password(ctx.previous_state))
     if ctx.packet_pw:

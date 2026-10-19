@@ -1,24 +1,4 @@
-"""The loop: one cycle per decision window, deterministic by default.
-
-    kill switch -> reload world -> sensors (scoreboard + blue restores)
-      -> artifact health (the re-plant trigger) -> candidates (policy)
-      -> digest (compact, budgeted) -> decision (clef, gated)
-      -> escalate / pressure budget (the same answers, applied)
-      -> hard gate -> execute -> log
-
-Design rules this file exists to keep:
-
-* **the run never depends on a model being up.** Clef down -> deterministic
-  candidate #1. LLM down -> clef still runs everything but command authoring.
-  Both down -> the deterministic ladder (policy candidate order).
-* **the kill switch is checked per command**, not per cycle (it lives in the
-  gate, called by the effect template).
-* **circuit breakers instead of a silent corpse**: consecutive errors stop the
-  loop, an unreachable range stops the loop, and both write a readable event.
-* **one action path**: every action — the decision's pick, the escalation, the
-  pressure budget — goes through `effects.execute()`, so the gate and the ledger
-  cannot be bypassed by a code path that forgot them.
-"""
+"""The loop: one cycle per decision window, deterministic by default."""
 
 import json
 import random
@@ -64,20 +44,16 @@ class Loop:
         ctx.policy = self.policy
         self.decider = decider or ctx.decider
         self.reports_dir = reports_dir
-        # Injectable so a smoke test does not wait out a 4-minute decision
-        # window between cycles (the cadence itself is production behaviour).
+        # injectable so a smoke test skips the 4-min window; the cadence is production behaviour
         self._sleeper = sleeper or time.sleep
         self.cycle = 0
         self.errors = 0
         self.unreachable = 0
-        self.recent = []              # short strings for the digest
+        self.recent = []
         self.records = []
         self.blue_hunting = False
 
-    # -- helpers ------------------------------------------------------------
-
     def guard_host(self):
-        """Refuse to run live off the red VM: a wrong host is a wrong range."""
         run = self.ctx.cfg["run"]
         if self.ctx.dry_run or not run.get("host_guard", True):
             return True
@@ -90,12 +66,7 @@ class Loop:
             "--dry-run)")
 
     def verify_artifacts(self):
-        """Mark artifacts blue removed (the re-plant trigger).
-
-        A cheap, in-loop check: run each artifact's own `check_cmd` on its box.
-        The authoritative down->up proof for scoring belongs to the engine's
-        `red-verdict` — this only feeds the loop's own re-plant decision.
-        """
+        """Loop-internal re-plant trigger only; the engine's red-verdict is the authoritative scoring proof."""
         verify_every = int(self.ctx.cfg["run"].get("verify_every_n_cycles", 3))
         if verify_every and self.cycle % verify_every != 0:
             return
@@ -107,12 +78,8 @@ class Loop:
             if not check or not fh:
                 continue
             key = _artifact_key(artifact)
-            # This is the loop's own read-only probe, not an effect — but it is
-            # still a command running on a team box, so it goes through the same
-            # primitives the effect template uses. The kill switch and the target
-            # scope are hard safety (they halt the run); the lint rejection is a
-            # skipped artifact, because a bad check_cmd must not take the event
-            # down (block_port artifacts deliberately carry no check_cmd at all).
+            # not an effect, but still a command on a team box: same gate primitives.
+            # Kill switch/target halt the run; a lint rejection only skips this artifact.
             self.ctx.gate.check_kill_switch()
             self.ctx.gate.ensure_target(ip)
             try:
@@ -126,7 +93,7 @@ class Loop:
                                               check, timeout=25, windows=fh.get("windows"),
                                               key_path=fh.get("key_path"))
             except TlalocError:
-                continue                      # unreachable: not evidence of removal
+                continue                      # unreachable is not evidence of removal
             alive = rc == 0 and "inactive" not in (out or "")
             if alive:
                 dead.discard(key)
@@ -136,8 +103,6 @@ class Loop:
                 self.log.emit("artifact_dead", ip=ip,
                               artifact_kind=artifact.get("kind"), check=check)
         self.world.set_dead_artifacts(dead)
-
-    # -- one cycle ----------------------------------------------------------
 
     def step(self):
         self.cycle += 1
@@ -168,8 +133,7 @@ class Loop:
         include_blue = (self.ctx.cfg["sensors"].get("blue_hunting_every_n_cycles") and
                         self.cycle % int(self.ctx.cfg["sensors"]
                                          ["blue_hunting_every_n_cycles"]) == 0)
-        # The decider composes the digest so its size is derived from what the
-        # question bundle costs — see Decider.compose().
+        # the digest size is derived from the question bundle's cost inside Decider.compose()
         decision = self.decider.next_effect(self.cycle, None, candidates, ctx=self.ctx,
                                            recent=self.recent[-24:],
                                            include_blue_check=bool(include_blue))
@@ -189,9 +153,7 @@ class Loop:
         if decision.chosen is not None:
             executed.append(self._run_candidate(decision, source=decision.source))
 
-        # escalate_now: the model's judgment that it is time for a harder
-        # mechanism. Applied by re-deriving the mode of an impact candidate that
-        # is already legal — never by inventing an effect.
+        # escalation re-derives the mode of an already-legal candidate — never invents an effect
         escalate = self.decider.noul("escalate_now", digest,
                                      "Escalate to a stronger/unrecoverable mechanism "
                                      "this cycle?", cycle=self.cycle)
@@ -216,9 +178,7 @@ class Loop:
                     break
 
         self.decider.record(self.cycle, executed=[e for e in executed if e])
-        # The report's decision-log section reads this list; nothing else fills
-        # it, so an empty one silently drops the section from the after-action
-        # artifact the organizer reads.
+        # the report's decision-log section reads records; an empty one silently drops it
         self.records.append({
             "cycle": self.cycle,
             "kind": "decision_result",
@@ -244,10 +204,8 @@ class Loop:
             result = execute(candidate["effect"], candidate["params"], self.ctx,
                              source=source, cycle=self.cycle)
         except EffectParamError as exc:
-            # An effect id no module registered (a partial deployment, or a
-            # candidate built by hand): a failed candidate with a reason, NOT a
-            # cycle error — one missing module must not burn the error budget
-            # the breaker watches.
+            # unregistered effect id: a failed candidate, NOT a cycle error —
+            # one missing module must not burn the breaker's error budget
             self.log.emit("candidate_unavailable", cycle=self.cycle,
                           candidate=candidate.get("id"), error=str(exc))
             self.recent.append(f"{candidate['effect']} unavailable")
@@ -258,7 +216,6 @@ class Loop:
                 "ok": result.ok, "detail": result.detail}
 
     def _stronger_impact(self, decision, candidates, source):
-        """The heaviest legal impact candidate, as a new pick (never a new effect)."""
         strongest = self.policy.strongest_impact_mode()
         if not strongest:
             return None
@@ -328,8 +285,6 @@ class Loop:
                                     note=f"pressure budget ({count})")
             out.append(holder)
         return out
-
-    # -- the run ------------------------------------------------------------
 
     def run(self, *, max_cycles=None):
         self.guard_host()
@@ -425,8 +380,7 @@ def _short(effect, params, result):
 
 def build_context(cfg, *, comp_dir=None, dry_run=None, clef=None, llm=None, c2=None,
                   sensors=None, ssh=None, rng=None, decider=None):
-    """Assemble the live Ctx (the CLI's one construction path; tests use
-    tests/helpers.make_ctx with fakes)."""
+    """The CLI's one Ctx construction path; tests use helpers.make_ctx."""
     reload_registry()
     comp_dir = comp_dir or cfg["run"].get("comp_dir") or "."
     cfg["run"]["comp_dir"] = str(Path(comp_dir).resolve())
@@ -464,7 +418,6 @@ def build_context(cfg, *, comp_dir=None, dry_run=None, clef=None, llm=None, c2=N
 
 def run_event(cfg, *, comp_dir=None, max_cycles=None, clef=None, llm=None, c2=None,
               sensors=None, ssh=None, decider=None):
-    """Convenience entry point used by the CLI and the smoke test."""
     ctx, policy, _ = build_context(cfg, comp_dir=comp_dir, clef=clef, llm=llm, c2=c2,
                                    sensors=sensors, ssh=ssh, decider=decider)
     loop = Loop(ctx, policy=policy, decider=ctx.decider, sensors=ctx.sensors)
@@ -472,7 +425,6 @@ def run_event(cfg, *, comp_dir=None, max_cycles=None, clef=None, llm=None, c2=No
 
 
 def status(cfg, comp_dir=None, *, context=None):
-    """Operator status: what the agent believes, in one screen."""
     ctx, policy, _ = context or build_context(cfg, comp_dir=comp_dir, clef=None,
                                              llm=None, c2=None, sensors=None)
     from .effects import catalog

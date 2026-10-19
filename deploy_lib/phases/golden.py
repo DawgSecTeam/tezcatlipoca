@@ -20,7 +20,6 @@ from deploy_lib.phases._snapshots import snap_base
 
 
 def boot_win(ctx, t):
-# Bootstrap one Windows box (apply #2 re-created it as a fresh clone).
     print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")
     gw = f"192.168.{t['identifier']}.1"
     with timed(ctx.comp_dir, 4, "bootstrap_windows", t["ip"]):
@@ -28,16 +27,9 @@ def boot_win(ctx, t):
                               "8.8.8.8", ctx.box_password)
 
 
-
 def golden_coverage_recorder(ctx):
-# The `coverage` callback build_golden_set threads through its plant.
-#
-#     The golden plant's coverage verdict, recorded like a post-clone stage's. result is
-#     None on every skip path (M4 reuse / checkpointed / pristine / cold): the disk is then
-#     proven by hash, not by a fresh plant, so guarantee the record exists but never erase a
-#     previously recorded failure. A real result records through record_coverage —
-#     including alpine_services-tolerated failures, which are a genuine gap on the golden
-#     disk and must reach verify's gate.
+    # None = skip path (disk proven by hash): ensure the record, never erase a prior failure.
+    # Tolerated plant failures are a real golden-disk gap and must reach verify's gate.
     def _golden_coverage(machines, result):
         if result is None or not getattr(result, "machines", None):
             ctx.state.setdefault("plant_coverage_failed", {})
@@ -51,19 +43,10 @@ def golden_coverage_recorder(ctx):
 
 
 def build_goldens(ctx, stored):
-# Plant + convert the golden set on the engine node and on every satellite.
-#
-#     Returns (golden_ids, golden_ids_by_slot): slot 0 is the engine node's map, satellites
-#     get their own (same planted content, built ON each satellite from its own templates).
-#     M4 hash gate: a converted golden whose stored hash differs is rebuilt — unless the
-#     competition is frozen, in which case config drift hard-fails (frozen_gate) and
-#     code-only drift reuses the template with a warning. Matching templates reach
-#     build_golden_set and short-circuit the build.
+    # slot 0 is the engine node's map; drift rebuilds unless frozen, matching hashes short-circuit
     _golden_coverage = golden_coverage_recorder(ctx)
 
-    # Slot-0 goldens only exist when the engine node actually hosts teams —
-    # an all-satellite spread leaves the engine with no local bridges to
-    # anchor them on (their vmbr<id> lives on the satellite's host).
+    # slot-0 goldens exist only when the engine node hosts teams — its vmbr<id> bridges live on the satellite hosts
     engine_has_teams = bool(
         ctx.placement is None
         or ctx.placement["team_nodes"] and any(
@@ -82,10 +65,8 @@ def build_goldens(ctx, stored):
                                       run_id=ctx.run_id, coverage=_golden_coverage)
     golden_ids_by_slot = {0: golden_ids}
     if ctx.placement and ctx.placement["satellites"]:
-        # Satellite goldens: identical planted content (same hashes), built ON
-        # each satellite from its own templates, at the slot's anchor subnet —
-        # linked clones can't cross hosts on separate storages. The plant rides
-        # the engine's gateway path; the jump routes + SNATs it there.
+        # built ON each satellite from its own templates — linked clones can't cross hosts
+        # on separate storages. The plant rides the engine's gateway path; the jump routes + SNATs it there.
         for sat in ctx.placement["satellites"]:
             sat_rec = record_of(ctx.placement, sat["name"])
             slot = sat["slot"]
@@ -109,7 +90,6 @@ def build_goldens(ctx, stored):
 
 
 def record_golden_set(ctx, golden_ids, golden_ids_by_slot):
-# Persist the built goldens (state + the per-competition template-hash file).
     ctx.state["golden_template_ids"] = golden_ids
     ctx.state["golden_ids_by_slot"] = {str(k): v for k, v in golden_ids_by_slot.items()}
     ctx.state["golden_hashes"] = ctx.golden_hashes
@@ -117,8 +97,7 @@ def record_golden_set(ctx, golden_ids, golden_ids_by_slot):
         name: {"hash": ctx.golden_hashes[name], "inputs": ctx.golden_inputs[name]}
         for name in ctx.golden_hashes})
     ctx.save_state()
-    # Inventory them: the teardown must die goldens AFTER every clone, so the recorded
-    # node matters (satellite goldens live on their own host).
+    # teardown must die goldens AFTER every clone, so the recorded node matters
     document = ctx.document()
     for name, vmid in golden_ids.items():
         document.record("golden", ctx.node, f"golden-{name}", vmid=vmid)
@@ -131,13 +110,7 @@ def record_golden_set(ctx, golden_ids, golden_ids_by_slot):
 
 
 def apply_team_boxes(ctx, golden_ids, golden_ids_by_slot):
-# Build every team box as a linked clone of its golden.
-#
-#     Keyed by vm_name, not by box type: two box types may share one base template, so a
-#     name-keyed lookup is the only one that cannot cross-wire golden disks (live-found
-#     caught live: web01 clones came from golden-db01's disk). Unmanaged boxes (pfSense)
-#     have no golden — they clone from their own base template, ON THE TEAM'S OWN NODE for
-#     satellite slots (a linked clone cannot cross hosts on separate storages).
+    # keyed by vm_name: two box types can share a base template; any other key cross-wires golden disks
     from deploy_lib.phases._estate import create_team_boxes
     by_slot = {int(key): value for key, value in golden_ids_by_slot.items()}
     templates_by_node = {}
@@ -154,11 +127,7 @@ def apply_team_boxes(ctx, golden_ids, golden_ids_by_slot):
 
 
 def bootstrap_clones(ctx):
-# Bring the fresh clones to a plantable state and take the pre-sweep restore point.
-    # Apply #2 (re-)created the team boxes: any surviving .postclone-swept
-    # marker describes the OLD clones, and a phase-5 resume would skip the
-    # pre-domain pass/credlist/shim on the fresh ones (hit twice on
-    # shakedown-5x4; the workaround was deleting the marker by hand).
+    # a stale .postclone-swept marker lets a phase-5 resume skip the pre-domain pass on fresh clones
     (ctx.comp_dir / ".postclone-swept").unlink(missing_ok=True)
 
     win_results = run_concurrent(ctx.windows_targets, partial(boot_win, ctx), max_workers=4)
@@ -166,10 +135,8 @@ def bootstrap_clones(ctx):
         if isinstance(r, Exception):
             raise r
 
-    # Waits and the pre-sweep snapshot cover the MANAGED boxes only: an unmanaged
-    # appliance (pfSense) accepts no SSH and runs no cloud-init, and the in-path
-    # firewall is not even routed until phase 5's cutover — its SNAP_BASE restore
-    # point is taken there, once it actually carries the team's gateway.
+    # managed only: unmanaged appliances take no SSH/cloud-init, and the in-path firewall
+    # isn't routed until phase 5's cutover (its SNAP_BASE is taken there)
     with timed(ctx.comp_dir, 4, "wait_boxes_ssh"):
         wait_for_boxes_ssh(ctx.tf_ctx, ctx.managed_targets, timeout=300)
     with timed(ctx.comp_dir, 4, "wait_cloud_init"):
@@ -184,13 +151,6 @@ def bootstrap_clones(ctx):
 
 
 def phase4_golden_set(ctx):
-# [4/8] Plant the golden set, then clone every team box from it.
-#
-#     Two halves on purpose: the goldens must exist as templates before apply #2
-#     flips build_team_boxes on, and both are timed under phase 4 so the timing
-#     summary shows the plant and the linked-clone burst separately. The [4/8] and
-#     [4b/8] banners stay distinct because operators (and incident logs) key on
-#     them.
     if ctx.from_phase > 4:
         print("[4/8] Skipped (resume).")
         return

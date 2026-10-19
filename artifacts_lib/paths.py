@@ -9,10 +9,8 @@ from .constants import DIRNAME, MANIFEST_NAME, RUN_ID_RE
 
 
 def artifacts_root(comp_dir):
-# `<comp_dir>/.automated-tests` — the drop point. Gitignored, deliberately: box-pulled
-#     reports quote flags and credentials. There is no publish path on purpose
-#     (a deliberate operator decision): harvest a recommendation by writing it into
-#     docs/known-issues.md or a fixes plan, never by copying the artifact into git.
+    # Gitignored deliberately: harvested reports quote flags and credentials. Never
+    # publish one into git — record recommendations in docs/known-issues.md instead.
     return Path(comp_dir) / DIRNAME
 
 
@@ -21,18 +19,13 @@ def test_dir(comp_dir, key):
 
 
 def run_id_from_state(comp_dir):
-# The deploy's run id, or "" when the comp dir has no (valid) deploy state yet.
     state = estate_state.read_flat(comp_dir) or {}
     run_id = state.get("run_id") or ""
     return run_id if RUN_ID_RE.match(run_id or "") else ""
 
 
 def next_run_key(comp_dir, run_id=None):
-# The key a FRESH run should use.
-#
-#     The base key (the deploy's run id) when it has not been used yet, else
-#     `<base>-run2`, `-run3`… — so each harness run gets its own folder and one
-#     run's evidence can never sit next to another's.
+    # Each harness run gets its own folder: one run's evidence never sits next to another's.
     base = test_key(comp_dir, run_id)
     if not (test_dir(comp_dir, base) / MANIFEST_NAME).exists():
         return base
@@ -43,12 +36,6 @@ def next_run_key(comp_dir, run_id=None):
 
 
 def run_folders(comp_dir):
-# Existing test folders for this competition, newest first.
-#
-#     Each harness run mints its own folder (see latest_run_key): one run per folder
-#     means one run's evidence per folder, so a stale REPORT.md can never sit next to
-#     a fresh run's artifacts the way it did when every run reused the deploy-keyed
-#     folder (an earlier run's reports were still in the folder a new run wrote into).
     root = Path(comp_dir) / ".automated-tests"
     found = []
     for d in sorted(root.glob("*")):
@@ -61,10 +48,8 @@ def run_folders(comp_dir):
 
 
 def latest_run_key(comp_dir, run_id=None):
-# (key, run_id) of the newest folder that belongs to `run_id`.
-#
-#     Teardown's target: it knows the deploy's run id, not which per-run folder the
-#     harness minted, so it asks the folders themselves. Falls back to the base key.
+    # Teardown knows the run id, not which folder the harness minted, so resolve
+    # from the folders; fall back to the base key.
     comp_dir = Path(comp_dir)
     want = run_id if run_id is not None else run_id_from_state(comp_dir)
     for d in run_folders(comp_dir):
@@ -78,13 +63,8 @@ def latest_run_key(comp_dir, run_id=None):
 
 
 def test_key(comp_dir, run_id=None, *, now=None):
-# The test folder name: the run id when there is one, else a *stable* untagged key.
-#
-#     Stability matters because teardown is expected to be re-run until clean
-#     (destroy-competition.py says so): minting a fresh timestamp per invocation would split one
-#     run's evidence across several folders. The untagged fallback is therefore derived from
-#     the state document's mtime — which destroy never writes and deploy/resume does — so it is
-#     fixed for the life of a deploy and changes when a new one writes state.
+    # Teardown re-runs until clean, so the key must be stable per deploy: the untagged
+    # fallback comes from state mtime, which destroy never writes and deploy/resume does.
     comp_dir = Path(comp_dir)
     run_id = run_id or run_id_from_state(comp_dir)
     if run_id:
@@ -97,8 +77,7 @@ def test_key(comp_dir, run_id=None, *, now=None):
         except OSError:
             continue
     if stamp is None:
-        # No deploy ever wrote state here. comp_dir mtime is the last resort; still stable
-        # across repeated teardown invocations, which is what this key has to guarantee.
+        # No deploy ever wrote state: comp_dir mtime, still stable across teardown re-runs.
         try:
             stamp = comp_dir.stat().st_mtime
         except OSError:

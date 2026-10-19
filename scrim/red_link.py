@@ -11,12 +11,10 @@ from scrim.core import log
 
 
 # A canonical document smaller than this is a stub (the collector writes one when it finds
-# nothing), never a narrative: 524 bytes was the observed BLUE-TEAM.md stub size.
+# nothing), never a narrative.
 STUB_MAX_BYTES = 1024
-# Bounded grace for red's OWN report to land after the event clock stops. red writes
-# /var/lib/tlaloc/report.md when its loop sees the duration run out, which can be
-# seconds after the harness stops its own clock — the pre-teardown pull used to race exactly
-# that gap and record a present red as "unreachable", losing its account of the event every run.
+# Bounded grace for red's OWN report, which it writes seconds after the harness stops its
+# clock: the pre-teardown pull used to race that gap and record a present red as "unreachable".
 RED_REPORT_GRACE_SEC = 90
 RED_REPORT_POLL_SEC = 10
 
@@ -24,13 +22,9 @@ RED_REPORT_POLL_SEC = 10
 def _red_ssh_spec(args):
     """`(ssh spec, common scp/ssh args)` for red01 — the one place its address is resolved.
 
-    Two callers, one construction: `_red_ssh_ctx` (the harness's own scp/ssh) and
-    `record_red_agent` (the `ssh` record in test.json that the teardown-time collector
-    dials). They must not be able to disagree — a collector pointing at a different address
-    fails silently as `unreachable`. The address is THIS run's own: the competition's
-    record in the state/placement documents, else the CLI arg — never the
-    sibling checkout's shared config.yaml, which on concurrent sessions names
-    whichever red01 staged last (that read used to overwrite --red-ip outright)."""
+    The two callers must not disagree (a collector aimed elsewhere fails silently as
+    `unreachable`), so the address is this run's own record, never a sibling checkout's config.
+    """
     from red import red01_ops
     comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
     red_ip = (getattr(args, "red_ip", None)
@@ -57,10 +51,9 @@ def _red_ssh_ctx(args):
 
 
 def _pull_red_files(args, files, tag=None):
-    """Best-effort scp of red01 files — direct first, then via the engine jump.
+    """Best-effort scp of red01 files — direct first, then via the engine jump; never raises.
 
-    Never raises: in-run snapshots and teardown both use this, and a flaky scp must
-    not take down a run that is otherwise fine.
+    A flaky scp must not take down an otherwise fine run.
     """
     ev = Path(args.run_dir) / "evidence" / "red"
     ev.mkdir(parents=True, exist_ok=True)
@@ -101,13 +94,8 @@ def red_artifact_names(args):
 
 
 def _red_report_names(args, base=None):
-    """Basenames of red's `report-*.md` on red01, newest last (the name carries the UTC stamp).
-
-    Best effort, never raises: an unreadable listing means "no report yet", not a failed pull.
-    """
+    """Basenames of red's `report-*.md` on red01, newest last; best effort, never raises."""
     base = base or red_state_dir(args)
-    # The narrative is report.md; report-secrets.md is the organizer-only file,
-    # never the narrative, so it is filtered out below.
     glob = "report*.md"
     target, common, jump = _red_ssh_ctx(args)
     cmd = f"ls -1 {base}/{glob} 2>/dev/null || true"
@@ -125,12 +113,7 @@ def _red_report_names(args, base=None):
 
 
 def pull_red_snapshot(args, tag=None):
-    """Best-effort in-run pull from red01: events.jsonl AND red's own report. Never raises.
-
-    The report was only ever fetched at teardown, so a run whose red01 died mid-event (or whose
-    teardown-time pull raced red's own write) had no narrative at all. Same cadence as the
-    events snapshot — the harness calls this every ~60 s.
-    """
+    """Best-effort in-run pull of red's events and its own report; never raises."""
     files = [(f"{red_state_dir(args)}/events.jsonl", "events.jsonl")]
     for name in _red_report_names(args)[-1:]:      # newest only: the final narrative
         files.append((f"{red_state_dir(args)}/{name}", name))
@@ -146,12 +129,9 @@ def pull_red_snapshot(args, tag=None):
 
 
 def await_red_report(args, grace=RED_REPORT_GRACE_SEC, interval=RED_REPORT_POLL_SEC):
-    """Wait, bounded, for red's after-action report to appear on red01. Never raises.
+    """Wait, bounded, for red's after-action report on red01; never raises, never a gate.
 
-    red is an autonomous agent: it writes its report when IT sees the event end, and the harness
-    stops the clock first. Polling the remote listing (the report is written directly into
-    /var/lib/tlaloc as root, so this looks at the originals, not the staged copies) closes that
-    race without turning teardown into a gate — an expired grace is logged and the run continues.
+    Red writes the report when IT sees the event end, after the harness stops its clock.
     """
     deadline = time.time() + max(0, grace)
     while True:
@@ -167,9 +147,8 @@ def await_red_report(args, grace=RED_REPORT_GRACE_SEC, interval=RED_REPORT_POLL_
 def _land_canonical_red_report(args, got):
     """File the newest pulled report as the test folder's canonical RED-TEAM.md.
 
-    The collector does this too, but only when its own scp-jump route succeeds; landing it here
-    means a report the harness already holds cannot be lost to a collector-route failure. Never
-    overwrites a substantive narrative.
+    The collector only lands it if its own scp-jump route succeeds; this cannot lose a report
+    the harness already holds, and never overwrites a substantive narrative.
     """
     test_dir = getattr(args, "test_dir", None)
     if not test_dir:
@@ -213,23 +192,12 @@ def _staged_report_names(args):
 def pull_red_state(args):
     """Final pull of what red actually planted, BEFORE red01 is destroyed.
 
-    world.json is the only record of the artifact set the persistence verification
-    works from, and both it and events.jsonl are root-owned 0600 inside
-    /var/lib/tlaloc — so they are staged to a readable path with sudo first. The
-    artifact collector treats red01 as ONE target and marks every later file
-    "skipped: target unreachable" after the first scp failure (RED-TEAM.md is a
-    root-owned pattern match that fails when report-secrets.md is 0600), which is
-    how a whole run's world.json went missing.
+    world.json is the only record of the artifact set, and the collector treats red01 as ONE
+    target — one scp failure on the root-owned report-secrets.md marks every later file
+    "skipped: target unreachable". Stage everything readable first.
     """
     target, common, jump = _red_ssh_ctx(args)
-    # red's narrative is written at the END of the event, seconds after the harness clock stops:
-    # wait (bounded) for it before the staging copy below, or the pull races it and RED-TEAM.md
-    # is recorded absent for an agent that was present and did report.
     await_red_report(args)
-    # report-secrets.md (the organizer-only credlist restore table) is 0600 root, so
-    # the collector's scp as the box user fails on it and marks the whole red target
-    # unreachable — losing its siblings too. Stage every root-owned artifact to a
-    # world-readable dir first; the collector reads the staged copies.
     stage = ("sudo -n mkdir -p /tmp/ba && sudo -n chmod 755 /tmp/ba; " +
              "".join(f"sudo -n cp {red_state_dir(args)}/{name} /tmp/ba/{name} "
                      f"2>/dev/null; " for name in red_artifact_names(args)) +
@@ -258,11 +226,8 @@ def pull_red_state(args):
 def start_red_director(args):
     """Start red's director AFTER the day-0 seed has landed.
 
-    The agent must not boot its loop before the seed runs: the director
-    loads an EMPTY world.json, and its next save then overwrites the seed's artifact
-    record (lost update — meta.seed_done gone, beacon_score reading single digits,
-    per-channel re-plant blind to the seeded set). Starting it here fixes that and
-    lines red's event clock up with T0.
+    Booting it first makes it load an EMPTY world.json and save over the seed's artifact
+    record (meta.seed_done gone, beacon_score single digits).
     """
     target, common, jump = _red_ssh_ctx(args)
     unit = red_unit(args)
@@ -289,15 +254,10 @@ def start_red_director(args):
 
 
 def red_box_power_state(args):
-    """red01's power state straight from the hypervisor — liveness that does NOT need the
-    guest's network.
+    """red01's power state from the hypervisor — liveness needing no guest networking.
 
-    Every other red01 signal (ssh probe, event snapshot, report pull) travels the same path that
-    is itself under suspicion, so a dead guest and a dead ROUTE TO it look identical. Live
-    caught live: red01 vanished at T+13 and stayed gone for the rest of a 45-minute
-    event; six red gates and RED-TEAM.md died with it, and the run log could never say whether the
-    box was down or the route to it was — the post-mortem had to reconstruct it from another
-    session's deploy times. This asks Proxmox, which needs no guest networking at all.
+    Every other red01 signal travels the route that may itself be down, so a dead guest and a
+    dead route to it look identical.
     """
     vmid = getattr(args, "red_vmid", None)
     if not vmid:
@@ -320,23 +280,12 @@ def red_box_power_state(args):
 
 
 def red_liveness(args):
-    """The out-of-band answer to "is red01 alive?", naming the signal that answered.
-
-    Every guest-path signal (ssh probe, event snapshot, report pull) travels the route that may
-    itself be dead, so it cannot distinguish "red is down" from "the path to red is down". The
-    hypervisor state needs no guest networking, so it answers even when ssh cannot connect
-    (caught live: 30 minutes of `No route to host` with no way to tell).
-    """
+    """The out-of-band answer to "is red01 alive?", naming the signal that answered."""
     return red_box_power_state(args) or "no red vmid recorded — no out-of-band signal"
 
 
 def check_red_llm(args, base_url):
-    """From-red01 LLM reachability gate.
-
-    validate-llm runs operator-side and proves nothing about what red01 can
-    reach — the dress run went red-LLM-less the whole event on exactly that
-    gap. Probes <base_url>/models from red01 itself (direct, then through the
-    engine jump host)."""
+    """From-red01 LLM reachability gate: operator-side validate-llm proves nothing about it."""
     target, common, jump = _red_ssh_ctx(args)
     probe = f"curl -sm 10 -o /dev/null -w '%{{http_code}}' {base_url.rstrip('/')}/models"
     for path, extra in (("direct", []), ("engine jump", ["-o", jump] if jump else None)):
@@ -346,16 +295,12 @@ def check_red_llm(args, base_url):
             r = procs.run_tree(["ssh"] + common + extra + [target, probe],
                                timeout=45, check=False)
             code = (r.stdout or "").strip()
-            # 401/403 mean the endpoint ANSWERED: the probe carries no key on purpose (a key
-            # would have to be shipped into red01's shell for a check that only asks "can red
-            # dial this?"). Requiring exactly 200 made a keyed public API look unreachable and
-            # aborted the run pre-T0.
+            # 401/403 mean the endpoint ANSWERED: the probe carries no key on purpose, since
+            # requiring 200 made a keyed public API look unreachable and aborted the run pre-T0.
             if code in ("200", "401", "403"):
                 log(f"red01 reached the LLM endpoint ({path}, HTTP {code} — unauthenticated probe)")
                 return True
-            # say WHAT is unreachable: the box or the path to it. The out-of-band state is
-            # asked on EVERY failure — an ssh that never connected produces no code, and the
-            # old `if code` guard skipped the signal on exactly that shape.
+            # Always name the out-of-band state: an ssh that never connected produces no code.
             log(f"red01 LLM probe ({path}) -> {code or (r.stderr or '').strip()[:80] or 'no answer'}"
                 f" [{red_liveness(args)}]")
         except subprocess.TimeoutExpired:
@@ -366,8 +311,8 @@ def check_red_llm(args, base_url):
 def red_llm_url(args):
     """The LLM base URL as red01 dials it (tunnel-local when a tunnel is up).
 
-    args.red_tunnel holds the CLI string until stage_red overwrites it with the
-    live RedTunnel object (local endpoints only) — a truthy string must not be
-    mistaken for a tunnel (openrouter run crashed at the first monitor tick)."""
+    args.red_tunnel holds the CLI string until stage_red overwrites it with the live tunnel
+    object: a truthy string must not be mistaken for a tunnel.
+    """
     tunnel = getattr(args, "red_tunnel", None)
     return tunnel.red_base_url() if hasattr(tunnel, "red_base_url") else args.llm_base_url

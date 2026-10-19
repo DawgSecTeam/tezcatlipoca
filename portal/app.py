@@ -47,8 +47,8 @@ LOGIN_WINDOW = 300       # seconds
 LOGIN_MAX_FAILS = 10     # per client IP per window
 
 
-# state/access.json: {open, opened_at, opened_by} — re-read per request: the CLI toggle in
-# portal_ops writes it out-of-band
+# state/access.json: {open, opened_at, opened_by} — re-read per request, because the CLI
+# toggle in portal_ops writes it out-of-band
 class AccessGate:
     def __init__(self, state_dir, default_open=False):
         self.path = Path(state_dir) / "access.json"
@@ -110,11 +110,10 @@ class LoginLimiter:
             self._fails[key].append(self.clock())
 
 
-# state/requests.json: the team → operator reset-request queue. The dashboard's ops
-# sync (ops_sync.py) is the resolution authority — a status it returns for an id
-# always wins locally, so an operator's Approve/Deny and the reset run's outcome
-# surface here without any dashboard → portal path. A team may hold ONE open
-# request per box (pending or approved); done/denied/failed free the box again.
+# state/requests.json: the team -> operator reset-request queue. The dashboard's ops sync is the
+# resolution authority — a status it returns for an id always wins locally, so an operator's
+# Approve/Deny and the reset run's outcome surface here with no dashboard -> portal path.
+# A team may hold ONE open request per box (pending or approved).
 class ResetRequests:
     OPEN = ("pending", "approved")
 
@@ -130,7 +129,7 @@ class ResetRequests:
             return []
 
     def _write(self, rows):
-        # callers hold the lock; one writer at a time is already guaranteed
+        # callers hold the lock: one writer at a time is already guaranteed
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + ".tmp")
         tmp.write_text(json.dumps(rows))
@@ -167,6 +166,9 @@ class ResetRequests:
             return False
 
 
+# The console token can open any team VM, so isolation is enforced HERE: every mint resolves
+# the box from the SESSION's team, and relay ids are single-use and bound to the minting session.
+# Never log into Quotient (one session per account) — auth.py reads event.conf.
 def _public_box(box):
     return {"name": box["name"], "os": box.get("os", "linux"), "ip": box.get("ip"),
             "firewall": bool(box.get("firewall"))}
@@ -200,19 +202,19 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
         return s
 
     def err(status, msg):
-        # `detail`, like FastAPI's own errors and the dashboard service — the frontend's
-        # api.js (shared shape with tezcatlipoca-dashboard/web/src/api.js) reads exactly that key.
+        # `detail`, like FastAPI's own errors and the dashboard service — the frontend's api.js
+        # reads exactly that key.
         return JSONResponse({"detail": msg}, status_code=status)
 
     def same_origin(request):
-        # SameSite=Lax already stops cross-site POSTs carrying the cookie; this is the belt to
-        # that pair of braces for browsers that treat top-level POSTs leniently.
+        # SameSite=Lax already stops cross-site POSTs carrying the cookie; this is the belt to that pair
+        # of braces for browsers that treat top-level POSTs leniently.
         origin = request.headers.get("origin")
         if not origin:
             return True
         origin_host = origin.split("://", 1)[-1]
         # portal.json's public_host (the tunnel hostname) is accepted explicitly, so a proxy
-        # that rewrites Host on the way in cannot turn every student login into a 403.
+        # that rewrites Host cannot turn every student login into a 403.
         allowed = {request.headers.get("x-forwarded-host"), request.headers.get("host"),
                    config.get("public_host")}
         return origin_host in {h for h in allowed if h}
@@ -228,8 +230,8 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
                 return None, err(404, "unknown team")
         box = next((b for b in teams[team_key]["boxes"] if b["name"] == box_name), None)
         if box is None:
-            # Same answer whether the box exists on another team or nowhere: a team session
-            # learns nothing about other teams' lineups from this endpoint.
+            # Same answer whether the box exists on another team or nowhere: a team session learns
+        # nothing about other teams' lineups.
             return None, err(403 if s["role"] == "team" else 404, "no such box on this team")
         return (team_key, box), None
 
@@ -243,9 +245,8 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
     async def login(request: Request):
         if not same_origin(request):
             return err(403, "cross-origin request refused")
-        # The portal listens on 127.0.0.1 only: every request arrives via cloudflared (which
-        # sets CF-Connecting-IP) or an operator's ssh -L. Nothing else can reach it to forge
-        # the header.
+        # The portal listens on 127.0.0.1 only: every request arrives via cloudflared (which sets
+        # CF-Connecting-IP) or an operator's ssh -L, so nothing else can forge the header.
         ip = (request.headers.get("cf-connecting-ip")
               or (request.client.host if request.client else "?"))
         if limiter.blocked(ip):
@@ -289,8 +290,8 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
                "event_name": config.get("event_name"),
                "scoreboard_url": config.get("scoreboard_url"),
                "access": gate.get(), "console": broker.available()}
-        # VPN enrollment (remote-access keys baked into portal.json): a team session sees
-        # only its own people, like boxes.
+        # VPN enrollment (remote-access keys baked into portal.json): a team session sees only
+        # its own people, like boxes.
         vpn_cfg = config.get("vpn") or {}
         if vpn_cfg.get("server_url") and vpn_cfg.get("teams"):
             if s["role"] == "team":
@@ -440,8 +441,7 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
         rows = requests_store.all() if s["role"] == "admin" else requests_store.for_team(s["team"])
         return {"requests": list(reversed(rows))}
 
-    # The SPA, served the way the dashboard service serves its build: /assets from dist, every other
-    # GET that is not an API route falls through to index.html (react-router owns / and
+    # /assets from dist, every other GET falls through to index.html (react-router owns / and
     # /console/<team>/<box>). Registered last so it can never shadow a route above.
     dist = Path(dist_dir) if dist_dir else None
     if dist and dist.is_dir():
@@ -471,8 +471,8 @@ if os.environ.get("PORTAL_SECRET_KEY"):  # container entrypoint: `uvicorn app:ap
         default_open=os.environ.get("PORTAL_OPEN") == "1",
         cookie_secure=os.environ.get("PORTAL_COOKIE_SECURE", "1") != "0",
         dist_dir=os.environ.get("PORTAL_DIST") or DIST_DIR,
-        # The portal runs in its own container with its own environment: it must NOT
-        # import the driver's config module (portal/portal_ops._SHIP ships only portal/).
+        # Must NOT import the driver's config module: the portal runs in its own container and
+        # portal_ops._SHIP ships only portal/.
         ops_url=os.environ.get("TEZ_OPS_URL", ""),
         ops_token=os.environ.get("TEZ_OPS_TOKEN", ""),
     )

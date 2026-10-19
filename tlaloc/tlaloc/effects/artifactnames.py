@@ -1,31 +1,8 @@
-"""Randomised artifact names for the persistence families.
-
-A fixed name is a giveaway: once blue learns one artifact name they grep it for
-the rest of the event, so every draw produces ONE coherent naming theme per
-plant and derives every path, unit, account, task and marker from it — the way a
-real package names its own files. Names already worn this event are skipped, so
-a re-plant wears a fresh face and a pool recycles only when exhausted.
-
-Three modes (`naming.mode`, default `full`) — blue found a plant by
-pattern-matching the SUFFIX set rather than the stems, so either half can be
-dropped:
-
-  full    ``<stem>-<suffix>``   e.g. ``dbus-broker-refresh.service``
-  stem    ``<stem>``            e.g. ``dbus-broker.service`` (no suffix to match)
-  suffix  ``<suffix>``          e.g. ``refresh.service``    (no theme linking boxes)
-
-Two design rules that are not negotiable:
-
-* roles that share ONE namespace must draw DISTINCT labels (three files in
-  /etc/cron.d, three units) or a later plant overwrites an earlier one;
-* a description, path or comment must never contain a pool word as filler —
-  that is how a `stem`-mode plant leaked a suffix anyway.
-"""
+"""Randomised artifact names for the persistence families: every plant draws one fresh naming theme from these pools — a fixed name is an event-long IOC for blue (`naming.mode`: full|stem|suffix)."""
 
 import random
 import re
 
-# Linux: distro-plumbing stems, curated so an artifact reads like a package.
 LINUX_STEMS = [
     "cupsd", "cups-browsed", "udisks2", "colord", "accounts-daemon",
     "packagekit", "packagekit-offline", "upower", "thermald", "irqbalance",
@@ -39,8 +16,7 @@ LINUX_STEMS = [
     "udev", "rsyslogd", "logrotate", "systemd-tmpfiles", "dbus-broker", "cups",
 ]
 
-# Windows: deliberately invented stems — none collide with a real Microsoft
-# service (a collision is both noisy and confusing).
+# Invented stems only: none may collide with a real Microsoft service.
 WIN_STEMS = [
     "hvdiag", "csreport", "wmitrace", "devnode", "pwrshift", "sysvault",
     "regpoll", "shdwcopy", "netshield", "perfhub", "winsvc", "drvstore",
@@ -49,13 +25,11 @@ WIN_STEMS = [
     "resmon", "schedguard", "sigstore", "sysinfo", "timekeeper", "wmihelpr",
 ]
 
-# A plausible distro prefix number for drop-in style files, drawn per family.
 PREFIXES = ["20", "30", "40", "50", "60", "70", "80", "90", "95"]
 
 MODE_FULL, MODE_STEM, MODE_SUFFIX = "full", "stem", "suffix"
 VALID_MODES = (MODE_FULL, MODE_STEM, MODE_SUFFIX)
 
-# The suffix vocabulary (`full`'s second half, `suffix`'s whole name).
 SUFFIX_POOL = [
     "refresh", "renew", "watchdog", "updater", "helper", "monitor", "guard",
     "relay", "keeper", "sync", "stamp", "sweep", "prune", "agent", "probe",
@@ -63,9 +37,8 @@ SUFFIX_POOL = [
 ]
 SUFFIX_SET = set(SUFFIX_POOL)
 
-# Every account we create is `svc-<label>`, so "is this our own account?" is
-# answerable without world state or a fixed literal. Neither pool collides with
-# a credlist name (`svc-backup` in particular must stay rotatable).
+# Accounts are svc-<label>: no pool word may collide with a credlist name
+# (svc-backup must stay rotatable) or appear as filler in a description or path.
 STEMS = set(LINUX_STEMS) | set(WIN_STEMS)
 ACCOUNT_LABELS = STEMS | SUFFIX_SET
 
@@ -74,20 +47,13 @@ USED_SUFFIXES_KEY = "artifact_suffixes"
 
 
 def mode_from_cfg(cfg):
-    """`naming.mode` out of a (possibly partial/None) config."""
     mode = ((cfg or {}).get("naming") or {}).get("mode")
     return mode if mode in VALID_MODES else MODE_FULL
 
 
 def is_planted_account(user):
-    """True for an account planted by the persist families (never a credlist one).
-
-    `full` mode names accounts `svc-<stem>-<suffix>`, so the check accepts either
-    the whole label or every hyphen-separated part (a stem may itself contain a
-    hyphen, e.g. `cups-browsed`). Getting this wrong in either direction is
-    expensive: a false positive rotates blue's own credlist account, a false
-    negative rotates ours.
-    """
+    """A planted svc-* account, never a credlist one; a stem may itself contain
+    a hyphen, so every split of the label is checked."""
     user = (user or "").strip()
     if not user.startswith("svc-"):
         return False
@@ -122,7 +88,6 @@ def _remember(world, *labels, key=USED_NAMES_KEY):
 
 
 def draw(world, pool, rng=None, key=USED_NAMES_KEY):
-    """One value from `pool`, skipping anything already worn this event."""
     rng = rng or random
     free = [s for s in pool if s not in _used(world, key)]
     value = rng.choice(free or list(pool))
@@ -131,7 +96,6 @@ def draw(world, pool, rng=None, key=USED_NAMES_KEY):
 
 
 def _draw_suffixes(world, count, rng=None):
-    """`count` DISTINCT suffix words (one box never wears `refresh` twice)."""
     rng = rng or random
     free = [s for s in SUFFIX_POOL if s not in _used(world, USED_SUFFIXES_KEY)]
     rng.shuffle(free)
@@ -153,7 +117,6 @@ def _label(stem, suffix, mode):
 
 
 def title(word):
-    """`dbus-broker-refresh` -> `DbusBrokerRefresh` (a plausible unit/task name)."""
     return "".join(part[:1].upper() + part[1:]
                    for part in word.replace("_", "-").split("-"))
 
@@ -167,12 +130,8 @@ def _labels_for(world, pool, roles, mode, rng):
     return [f"{stem}-{s}" for s in _draw_suffixes(world, roles, rng)]
 
 
-# -- the per-OS name sets -----------------------------------------------------
-# Roles are positional and MUST stay in this order: three cron files share
-# /etc/cron.d and three units share the unit namespace, so a stem-mode draw
-# takes a distinct stem per role (also more realistic — separate packages name
-# their own files).
-
+# Roles share namespaces (three files in /etc/cron.d, three units in one):
+# every draw must give each role a DISTINCT label.
 LINUX_ROLES = ("unit", "timer", "decoy", "cron", "reaper", "clean", "user",
                "keyid", "profile", "hider", "bait")
 
@@ -180,7 +139,6 @@ WINDOWS_ROLES = ("run_value", "task", "log_task", "user", "service", "wmi", "dec
 
 
 def linux_names(world, rng=None, mode=MODE_FULL):
-    """Every Linux-side name for one family draw."""
     rng = rng or random
     labels = _labels_for(world, LINUX_STEMS, len(LINUX_ROLES), mode, rng)
     (unit, timer, decoy, cron, reaper, clean, user, keyid, profile_id,
@@ -205,18 +163,11 @@ def linux_names(world, rng=None, mode=MODE_FULL):
         "log_cleanup": f"/etc/cron.d/{clean}",
         "decoy_unit": f"{decoy}.service",
         "decoy_path": f"/opt/{decoy}/{decoy}.sh",
-        # The ld.so.preload hider (persist family `preload`): one hidden
-        # directory, the .so inside it and the hide-list conf. Three files in
-        # one namespace, drawn from one label — and drawn SEPARATELY from the
-        # hunt-bait below, or a box that wears both families would have one
-        # plant overwrite the other's directory.
+        # hider and bait carry distinct labels: a box wearing both persist
+        # families must not have one plant overwrite the other's directory.
         "hider_dir": f"/usr/lib/.{hider}",
         "hider_so": f"/usr/lib/.{hider}/lib{hider}.so",
         "hider_conf": f"/etc/.{hider}.conf",
-        # The procfilter hunt-bait (persist family `decoy`): the filter lib, the
-        # hide-list, the decoy's pid file and the state file the next plant
-        # reads (it records pid/lib/dir because the filter hides all three from
-        # a listing).
         "bait_lib": f"/usr/local/lib/lib{bait}.so",
         "bait_dir": f"/usr/local/lib/.{bait}",
         "bait_conf": f"/usr/local/lib/.{bait}/hide.conf",
@@ -227,7 +178,6 @@ def linux_names(world, rng=None, mode=MODE_FULL):
 
 
 def windows_names(world, rng=None, mode=MODE_FULL):
-    """Every Windows-side name for one family draw."""
     rng = rng or random
     labels = _labels_for(world, WIN_STEMS, len(WINDOWS_ROLES), mode, rng)
     run_value, task, log_task, user, service, wmi, decoy = labels
@@ -246,27 +196,18 @@ def windows_names(world, rng=None, mode=MODE_FULL):
     }
 
 
-# -- the port-block name class (block_port) -----------------------------------
-# A block that wears a fixed name is an IOC list for the rest of the event: the
-# earlier agent wore one literal Windows rule and one literal nft table, so blue
-# grepped the name once and cleared every block red
-# had ever placed. Here each activation draws its own names — which is also what
-# makes the undo exact: the recipe names THIS activation's table/rule, so a
-# second block on the same box cannot collide with (or inherit) the first.
-
+# Port-block names are drawn per activation so the undo recipe names THIS
+# block's table/rule — a second block on one box cannot collide with the first.
 BLOCK_ROLES_LINUX = ("table", "chain")
 BLOCK_ROLES_WINDOWS = ("rule",)
 
 
 def _nft_safe(word):
-    """nft identifiers are [A-Za-z0-9_]: a hyphenated stem must be folded, or
-    `nft add table inet dbus-broker-refresh` is a syntax error."""
+    """nft identifiers are [A-Za-z0-9_]; a hyphenated stem is a syntax error."""
     return re.sub(r"[^A-Za-z0-9_]", "_", word or "")
 
 
 def block_names(world, rng=None, mode=MODE_FULL, windows=False):
-    """The names one port block wears: the nft table + hook chain (Linux) or the
-    Windows firewall rule name. Drawn per activation from the OS pool."""
     rng = rng or random
     if windows:
         labels = _labels_for(world, WIN_STEMS, len(BLOCK_ROLES_WINDOWS), mode, rng)

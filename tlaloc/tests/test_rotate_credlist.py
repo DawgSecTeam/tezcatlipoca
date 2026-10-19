@@ -1,17 +1,4 @@
-"""rotate_credlist: change a credlist account password, honestly.
-
-The point of this effect is that the scored auth check fails until someone
-restores the original password, so the tests here are about honesty and about
-red keeping its own way in:
-
-* the rotation is only `ok=True` when the NEW credential authenticates and the
-  OLD one does not — both probed over SSH (the fake's scripted rules stand in for
-  the box's auth);
-* red's own accounts (the foothold user, the box account, root, plants) are never
-  chosen;
-* the original comes from nakon ground truth, the new value goes into world state
-  and the restore record — and neither value ever reaches the notes.
-"""
+"""rotate_credlist honesty: ok=True only when the new credential authenticates and the old one does not; red's own accounts are never chosen and secret values never reach the blue-visible recipe or notes."""
 
 import re
 import shlex
@@ -23,7 +10,7 @@ from tlaloc.policy import Policy
 
 IP = "192.168.1.10"        # web01, Blue1, linux — credlist: ubuntu, svc-backup, analyst
 WIN_IP = "192.168.1.20"    # dc01, Blue1, windows
-USER = "svc-backup"        # the account intel knows ground truth for (Backup1!)
+USER = "svc-backup"        # the account intel knows ground truth for
 ORIGINAL = "Backup1!"
 PARAMS = {"ip": IP}
 
@@ -47,13 +34,10 @@ def rooted_ctx(tmp_path, ssh, clock=0.6, windows=False, cfg_over=None,
 
 
 def old_credential_rejected(ssh):
-    """The old password is the only thing on the box that must stop working."""
     return ssh.on(lambda call: call["user"] == USER
                   and call["password"] == ORIGINAL,
                   rc=1, out="", err="Permission denied (password).")
 
-
-# --- dry run ------------------------------------------------------------------
 
 def test_dry_run_plans_without_touching_the_box(tmp_path):
     ssh = FakeSSH()
@@ -63,8 +47,6 @@ def test_dry_run_plans_without_touching_the_box(tmp_path):
     assert ssh.calls == []
     assert ctx.world.sabotage() == [] and ctx.world.impacts() == []
 
-
-# --- the account choice -------------------------------------------------------
 
 def test_reds_own_accounts_are_never_eligible(tmp_path):
     from tests.helpers import FakeSSH
@@ -89,8 +71,6 @@ def test_refuses_to_rotate_the_footholds_own_account(tmp_path):
     assert ctx.world.sabotage() == []
 
 
-# --- the happy path (the honesty test) ----------------------------------------
-
 def test_rotation_breaks_the_old_credential_and_records_the_restore(tmp_path):
     ssh = FakeSSH()
     old_credential_rejected(ssh)          # everything else authenticates
@@ -100,7 +80,6 @@ def test_rotation_breaks_the_old_credential_and_records_the_restore(tmp_path):
     assert result.ok, result.detail
     assert "no longer authenticates" in result.detail
 
-    # the account chosen is a credlist account, not one of red's own
     sabotage = ctx.world.sabotage()
     assert len(sabotage) == 1
     recorded = sabotage[0]
@@ -109,14 +88,12 @@ def test_rotation_breaks_the_old_credential_and_records_the_restore(tmp_path):
     new = recorded["new_password"]
     assert new and new != ORIGINAL
 
-    # the exact command that changed the password
     rotate = [c for c in ssh.calls if "chpasswd" in (c["cmd"] or "")]
     assert len(rotate) == 1
     assert rotate[0]["user"] == "ubuntu"          # root path, not the target
     assert rotate[0]["cmd"] == "sudo -n sh -c " + shlex.quote(
         f"echo '{USER}:{new}' | chpasswd")
 
-    # both credentials were probed: the original still fails, the new one works
     assert any(c["user"] == USER and c["password"] == ORIGINAL for c in ssh.calls)
     assert any(c["user"] == USER and c["password"] == new for c in ssh.calls)
 
@@ -139,7 +116,6 @@ def test_rotation_breaks_the_old_credential_and_records_the_restore(tmp_path):
     assert ORIGINAL not in recipe and new not in recipe, \
         "the recipe is rendered in the blue-visible report — values are secrets"
 
-    # ... and never in the notes
     notes = " ".join(ctx.world.target(IP)["notes"])
     assert ORIGINAL not in notes and new not in notes
 
@@ -148,11 +124,8 @@ def test_rotation_breaks_the_old_credential_and_records_the_restore(tmp_path):
     assert USER in artifact["detail"]
 
 
-# --- the give-up paths --------------------------------------------------------
-
 def test_an_original_that_still_authenticates_is_not_an_impact(tmp_path):
-    """Every credential authenticates (an any-password stack, or the change never
-    landed): the box changed, but blue's check did not break, so no impact."""
+    """The change did not hold: ok=False with no impact, but the real mutation's record still lands."""
     ssh = FakeSSH()                        # unmatched calls return rc=0
     ctx = rooted_ctx(tmp_path, ssh)
     result = execute("rotate_credlist", dict(PARAMS), ctx)
@@ -160,7 +133,6 @@ def test_an_original_that_still_authenticates_is_not_an_impact(tmp_path):
     assert result.ok is False
     assert "did not hold" in result.detail
     assert ctx.world.impacts() == []
-    # the mutation is real, so the record still lands (installed=True)
     assert len(ctx.world.sabotage()) == 1
     assert ctx.world.restore_table()[0]["effect"] == "rotate_credlist"
     assert ctx.world.artifacts()[0]["kind"] == "impact-rotate_credlist"
@@ -214,8 +186,6 @@ def test_no_eligible_account_is_a_precondition_rejection(tmp_path):
     assert ssh.calls == []
 
 
-# --- gates --------------------------------------------------------------------
-
 def test_locked_until_the_unrecoverable_tier_is_reached(tmp_path):
     ssh = FakeSSH()
     ctx = rooted_ctx(tmp_path, ssh, clock=0.3)
@@ -247,8 +217,6 @@ def test_the_config_switch_is_honoured(tmp_path):
     assert "switched off" in result.detail
     assert ssh.calls == []
 
-
-# --- windows ------------------------------------------------------------------
 
 def test_windows_rotation_uses_net_user(tmp_path):
     ssh = FakeSSH().on(lambda call: call["user"] == USER

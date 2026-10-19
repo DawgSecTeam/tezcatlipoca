@@ -11,7 +11,7 @@ from common.comp_paths import comps_root, resolve_comp_dir
 from common.utils import load_users_config
 
 
-DEFAULT_TEMPLATE = "agent-scrim"  # a competition name under the comps root
+DEFAULT_TEMPLATE = "agent-scrim"
 
 
 RUNTIME_FILES = {
@@ -21,16 +21,9 @@ RUNTIME_FILES = {
 
 
 def warn_co_tenancy(args, comp):
-    """Warn when ANOTHER tezcatlipoca range is running on this run's node.
-
-    A live event's guests share the node's networking with every other range: a concurrent deploy
-    or teardown creates/destroys bridges and runs `ifreload -a` node-wide. caught live
-    : red01 went unreachable at T+13 and stayed gone for 30 of the event's 45
-    minutes, six red gates and RED-TEAM.md with it; a second session's scrim plus ten
-    deploy/destroy cycles on the same node bracket the exact minute, and nothing in the run log
-    said a word about the co-tenancy. Nothing here REFUSES — concurrent runs are deliberate — but
-    the run has to record what it shared the node with.
-    """
+    """Concurrent deploys/teardowns bounce the node's networking (`ifreload -a` node-wide) and
+    can drop this range's guests mid-event. Warns only — concurrent runs are deliberate; the
+    run has to record what it shares the node with."""
     node = config.active().proxmox.node
     if not node:
         return None
@@ -67,9 +60,7 @@ def warn_co_tenancy(args, comp):
 
 def stage_author(args):
     src = Path(args.from_template or DEFAULT_TEMPLATE)
-    # A bare --from-template NAME names a competition under the comps root, not a
-    # cwd-relative path: full-scrim-20261013d died in authoring because Path(NAME)
-    # resolved against the driver's cwd and missed the worktree's competitions dir.
+    # a bare NAME is a competition under the comps root, not cwd-relative
     if not src.is_absolute() and not src.is_dir():
         src = comps_root() / src
     if not src.is_dir():
@@ -87,8 +78,7 @@ def stage_author(args):
         if item.name in RUNTIME_FILES or item.name in ("injects", "LOG.md") \
                 or item.name.startswith("sub-") or item.name.startswith(".nakon-domain-"):
             continue
-        # A swept template must not carry the marker into a competition authored from it:
-        # the new range would skip its own post-clone sweep (a harness audit finding).
+        # the marker would make the new range skip its own post-clone sweep
         if item.name == ".postclone-swept":
             continue
         if item.is_dir():
@@ -147,11 +137,9 @@ def stage_deploy(args, comp):
     cmd = [core.local_python(), "-u", "create-competition.py", "--competition", name,
            "--comp-dir", str(comp), "--teams", str(args.teams), "--yes"]
     if getattr(args, "nodes", None):
-        # The dashboard hands every action the run's node list; without this the deploy
-        # stage silently targeted whatever TEZ_ENGINE_ENV_FILE points at .
+        # without this the deploy silently targets whatever TEZ_ENGINE_ENV_FILE points at
         cmd += ["--nodes", str(args.nodes)]
-    # Placement inputs travel with the scrim, not just the env: a scrim that deploys while
-    # another range holds the env's engine vmid / team block / management IP would collide.
+    # placement inputs travel with the run: sharing the env's engine vmid / block / mgmt IP collides
     for flag, key in (("--scoring-vmid", "scoring_vmid"),
                       ("--team-identifiers", "team_identifiers"),
                       ("--engine-mgmt-ip", "engine_mgmt_ip")):
@@ -160,21 +148,13 @@ def stage_deploy(args, comp):
             cmd += [flag, str(value)]
     if estate_state.read_flat(comp) is not None and args.resume:
         cmd += ["--from-phase", str(args.resume)]
-        # --force-resume must reach create-competition: it is the operator's answer to
-        # the resume-loop guard; without the pass-through the harness accepted the flag
-        # while the deploy refused anyway .
+        # without the pass-through the harness accepted --force-resume while the deploy refused anyway
         if args.force_resume:
             cmd += ["--force-from-phase"]
     r = procs.run(cmd, cwd=core.REPO, timeout=6 * 3600, check=False)
     if args.run_dir:
-        # ALWAYS, success included: the phase-by-phase log is the only durable record of what
-        # the deploy did — the template-reuse decisions ("Engine template reuses on the node's
-        # hash stamp", "golden X hash differs — rebuilding") and every phase's output live here
-        # and nowhere else. Written only on failure early on, so a SUCCESSFUL run left
-        # no evidence of the reuse it had just proved (on the run that found it: no deploy.log anywhere in
-        # the run dir). stderr too: the phase-4 checkpoint SystemExit and a phase-3 ssh timeout
-        # both printed ONLY to stderr, and a stdout-only log sent the post-mortem to the live
-        # estate for the answer (caught live, twice).
+        # ALWAYS, success included: the deploy's phase log and template-reuse decisions live only
+        # here; stderr too — the phase-4 checkpoint SystemExit and phase-3 ssh timeout print only there
         (Path(args.run_dir) / "deploy.log").write_text(
             (r.stdout or "") + "\n=== STDERR ===\n" + (r.stderr or ""))
     for line in (r.stdout or "").splitlines()[-15:]:

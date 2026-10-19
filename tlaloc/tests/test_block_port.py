@@ -1,15 +1,4 @@
-"""block_port: the firewall-drop mechanisms, their honesty checks, and the undo.
-
-The port-block pins in `intel.port_checks_for()` are bare port checks, so this is
-the only effect that can fail them. Three Linux mechanisms are attempted in one
-script and the box says which one landed; the objective is only claimed when a
-second pass reads the rule back. Asserted here:
-
-* the exact command text per mechanism (nothing is exercised on a real box),
-* the impact/restore/artifact record the ledger and the organizer consume,
-* every give-up path (`ok=False`) with the box untouched or the mutation recorded
-  as `installed` — never a silent lie in the impact ledger.
-"""
+"""block_port: the firewall-drop mechanisms, their honesty checks, and the undo."""
 
 import re
 import shlex
@@ -25,8 +14,7 @@ IP = "192.168.1.10"        # web01, Blue1, linux
 WIN_IP = "192.168.1.20"    # dc01, Blue1, windows
 PIN = {"ip": IP, "port": 3306, "display": "MySQL pin"}
 
-# The whole command text, with the activation's drawn nft names back-referenced so
-# the table/chain must be consistent across the three nft calls.
+# Back-references tie the activation's drawn nft table/chain across all three nft calls.
 ADD_RE = re.compile(
     r"sudo -n sh -c 'iptables -I INPUT -p tcp --dport (?P<port>\d+) -j REJECT "
     r"2>/dev/null; echo i=\$\?; ufw insert 1 deny (?P=port)/tcp 2>/dev/null; "
@@ -38,8 +26,7 @@ ADD_RE = re.compile(
 
 
 def ctx_for(tmp_path, ssh, clock=0.6, windows=False, dry_run=False):
-    """A rooted box far enough into the event that the unrecoverable moves are
-    unlocked (progress >= 0.5), driven by the comp-min intel."""
+    """A rooted box past the 0.5-progress gate that unlocks the unrecoverable tier."""
     ctx = make_ctx(tmp_path, cfg=base_cfg(), ssh=ssh, dry_run=dry_run)
     ip = WIN_IP if windows else IP
     if windows:
@@ -59,8 +46,6 @@ def markers(**kw):
     return "\n".join(f"{k}={v}" for k, v in kw.items())
 
 
-# --- dry run ------------------------------------------------------------------
-
 def test_dry_run_plans_without_touching_the_box(tmp_path):
     from tests.helpers import FakeSSH
     ssh = FakeSSH()
@@ -70,8 +55,6 @@ def test_dry_run_plans_without_touching_the_box(tmp_path):
     assert ssh.calls == []
     assert ctx.world.impacts() == [] and ctx.world.restore_table() == []
 
-
-# --- the three mechanisms -----------------------------------------------------
 
 MECHANISMS = [
     ({"i": 0, "u": 1, "n": 1}, {"vi": 1, "vu": 0, "vn": 0}, "iptables",
@@ -95,7 +78,6 @@ def test_a_block_that_holds_is_an_impact_with_an_exact_undo(
     assert result.ok, result.detail
     assert mechanism in result.detail
 
-    # the exact command text, both passes
     match = ADD_RE.fullmatch(ssh.calls[0]["cmd"])
     assert match, ssh.calls[0]["cmd"]
     assert match.group("port") == "3306"
@@ -111,14 +93,12 @@ def test_a_block_that_holds_is_an_impact_with_an_exact_undo(
         "| grep -q 'dport 3306'; then echo vn=1; else echo vn=0; fi")
     assert ssh.calls[1]["cmd"] == "sudo -n sh -c " + shlex.quote(script)
 
-    # the impact names the scored pin, not the port
     impacts = ctx.world.impacts()
     assert len(impacts) == 1
     assert impacts[0]["service"] == "MySQL pin"
     assert impacts[0]["mode"] == "block_port"
     assert impacts[0]["ip"] == IP
 
-    # the undo names the mechanism that actually holds
     recipe = result.restore["recipe"]
     if undo is None:
         undo = f"nft delete table inet {match.group('table')}"
@@ -132,8 +112,7 @@ def test_a_block_that_holds_is_an_impact_with_an_exact_undo(
 
 
 def test_an_inserted_but_inert_rule_is_still_in_the_undo(tmp_path):
-    """`ufw insert` reporting success on a box whose ufw is inactive leaves a real
-    (if inert) rule behind: it is not the impact, but it must be undone."""
+    """`ufw insert` succeeds on inactive ufw; the inert rule is not the impact but must be undone."""
     from tests.helpers import FakeSSH
     ssh = FakeSSH()
     ssh.on("iptables -I INPUT", rc=0, out=markers(i=0, u=0, n=1))
@@ -160,7 +139,6 @@ def test_the_names_are_drawn_per_activation_and_nft_safe(tmp_path):
         assert execute("block_port", dict(PIN), ctx).ok
         match = ADD_RE.fullmatch(ssh.calls[0]["cmd"])
         tables.append((match.group("table"), match.group("chain")))
-    # an nft identifier, a fresh face per activation, and composed from the pool
     for table, chain in tables:
         assert re.fullmatch(r"[A-Za-z0-9_]+", table)
         assert re.fullmatch(r"[A-Za-z0-9_]+", chain)
@@ -168,8 +146,6 @@ def test_the_names_are_drawn_per_activation_and_nft_safe(tmp_path):
         assert chain.rsplit("_", 1)[-1] in names.SUFFIX_SET
     assert tables[0][0] != tables[1][0]
 
-
-# --- give-up paths ------------------------------------------------------------
 
 def test_a_rule_no_mechanism_accepts_is_a_failure(tmp_path):
     from tests.helpers import FakeSSH
@@ -192,7 +168,7 @@ def test_a_block_that_does_not_hold_is_not_an_impact(tmp_path):
     assert result.ok is False
     assert "did not hold" in result.detail
     assert ctx.world.impacts() == [], "a block that did not hold is not an impact"
-    # ... but the rule the box accepted is real, so its undo is recorded
+    # the accepted rule is real even though the block did not hold: its undo is recorded
     recipe = "\n".join(ctx.world.restore_table()[0]["recipe"])
     assert "iptables -D INPUT -p tcp --dport 3306 -j REJECT" in recipe
     assert ctx.world.artifacts()[0]["kind"] == "impact-block_port"
@@ -207,8 +183,6 @@ def test_transport_failure_is_ok_false_and_never_a_crash(tmp_path):
     assert "TransportError" in result.detail
     assert ctx.world.impacts() == []
 
-
-# --- preconditions ------------------------------------------------------------
 
 def test_refuses_to_block_port_22(tmp_path):
     from tests.helpers import FakeSSH
@@ -259,8 +233,6 @@ def test_locked_until_the_unrecoverable_tier_is_reached(tmp_path):
     assert ssh.calls == []
     assert ctx.world.reject_memory()
 
-
-# --- windows ------------------------------------------------------------------
 
 def test_windows_admin_path_blocks_via_netsh(tmp_path):
     from tests.helpers import FakeSSH

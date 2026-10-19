@@ -1,22 +1,4 @@
-"""The engine mgmt-IP preflight.
-
-caught live, first attempt of the same-type-2box practice run: the gate
-printed
-
-    Preflight: engine mgmt IP 10.0.0.250 is free (4 running guest(s) unverifiable — agent down)
-
-while a FOREIGN live `quotient-engine` was answering 10.0.0.250. The deploy then built
-its engine-template VM on the same address and died at phase 2 with an opaque
-`ssh ... exit status 255`. Two independent defects made that possible:
-
-  * the scan skipped guests on other nodes, but 10.0.0.0/24 is ONE flat segment — the
-    foreign engine was on .193 and the deploy was on .150, so the rows that mattered
-    were filtered out even though `/cluster/resources` had already returned them;
-  * a guest whose agent is down was counted and skipped, and the gate then concluded
-    "free" from an absence of evidence.
-
-Offline; the cluster resource list and the agent channel are faked.
-"""
+"""The engine mgmt-IP preflight."""
 
 import io
 import contextlib
@@ -38,10 +20,8 @@ def _vm(vmid, node, name, status="running", template=0, tags="tezcatlipoca,comp-
 
 
 class _Cluster:
-# Fake proxmox_api: returns agent interfaces per vmid, or raises when agentless.
-
     def __init__(self, answers, agentless=()):
-        self.answers = answers          # vmid -> [ip, ...]
+        self.answers = answers
         self.agentless = set(agentless)
 
     def __call__(self, method, path, **kwargs):
@@ -73,8 +53,6 @@ def _gate(vms, api, ip, engine_vmid=2400, node="proxmox", ours_tags=None, explic
 
 
 class ForeignGuestOnAnotherNode(unittest.TestCase):
-# The exact live failure: the squatter was on .193 while the deploy was on .150.
-
     def test_a_guest_on_another_node_blocks_the_address(self):
         vms = [_vm(1100, "pve", "quotient-engine")]
         api = _Cluster({1100: ["10.0.0.250"]})
@@ -82,9 +60,9 @@ class ForeignGuestOnAnotherNode(unittest.TestCase):
             _gate(vms, api, "10.0.0.250")
         message = str(ctx.exception)
         self.assertIn("10.0.0.250", message)
-        self.assertIn("1100", message)              # names the taker
+        self.assertIn("1100", message)
         self.assertIn("quotient-engine", message)
-        self.assertIn("ANY node", message)          # explains why a remote node counts
+        self.assertIn("ANY node", message)
 
     def test_a_guest_on_this_node_still_blocks(self):
         vms = [_vm(1100, "proxmox", "quotient-engine")]
@@ -100,10 +78,8 @@ class UnverifiableIsNotFree(unittest.TestCase):
             _gate(vms, api, "10.0.0.250")
         message = str(ctx.exception)
         self.assertIn("cannot verify", message)
-        self.assertIn("1100", message)                       # names what could not be asked
-        self.assertIn("TEZ_ENGINE_MGMT_IP", message)      # names the remedy
-
-
+        self.assertIn("1100", message)
+        self.assertIn("TEZ_ENGINE_MGMT_IP", message)
 
 
 class EngineIpSelection(unittest.TestCase):
@@ -172,7 +148,7 @@ class AutoSelectedIsNotAnOperatorPin(unittest.TestCase):
 
 
 class SelfCollisionsAreNotForeign(unittest.TestCase):
-# Regression guard: a retry meets its own leftovers, which phase 1 recycles.
+    # Regression guard: a retry meets its own leftovers, which phase 1 recycles.
 
     def test_our_own_engine_vmid_is_skipped(self):
         vms = [_vm(2400, "proxmox", "engine")]
@@ -193,8 +169,6 @@ class SelfCollisionsAreNotForeign(unittest.TestCase):
 
 
 class JumpGateSharesTheScan(unittest.TestCase):
-# jump_mgmt_ip_gate runs the same running-guest scan as the engine gate.
-
     def _plan(self, vms):
         from types import SimpleNamespace
         share = SimpleNamespace(node="proxmox", raw_vms=vms)
@@ -215,8 +189,6 @@ class JumpGateSharesTheScan(unittest.TestCase):
     def test_our_own_tagged_guest_on_a_jump_ip_is_not_a_collision(self):
         vms = [_vm(1500, "proxmox", "web01", tags="tezcatlipoca,comp-ours")]
         self._run(vms, _Cluster({1500: ["10.0.0.249"]}))
-
-
 
 
 if __name__ == "__main__":

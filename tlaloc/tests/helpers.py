@@ -1,10 +1,4 @@
-"""Test scaffolding: one fake per boundary. No `object.__new__`, no real socket.
-
-`FakeSSH` mirrors `tlaloc.exec.ssh.SSH`'s surface exactly (ssh, ssh_ps, ssh_ok,
-run_local, sftp_put, sftp_get, close) and resolves each call against the scripts
-registered with `on()`: first match wins, an unmatched call is (0, "", "") —
-which is what a happy-path box does. Every call is recorded in `.calls`.
-"""
+"""Test scaffolding: one fake per boundary. No `object.__new__`, no real socket."""
 
 import copy
 import json
@@ -27,7 +21,7 @@ DEFAULT_COMP = FIXTURES / "comp-min"
 
 
 class FakeSSH:
-    """A scripted transport. `on()` rules are matched in registration order."""
+    """A scripted transport: `on()` rules match in registration order."""
 
     def __init__(self, dry_run=False):
         self.calls = []
@@ -35,15 +29,11 @@ class FakeSSH:
         self.dry_run = dry_run
         self.closed = False
 
-    # -- scripting ----------------------------------------------------------
-
     def on(self, match, rc=0, out="", err=""):
-        """Register a response. `match` is a substring or a callable(call)->bool."""
         self._rules.append((match, rc, out, err))
         return self
 
     def sent(self, needle):
-        """Every command text sent that contains `needle`."""
         return [c["cmd"] for c in self.calls if needle in (c.get("cmd") or "")]
 
     def targets(self):
@@ -57,8 +47,6 @@ class FakeSSH:
             elif isinstance(match, str) and match in (call.get("cmd") or ""):
                 return rc, out, err
         return 0, "", ""
-
-    # -- the SSH surface ----------------------------------------------------
 
     def ssh(self, ip, user, password, cmd, timeout=None, windows=False,
             key_path=None):
@@ -109,7 +97,6 @@ class FakeC2:
         self.plants = []
 
     def callbacks(self):
-        """{box_id: {"seen_at": epoch, "agent": str, "external_id": str}}"""
         return dict(self._callbacks)
 
     def callback_agents(self):
@@ -182,7 +169,6 @@ def base_cfg(**over):
 def make_ctx(tmp_path, *, cfg=None, comp_dir=None, blind=False, dry_run=False,
              c2=None, sensors=None, ssh=None, policy=None, comp="tlaloc-smoke",
              compfile=True):
-    """A live Ctx on a temp state dir, wired to fakes."""
     reload_registry()
     state_dir = Path(tmp_path) / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -191,12 +177,11 @@ def make_ctx(tmp_path, *, cfg=None, comp_dir=None, blind=False, dry_run=False,
     cfg["run"]["comp"] = comp
     cfg["run"]["kill_file"] = str(state_dir / "KILL")
     if comp_dir:
-        # production parity: build_context stamps the resolved comp dir into the
-        # config, and the payload manifest is looked up relative to it
+        # production parity: build_context stamps the resolved comp dir; the
+        # payload manifest resolves relative to it
         cfg["run"]["comp_dir"] = str(Path(comp_dir).resolve())
     if comp_dir and compfile:
-        # compfile=False keeps the fixture's intel while leaving the caller's
-        # own red.* block alone (the fixture Compfile pins assume_breach).
+        # compfile=False keeps the fixture's intel and the caller's red.* block
         cfg = apply_compfile(cfg, comp_dir)
     world = World(state_dir, comp=comp)
     intel = make_intel(comp_dir, blind=blind)

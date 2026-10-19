@@ -33,9 +33,6 @@ def _select_engine_mgmt_ip(ctx):
 
 
 def _resolve_engine_mgmt_ip(ctx, override):
-# The engine's management address, resolved once: the flag, else the engine node record's,
-#     else the profile's, else the marked default. The record used to be applied AFTER
-#     prepare, silently outranking the operator's --engine-mgmt-ip.
     from common.constants import DEFAULT_ENGINE_MGMT_GW
     from estate import config
     from multinode.placement_record import engine_record
@@ -76,33 +73,15 @@ def _record_placement_identities(ctx):
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False, nodes_path=None,
             team_identifiers=None, engine_mgmt_ip=None):
-# Everything deploy() must do before phase 1, as one testable step.
-#
-#     Resolves the engine VMID, loads Compfile/config/state, resolves teams, computes
-#     multi-node placement, runs preflight, THEN mints the competition's secrets,
-#     generates the nakon + stage configs, computes the golden hashes and assembles
-#     the state document, and enumerates the targets. Returns None when the operator
-#     declines the confirmation prompt, so deploy() can return without running any phase
-#     (the same early return the inline code had).
-#
-#     The write lock is deliberately NOT taken here: deploy() holds it across the whole
-#     run, phases included. Nothing here destroys anything — and neither does phase 1;
-#     the frozen gate still runs here so a config-class freeze refuses before any Proxmox
-#     mutation.
-#
-#     Order note: preflight runs BEFORE the fresh credential mint. These gates can abort
-#     the deploy (engine mgmt IP collision, missing templates, datastore headroom, catalog
-#     errors) — a state file written with minted credentials no engine ever received is a
-#     credential-desync corpse: every login 401s against the live range until state is
-#     restored by hand (a 7-box test comp: a create-competition re-run against an
-#     already-deployed comp rotated state while the engine kept the originals). Resumes
-#     keep the gate where it was relative to their carried (not minted) credentials.
+# Deliberately no write lock here: deploy() holds it across the whole run. The frozen
+# gate still runs here so a config-class freeze refuses before any Proxmox mutation.
+# Preflight runs BEFORE the credential mint: aborting after minting leaves state with
+# creds no engine ever received — every login 401s until state is restored by hand.
     ctx = DeployContext(comp_dir=comp_dir, from_phase=from_phase, assume_yes=assume_yes)
     from estate import state as estate_state
     estate_state.clear_teardown_journal(comp_dir)
     resolve_engine_vmid(ctx, comp_dir, from_phase, scoring_vmid)
-    # (The engine lock itself is taken further down — multi-node placement must point
-    # the env at the engine's host first, and that needs teams+boxes resolved.)
+    # The engine lock is taken further down: placement must point the env at the engine's host first.
 
     load_competition_spec(ctx, comp_dir)
 
@@ -120,10 +99,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     ctx.engine_mgmt_ip = _resolve_engine_mgmt_ip(ctx, engine_mgmt_ip)
     if ctx.placement:
         _record_placement_identities(ctx)
-    # The banner above printed the pre-placement, pre-flag target. --engine-mgmt-ip is the
-    # last thing to move it, so the effective line belongs here — an operator checking the
-    # banner must see the address this run will actually dial (a canary ran
-    # .244 while the banner said .252).
+    # The banner above printed the pre-placement, pre-flag target; restate it now that it
+    # is real (caught live: a canary dialed .244 while the banner said .252).
     from common.utils import env_summary
     print(f"  Effective target: {env_summary()}")
 

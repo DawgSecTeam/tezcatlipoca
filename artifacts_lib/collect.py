@@ -20,7 +20,6 @@ def relative_to_test(test_path, path):
 
 
 def _previous_items(collection, target_name, label):
-# Items from an earlier collection run for this same wanted item.
     for target in collection.get("targets", []):
         if target.get("name") == target_name:
             return [item for item in target.get("files", []) if item.get("want") == label]
@@ -28,11 +27,7 @@ def _previous_items(collection, target_name, label):
 
 
 def _still_good(test_path, items):
-# True when every previously collected item still exists and still hashes the same.
-#
-# This is what makes a re-run teardown idempotent *and* honest: an already-good artifact is
-# re-verified rather than re-fetched, and one somebody edited by hand is re-collected instead
-# of being silently trusted.
+# A re-run re-verifies by hash instead of re-fetching; a hand-edited artifact is re-collected.
     if not items:
         return False
     for item in items:
@@ -58,25 +53,13 @@ def _canonical_done(test_path, collection, canonical):
 
 def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=False,
             timeout=120, stop_on_unreachable=True):
-# Fetch/seal everything in `targets` into the test folder, then write collection.json.
-#
-# `transport` is injected (defaults to the real scp/local/ssh-cmd trio) so the whole
-# collector is exercised offline by tests/test_artifacts_ops.py.
-#
-# `stop_on_unreachable` gives up on a target after its first unreachable transfer instead of
-# burning the per-file timeout four more times: teardown runs this, and a dead red01 must not
-# add ten minutes to a destroy that is already the slowest step.
-#
-# Never raises for a single unreachable or missing source: a partial collection recorded as
-# partial is the entire point of the status vocabulary. Only programming errors (an unknown
-# route) are hard failures.
+# A partial collection is recorded as partial, never raised; only wiring bugs fail hard.
     test_path = Path(test_path)
     transport = transport or default_transport()
     unknown = sorted({t.get("route") for t in targets if t.get("route") and not t.get("status")}
                      - set(transport))
     if unknown:
-        # A route with no transport is a wiring bug, not a missing artifact: recording it as
-        # `failed` per file would let a silent typo look like a run that simply had no evidence.
+        # No transport is a wiring bug; a per-file `failed` would read as a no-evidence run.
         raise RuntimeError(f"no transport for route(s) {unknown} — refusing to record a "
                            "collection that cannot even be attempted")
     previous = load_collection(test_path)
@@ -89,9 +72,7 @@ def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=F
         entry = {"name": target.get("name"), "route": target.get("route"),
                  "node": target.get("node"), "vmid": target.get("vmid"),
                  "note": target.get("note"), "files": [], "errors": [], "status": OK,
-                 # Which canonical documents this target was meant to produce. Recorded even
-                 # when the target fails wholesale, because that is the case where "why is
-                 # RED-TEAM.md missing?" has to be answerable from collection.json alone.
+                 # "Why is RED-TEAM.md missing?" must stay answerable from collection.json alone.
                  "canonical_documents": [w["canonical"] for w in (target.get("want") or [])
                                          if w.get("canonical")]}
         if target.get("status"):
@@ -115,9 +96,7 @@ def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=F
             if dry_run:
                 records.append({"want": label, "status": SKIPPED, "reason": "dry run"})
             elif _still_good(test_path, already):
-                # Carry the earlier records forward verbatim (they hold the sha256 provenance)
-                # and mark them re-verified. Replacing them with a "skipped" stub would throw
-                # away the hash record the second teardown run is supposed to confirm.
+                # A "skipped" stub would drop the sha256 provenance the re-run exists to confirm.
                 records.extend({**item, "reverified_at": iso()} for item in already)
                 counters["reverified"] = counters.get("reverified", 0) + 1
             else:
@@ -148,6 +127,7 @@ def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=F
             for record in records:
                 if record["status"] in LOST:
                     entry["errors"].append(f"{label}: {record.get('reason')}")
+            # A dead box must not burn the per-file timeout on every remaining want during teardown.
             if stop_on_unreachable and any(r["status"] == UNREACHABLE for r in records):
                 remaining = [w for w in (list(target.get("want", []))
                                          + list(target.get("want_globs", [])))
@@ -159,9 +139,7 @@ def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=F
                 counters[SKIPPED] += len(remaining)
                 break
 
-        # Target status comes from what actually happened to its files, never from matching
-        # strings in the error text: a target is only as good as its worst record, and an
-        # all-absent target says so plainly.
+        # Worst record wins; target status never comes from matching error strings.
         statuses = {record["status"] for record in entry["files"]}
         if UNREACHABLE in statuses:
             entry["status"] = UNREACHABLE
@@ -180,7 +158,6 @@ def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=F
 
 
 def derive_canonical(test_path, previous, want, records):
-# Copy the newest fetched file to the canonical document name (e.g. RED-TEAM.md).
     canonical = want["canonical"]
     if _canonical_done(test_path, previous, canonical):
         for derived in previous.get("derived", []):
@@ -191,10 +168,8 @@ def derive_canonical(test_path, previous, want, records):
                   if r.get("status") == OK and r.get("local")]
     if not candidates:
         return records, None
-    # Ties are real, not theoretical: two files written in the same tick report IDENTICAL
-    # st_mtime on this estate's filesystems (verified ns-equal on ext4 here), and `max` then
-    # returns the first candidate — an older report silently became the canonical document.
-    # Break the tie on the name, where red's `report-YYYYMMDD-HHMM.md` encodes recency.
+    # Same-tick files share identical st_mtime on this estate (verified ns-equal on ext4), so
+    # max alone can seal an older report; red's report-YYYYMMDD-HHMM.md name orders recency.
     newest = max(candidates, key=lambda p: (p.stat().st_mtime, p.name))
     facts = seal_local_file(newest, Path(test_path) / canonical)
     return records, {"path": canonical, "from": relative_to_test(test_path, newest),

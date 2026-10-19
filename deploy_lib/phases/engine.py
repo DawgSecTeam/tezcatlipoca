@@ -26,7 +26,6 @@ from estate import config
 
 
 def engine_build_ctx(ctx):
-# The ssh/user context the engine-template build VM and the jump VMs are built with.
     return {
         "ssh_key_path": ctx.ssh_key_abs,
         "vm_username": config.active().engine.username,
@@ -35,9 +34,6 @@ def engine_build_ctx(ctx):
 
 
 def ensure_engine_template(ctx):
-# M4 engine template lifecycle: build once per competition, reuse across its test
-#     runs; rebuild only on config drift and never when frozen. Records the template vmid
-#     and hash in state and the hash file; returns the template vmid.
     from estate import apply as estate_apply
     quotient_ref = compfile_value(ctx.comp_dir / "Compfile", "quotient_ref")
     engine_inputs = engine_hash_inputs(
@@ -49,10 +45,8 @@ def ensure_engine_template(ctx):
     rebuild = True
     if tmpl:
         entry = stored.get("engine") or {}
-        # The node's own hash stamp decides reuse, so a deploy from a fresh workspace
-        # (whose hash record the dashboard's seeder stripped) still adopts the
-        # engine template a --teams-only teardown kept. The file entry is the corroborating
-        # record, not the authority — see engine.template_freeze.template_stamp_current.
+        # the node's own hash stamp decides reuse, not this worktree's file — a fresh
+        # workspace still adopts the template a --teams-only teardown kept
         if template_stamp_current(ctx.node, tmpl, engine_hash):
             if entry.get("hash") != engine_hash:
                 print("  Engine template reuses on the node's hash stamp (no local hash "
@@ -67,10 +61,8 @@ def ensure_engine_template(ctx):
     if rebuild:
         if tmpl:
             print("  Engine template hash differs — rebuilding...")
-            # The old template's only clone is the deployed engine, and the build VM
-            # needs the planned mgmt IP: on a phase-2 resume the old engine is still up
-            # (phase 1 leaves a run's VMs alone), so destroy it here.
-            # Apply #1 recreates it as a linked clone of the new template.
+            # the build VM needs the planned mgmt IP and on a phase-2 resume the old engine
+            # still holds it (phase 1 leaves a run's VMs alone); apply #1 recreates it as a clone
             destroy_vm_if_exists(ctx.node, ctx.engine_vmid, expect_tags=ctx.reclaim_tags)
             left = destroy_engine_template(
                 ctx.node, ctx.engine_vmid,
@@ -93,16 +85,14 @@ def ensure_engine_template(ctx):
                 mgmt_bridge=resolved_mgmt_bridge(ctx.placement))
         ctx.state["engine_build_info"] = build_info
     elif tmpl:
-        # Kept (hash match or frozen): re-stamp its ownership to THIS run so the
-        # next teardown's strict guard and preflight recognize it — a template kept
-        # across runs carries the earlier run's tag (infra.ownership.retag_ownership).
+        # a kept template carries the earlier run's tag; re-stamp to THIS run so the next
+        # teardown's strict guard and preflight recognize it
         retag_ownership(ctx.node, tmpl, ctx.comp_tags | {"engine-template"})
     save_template_hashes(ctx.comp_dir, engine={"hash": engine_hash, "inputs": engine_inputs})
     ctx.state["engine_template_vmid"] = tmpl
     ctx.state["engine_template_hash"] = engine_hash
     ctx.save_state()
-    # Inventory it: the teardown destroys what the document records, in the one order
-    # linked clones survive.
+    # the teardown destroys what the document records, in the one order linked clones survive
     document = ctx.document()
     document.record("engine_template", ctx.node, ENGINE_TEMPLATE_NAME, vmid=tmpl)
     document.save()
@@ -110,9 +100,7 @@ def ensure_engine_template(ctx):
 
 
 def build_satellite_jumps(ctx, apply_ctx):
-# Jump/router per satellite, then the fail-loud routing gate: nothing
-#     downstream (satellite golden plants, nakon, scoring) works without
-#     engine -> jump -> satellite-bridge paths.
+# fail-loud: nothing downstream (golden plants, nakon, scoring) works without the engine -> jump -> satellite-bridge paths.
     with timed(ctx.comp_dir, 2, "jump_vms", f"x{len(ctx.placement['satellites'])}"):
         build_jump_vms(ctx.placement, ctx.engine_vmid, engine_build_ctx(ctx), ctx.comp_name,
                        ctx.engine_mgmt_ip,
@@ -130,14 +118,8 @@ def build_satellite_jumps(ctx, apply_ctx):
 
 
 def phase2_engine_template(ctx):
-# [2/8] Engine template lifecycle, then the engine and its bridges.
-#
-#     M4: the engine template is built once per competition and reused across its test
-#     runs — rebuilt only on config drift, never when frozen. The engine is then a linked
-#     clone of that template; every team bridge is built now, and phase 4 clones the team
-#     boxes once the goldens exist. The checkpoint and the engine-context read stay in the
-#     caller (deploy), in that order: a phase-2 resume still needs the coordinates, and a
-#     run that dies between them must leave last_phase at 2 on disk.
+# the checkpoint and the engine-context read stay in the caller (deploy), in that order: a
+# phase-2 resume still needs the coordinates; a run dying between them must leave last_phase 2.
     if ctx.from_phase > 2:
         print("[2/8] Skipped (resume) — not re-creating the engine.")
         return
@@ -158,21 +140,15 @@ def phase2_engine_template(ctx):
         configure_engine_network(ctx, apply_ctx)
     if ctx.placement and ctx.placement["satellites"]:
         build_satellite_jumps(ctx, apply_ctx)
-    # Record where this state's resources live: teardown's ownership refusal compares the
-    # loaded endpoint against it.
+    # teardown's ownership refusal compares the loaded endpoint against this record
     ctx.state["deployed_endpoint"] = config.active().proxmox.endpoint.rstrip("/")
 
 
 def phase3_prepare_engine(ctx):
-# [3/8] Apply this deploy's per-competition state to the engine clone.
     if ctx.from_phase > 3:
         print("[3/8] Skipped (resume).")
         return
-    # M4: the deployed engine is a linked clone of the engine template — the
-    # heavy bootstrap ran once on the template build VM. Per-deploy state is
-    # applied fresh here: .env (BEFORE compose up, so the fresh postgres volume
-    # initializes with this competition's credentials), fresh-volume compose up
-    # (an empty scoring DB every run), and the cacher check.
+    # .env lands BEFORE compose up: the fresh postgres volume initializes with this run's credentials
     print("[3/8] Preparing scoring engine from template (fresh volumes, event.conf)...")
     with timed(ctx.comp_dir, 3, "engine_from_template"):
         prepare_engine_from_template(ctx.tf_ctx, ctx.postgres_password, ctx.redis_password)
@@ -189,11 +165,7 @@ def phase3_prepare_engine(ctx):
 
     ensure_nat_forwarding(ctx.tf_ctx)
 
-    # Remote access (headscale): every deploy enrolls the engine as a subnet router,
-    # pushes the tailnet->team SNAT unit, and re-applies this competition's scoped
-    # ACL block + participant keys. `remote_access 0` in the Compfile opts out; a
-    # failure here fails the deploy — an unreachable headscale must not quietly
-    # yield a range nobody can reach.
+    # a headscale failure fails the deploy: an unreachable range must not be handed out quietly
     if compfile_flag(ctx.comp_dir / "Compfile", "remote_access", 1):
         with timed(ctx.comp_dir, 3, "remote_access"):
             from net import remote_access_ops

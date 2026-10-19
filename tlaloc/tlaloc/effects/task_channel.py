@@ -1,18 +1,4 @@
-"""task_channel — run one command through the C2 channel.
-
-Why this is an effect and not a bypass: the channel does not need SSH, so it is
-red's path when blue closes the login, and it is the only path to a Windows box
-whose Administrator login IS the SSH account (lockout/burndown depend on it). It
-still passes the gate, still obeys the pressure caps, and its impact
-attribution does not depend on a caller remembering a `service=` argument.
-
-Attribution: the command's intent is classified (`decide.classify_command`, clef
-with a deterministic floor) and an intent of `takedown` records an impact row for
-the scored service named in `service`. That parameter is the *advertising claim*
-— nothing is attributed unless the task reported success AND the classifier
-agrees it was an impact move, which is what the earlier agent's substring sniff
-got wrong in both directions.
-"""
+"""task_channel — run one command through the C2 channel."""
 
 from ..errors import PolicyError
 from .base import Effect, Result, register
@@ -94,18 +80,16 @@ class TaskChannel(Effect):
                              f"{outcome.get('detail') or 'task completed'}"),
                         data={"task_id": outcome.get("task_id"), "output": output,
                               "intent": intent, "box_id": box_id},
-                        # A task that RAN touched the box, whatever the objective
-                        # did: record the undo from the run, never gate it on the
-                        # task's success (a failed task can still have stopped a
-                        # service on its way out).
+                        # installed= means the task ran, not that it succeeded: a failed
+                        # task can still have touched the box, so it is never gated on ok.
                         installed=bool(outcome.get("task_id")))
+        # service= is only the claim: impact records only when the task succeeded
+        # AND the classifier says takedown.
         if ok and intent == "takedown" and params.get("service"):
             result.impact = {"ip": ip, "service": params["service"], "mode": "c2_task",
                              "detail": f"via C2: {command[:120]}"}
-        # Every mutation carries its undo (AGENTS.md invariant 9). A C2-tasked
-        # command is not derivable from the box the way a takedown's MOVE is, so
-        # the recipe names the exact text that ran and, when the command is a
-        # classified takedown of a named service, the one step that undoes it.
+        # A C2 command's mutations are not derivable from the box, so the recipe
+        # names the exact text that ran.
         if outcome.get("task_id"):
             result.restore = {"recipe": _undo_recipe(ctx, ip, command, params, ok, intent),
                               "secrets": None}
@@ -113,12 +97,9 @@ class TaskChannel(Effect):
 
 
 def _undo_recipe(ctx, ip, command, params, ok, intent):
-    """The undo steps for one C2-tasked command."""
     steps = []
     service = str(params.get("service") or "").strip()
     if service and (intent == "takedown" or not ok):
-        # The service may be a unit name or a pin label; the operator's own
-        # table is where the exact unit is resolved.
         unit = service if service.endswith(".service") else f"{service}.service"
         steps.append(f"Start-Service '{service}'" if ctx.is_windows(ip)
                      else f"systemctl start {unit}")

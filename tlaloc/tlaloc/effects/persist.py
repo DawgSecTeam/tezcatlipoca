@@ -1,26 +1,4 @@
-"""persist — the assume-breach backbone: (re)assert access on a box through one
-persistence family, and record exactly what was planted.
-
-Design notes (each one is a lesson from the earlier agent):
-
-* ONE effect, many families. The earlier agent shipped two families-per-OS
-  modules where 20 methods each hand-rolled its naming, its recording and its own
-  gate calls; here the family contract is: draw names from `artifactnames`,
-  install, report.
-* Names are drawn per plant (`artifactnames.linux_names/windows_names`), so a
-  re-plant wears a fresh face. Nothing in this effect may contain a literal
-  artifact name.
-* The record comes from what the INSTALL did, never from a later check-in. A
-  channel proof that gates the artifact write turns a slow check-in into a silent
-  absence, which is how blue's and the organizer's artifact lists both went blind
-  in the earlier agent.
-* "Auto" picks the next family that is not already standing on this box, so
-  re-planting works after blue removes an artifact while new plants keep adding
-  families (the anti-flood rule: never block a RE-plant, always allow a NEW one).
-
-The per-OS mechanics live in `persist_linux.py` / `persist_windows.py` — this
-module owns the registry entry, the family choice, the naming and the record.
-"""
+"""persist — plant one persistence family; names are drawn from artifactnames (never literals) and the record comes from the install, never a check-in."""
 
 from ..errors import PolicyError
 from . import artifactnames as names_mod
@@ -35,15 +13,7 @@ AUTO_ORDER_WINDOWS = ("scheduled_task", "defrun", "service", "wmisub", "hide",
 
 
 def _handler(windows):
-    """The per-OS handler module (lazy: keeps the OS split obvious and the
-    registry loadable).
-
-    A handler that is not built in this deployment returns None: `run()` then
-    fails the candidate with a detail naming the missing module instead of
-    crashing the cycle or the seed pipeline (both are contractually
-    degrade-and-continue). `tests/test_effects.py` refuses to call the catalogue
-    complete while any module is missing, so this tolerance cannot hide a build.
-    """
+    """Lazy import keeps the registry loadable; a handler module missing from the build returns None — test_effects guards catalogue completeness."""
     try:
         if windows:
             from . import persist_windows as handler
@@ -66,7 +36,6 @@ def auto_order(windows=False):
 
 
 def standing_families(world, ip):
-    """Families already planted on this box (artifact kind -> family)."""
     return {a.get("family") or a.get("kind") for a in world.artifacts(ip)}
 
 

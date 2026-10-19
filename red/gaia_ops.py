@@ -1,49 +1,4 @@
-"""Mythic C2 via Gaia — the competition's C2 box, installed before T0.
-
-The migration plan (§5) and how the club runs it: **every competition installs
-and configures its Mythic**, then tlaloc's own `c2-prep` freezes the per-box
-payload matrix through the Mythic REST API and the seed plants it. Gaia
-(github.com/winterknight1337/Gaia) is the installer/configurator; this module
-owns the commands, the credential handoff and the config the agent receives.
-
-Where the C2 box is
-    `red.c2_ip` in the Compfile names one. With no `c2_ip` the C2 runs ON red01:
-    the VM already exists, the competition's `firewall_dnat` line already points
-    the callback port at it (net/firewall_ops.py), and nothing new is
-    provisioned — one install step, the same DNAT.
-
-The callback address — the part that decides whether the channel ever works
-    A payload built without a callback address inherits Mythic's profile default,
-    which on a fresh install is loopback: it compiles, installs, "succeeds" and
-    never checks in. The address the team boxes dial is
-    `callback_ip_for(comp_dir)` (172.31.<team>.1) on the gateway port the
-    Compfile's `firewall_dnat` maps to the C2 box. Both are handed to the agent
-    as `c2.callback_host` / `c2.callback_port` (tlaloc passes them through to
-    every payload build), and the same pair is what the operator's DNAT must
-    expose — with the Mythic http profile LISTENING on that port (the profile
-    instance's port), since the range's DNAT translates port-for-port.
-
-Gaia itself
-    Its checkout lives on the engine host at `knobs.gaia_path` (default `~/gaia`),
-    the same shape as TEZ_BADAUTO_PATH / TEZ_NAKON_PATH so the paths live in the
-    dashboard's `.env`. Every command runs with that checkout as CWD: gaia.py
-    reads its `.env` relative to the working directory. Verified against
-    gaia.py's argparse:
-
-        install    gaia.py install -S <box> -u <ssh user> -i <key>
-                            --install-updates --install-deps --install-mythic
-        auth       gaia.py auth -S <box> -P 7443 -u mythic_admin -p -k
-                            (-p is a PROMPT: the password goes in on stdin)
-        user       gaia.py user create -u <names> --cred-stdout
-        operation  gaia.py operation create -n <comp>
-
-    `install` leaves the admin password in `<gaia>/mythic_admin_creds.txt` and
-    `auth` leaves the API key in `<gaia>/.env`; both are read back here.
-
-Warn-and-continue, like every other red step: a C2 failure is recorded as a
-degradation and the agent runs with `c2.enabled` false — the channel stages then
-skip cleanly (logged) instead of taking down a deploy whose range is healthy.
-"""
+"""Mythic C2 via Gaia — the competition's C2 box, installed before T0."""
 
 import contextlib
 import fcntl
@@ -56,55 +11,46 @@ from pathlib import Path
 from common.utils import compfile_value, local_python, record_degradation
 
 GAIA_REPO = "https://github.com/winterknight1337/Gaia"
-# A moving branch, not a pin: the deploy clones it and the step's result records the
-# resolved revision, which is how a scrim names what it validated.
+# A moving branch, not a pin: the step records the resolved revision it validated
 GAIA_REF = "main"
 DEFAULT_GAIA_PATH = "~/gaia"
 
 MYTHIC_WEB_PORT = 7443
 MYTHIC_ADMIN = "mythic_admin"
-# The agent's own Mythic account (never mythic_admin: the event runs on an
-# account that can be revoked without locking the operator out).
+# Never mythic_admin: revocable without locking the operator out
 AGENT_USER = "tlaloc"
 PASSWORD_ENV = "TLALOC_MYTHIC_PASSWORD"
-# Where the pushed password env file lands on red01 (0600, root). tlaloc.service
-# reads it via EnvironmentFile so no secret ever rides the pushed config.
+# 0600 root; tlaloc.service reads it via EnvironmentFile — no secret in the pushed config
 ENV_FILE = "/etc/tlaloc/c2.env"
 
 INSTALL_TIMEOUT = 5400          # apt + docker + Mythic images: tens of minutes
 SHORT_TIMEOUT = 300
-# `auth` right after install can meet a web UI that is up but not yet serving JSON
-# (install returns as soon as its steps finish). A transient non-JSON reply is not a
-# broken C2, so retry before calling it one.
+# right after install the web UI can be up but not yet serving JSON; a transient
+# non-JSON reply is not a broken C2, so retry before calling it one
 AUTH_ATTEMPTS = 4
 AUTH_RETRY_SECONDS = 30
 
 
 def gaia_path():
-    """The Gaia checkout on this host (engine host in production)."""
     from estate import config
     raw = config.active().knobs.gaia_path or DEFAULT_GAIA_PATH
     return Path(raw).expanduser()
 
 
 def venv_python(path):
-    """Gaia's own interpreter when its venv exists, else the engine's python.
-
-    Gaia is not importable from the engine's interpreter: its requirements pin
-    the `mythic` SDK plus aiohttp and friends. The venv is built once by
-    `setup_argv` and every gaia.py invocation uses it.
-    """
+    """Gaia's venv when present, else the engine python: its pins (mythic SDK, aiohttp)
+    are not on the engine interpreter. setup_argv builds the venv once."""
     candidate = Path(path) / ".venv" / "bin" / "python"
     return str(candidate) if candidate.exists() else local_python()
 
 
 def gaia_argv(path, *args):
-    """`<python> <checkout>/gaia.py <args>` — the checkout is the CWD."""
+    """gaia.py reads its .env relative to CWD, so every caller sets cwd=<checkout>."""
     return [venv_python(path), str(Path(path) / "gaia.py"), *args]
 
 
 def setup_argv(path, requirements=None):
-    """The two commands that make the checkout runnable."""
+    """The two commands that make the checkout runnable: venv + requirements."""
     path = Path(path)
     req = Path(requirements) if requirements else path / "requirements.txt"
     venv = path / ".venv"
@@ -116,13 +62,8 @@ def setup_argv(path, requirements=None):
 
 
 def normalize_requirements(path):
-    """A UTF-8 copy of Gaia's requirements file when it is not already UTF-8.
-
-    Upstream ships `requirements.txt` as UTF-16 (a CRLF editor's accident), and
-    pip reads requirements files as text — it either errors or installs nothing.
-    The normalized copy is what `setup_argv` installs from; the original is left
-    alone so `git status` in the checkout stays clean.
-    """
+    """Upstream ships requirements.txt as UTF-16, which pip misreads. Normalize a copy,
+    leave the original so the checkout's git status stays clean."""
     path = Path(path)
     try:
         raw = path.read_bytes()
@@ -136,9 +77,6 @@ def normalize_requirements(path):
     return out
 
 
-# --------------------------------------------------------------------------- #
-# command builders (pure — the tests assert these, the runner executes them)
-# --------------------------------------------------------------------------- #
 
 def install_argv(path, server, user, key=None, port=22, updates=True, deps=True,
                  mythic=True):
@@ -156,13 +94,9 @@ def install_argv(path, server, user, key=None, port=22, updates=True, deps=True,
 
 
 def auth_argv(path, server, user=MYTHIC_ADMIN, port=MYTHIC_WEB_PORT):
-    """`-p` is a store_true prompt in Gaia: the password arrives on stdin.
-
-    No `-k`: in this Gaia it maps to the client's `ssl=False`, i.e. http://, and Mythic
-    serves TLS on 7443 — the client already skips certificate verification on its https
-    path. Live 2026-10-17: `-k` sent an HTTP request to the HTTPS port, Mythic answered
-    400 + HTML, and the deploy refused a competition with no C2.
-    """
+    """-p is a PROMPT: the password arrives on stdin. No -k: in this Gaia it means
+    ssl=False (http) and Mythic serves TLS on 7443; the https client already skips
+    certificate verification."""
     return gaia_argv(path, "auth", "-S", str(server), "-P", str(int(port)),
                      "-u", str(user), "-p")
 
@@ -184,11 +118,8 @@ def assign_argv(path, operation, users):
 
 
 def mythic_answering(box_ip, runner, timeout=8):
-    """Whether the C2 box already serves Mythic's health endpoint.
-
-    A resume must not re-run the installer: it rebuilds every agent/profile image
-    (15+ minutes) and, if it races another install, can wedge the stack.
-    """
+    """A resume must not re-run the installer: it rebuilds every image (15+ min) and
+    racing another install can wedge the stack."""
     try:
         proc = runner(["curl", "-sk", "-m", str(timeout), "-o", "/dev/null",
                        "-w", "%{http_code}", f"https://{box_ip}:7443/health"],
@@ -203,9 +134,6 @@ def clone_argv(path, ref=GAIA_REF, repo=GAIA_REPO):
             str(Path(path))]
 
 
-# --------------------------------------------------------------------------- #
-# reading Gaia's own handoffs
-# --------------------------------------------------------------------------- #
 
 def parse_admin_password(text):
     """`mythic_admin:<pw>` (what install leaves in mythic_admin_creds.txt)."""
@@ -219,13 +147,9 @@ def parse_admin_password(text):
 
 
 def box_admin_password(box_ip, ssh_user, ssh_key, *, runner=None, timeout=60):
-    """The C2 box's OWN admin password, from /opt/Mythic/.env.
-
-    This is the authority: Mythic stores the password hash in its database, so a
-    re-run of the installer — which rewrites `.env` and the host-side handoff file
-    but cannot change an existing user — can leave the handoff file stale while the
-    box keeps working (caught live).
-    """
+    """Authority: Mythic stores the password hash in its DB, so an installer re-run
+    rewrites .env and the handoff file but cannot change an existing user — the file
+    can be stale while the box works."""
     if not box_ip or not ssh_key:
         return None
     argv = ["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
@@ -282,19 +206,11 @@ def env_file_body(password, host=None, port=MYTHIC_WEB_PORT, user=AGENT_USER):
     return "\n".join(lines) + "\n"
 
 
-# --------------------------------------------------------------------------- #
-# the callback address + the agent's config block
-# --------------------------------------------------------------------------- #
 
 def callback_port_for(comp_dir, default=None):
-    """The gateway port the callback is DNAT'd on.
-
-    `red.c2_callback_port` wins when set (the port the Mythic http profile
-    actually listens on — the range's DNAT translates port-for-port, so the
-    gateway port and the profile's listening port must be the same number).
-    Otherwise the Compfile's `firewall_dnat` supplies it:
-    `firewall_dnat 4470->10.0.0.198` means the team gateways expose 4470.
-    """
+    """`red.c2_callback_port` wins (the profile's listening port: the range DNATs
+    port-for-port, so gateway and profile ports must match); else the Compfile's
+    `firewall_dnat` left side."""
     comp = Path(comp_dir) / "Compfile"
     explicit = str(compfile_value(comp, "red.c2_callback_port", "") or "").strip()
     if explicit.isdigit():
@@ -317,12 +233,8 @@ def c2_box_for(comp_dir, default_ip=None):
 
 
 def callback_url(host, port=None):
-    """The callback address a Mythic http profile expects.
-
-    `callback_ip_for()` hands back a bare `172.31.<team>.1`; Mythic's profile
-    takes a URL (`http://…`) and the port in its own parameter, so the scheme is
-    added here and the port is NEVER baked into the host string.
-    """
+    """Mythic profiles take a URL with the port in its own parameter: the scheme is
+    added here and the port is NEVER baked into the host string."""
     host = str(host or "").strip()
     if not host:
         return None
@@ -337,11 +249,7 @@ def callback_url(host, port=None):
 
 def tlaloc_c2_block(comp_dir, *, server, operation, callback_host, callback_port,
                     user=AGENT_USER):
-    """The `c2.*` keys the rendered tlaloc config must carry.
-
-    The password is deliberately ABSENT: config carries the env var NAME, the
-    secret travels in the 0600 env file (see `env_file_body`).
-    """
+    """The `c2.*` keys. Password deliberately ABSENT: config carries the env var NAME."""
     block = {
         "enabled": True,
         "base_url": f"https://{server}:{MYTHIC_WEB_PORT}",
@@ -357,13 +265,8 @@ def tlaloc_c2_block(comp_dir, *, server, operation, callback_host, callback_port
     return block
 
 
-# --------------------------------------------------------------------------- #
-# the step
-# --------------------------------------------------------------------------- #
 
-# Gaia is a third-party installer: it needs the ssh key path, never the estate's
-# credentials. Handing it the driver's environment would put the Proxmox token and the
-# dashboard bearer into an external process tree.
+# Gaia is third-party: never leak the Proxmox token or dashboard bearers into it
 _STRIPPED_ENV = ("TEZ_PROXMOX_API_TOKEN", "TEZ_OPS_TOKEN", "TEZ_DASHBOARD_TOKENS")
 
 
@@ -396,12 +299,7 @@ def ensure_checkout(path, *, runner=None, ref=GAIA_REF, repo=GAIA_REPO):
 
 
 def ensure_setup(path, *, runner=None, timeout=900):
-    """Gaia's venv + its requirements (once per checkout). Returns (ok, detail).
-
-    Gaia imports the `mythic` SDK, aiohttp and friends — none of which the engine
-    host's interpreter has — so the checkout gets its own venv and every
-    gaia.py call runs on that interpreter.
-    """
+    """Gaia's venv + requirements, once per checkout. Returns (ok, detail)."""
     path = Path(path)
     if not (path / "gaia.py").exists():
         return False, "no checkout"
@@ -453,14 +351,9 @@ def mythic_lock(box_ip):
 def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
                    gaia=None, comp_id=None, operation=None, callback_host=None,
                    callback_port=None, agent_user=AGENT_USER, log=print):
-    """Install + configure Mythic for one competition. Returns a result dict.
-
-    Order: checkout → install (apt/deps/Mythic) → admin creds → auth (API key) →
-    agent user → operation → the `c2.*` block + 0600 env body for the push.
-
-    Every failure lands in `degradations` and returns ok=False with what was
-    reached; the caller keeps deploying (the agent then skips the C2 stages).
-    """
+    """Install + configure Mythic: checkout → install → admin creds → auth → user →
+    operation → c2 block + env body. Every failure lands in `degradations` with
+    ok=False; the caller keeps deploying and the agent skips the C2 stages."""
     comp_dir = Path(comp_dir)
     runner = runner or _default_runner
     path = Path(gaia) if gaia else gaia_path()
@@ -593,9 +486,7 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
     result["c2"] = tlaloc_c2_block(comp_dir, server=box_ip, operation=name,
                                    callback_host=callback_host,
                                    callback_port=callback_port, user=agent_user)
-    # The agent authenticates with USERNAME/PASSWORD (tlaloc's client posts
-    # /auth), so the password that travels is its OWN account's when Gaia handed
-    # one back, else the admin password (never logged).
+    # the agent posts /auth with its OWN account's password, else the admin's (never logged)
     result["env"] = env_file_body(agent_password or result.get("admin_password"), host=box_ip,
                                  user=agent_user)
     result["environment"] = _environment(sshd=True, mythic=True)
@@ -631,22 +522,14 @@ def _environment(*, sshd=False, mythic=False):
 
 
 def degrade(result, where):
-    """Record the step's degradations in the run's degradation list."""
     for item in result.get("degradations") or []:
         record_degradation(f"mythic_{where}", str(item)[:400])
 
 
-# --------------------------------------------------------------------------- #
-# handing the configuration to the agent's deploy
-# --------------------------------------------------------------------------- #
 
 def apply_c2_to_config(config_path, c2_block):
-    """Merge the c2 keys into a rendered tlaloc config (idempotent, in place).
-
-    The deploy renders `.tlaloc-config.yaml` first and pushes it later, so the
-    Mythic step has to land its keys in that same file or the agent would be
-    configured for a C2 it cannot authenticate to.
-    """
+    """Merge the c2 keys in place: the deploy renders the config first and pushes later,
+    so the Mythic step must land in that same file."""
     import yaml
     path = Path(config_path)
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -660,17 +543,12 @@ def apply_c2_to_config(config_path, c2_block):
 
 
 def env_push_command(body):
-    """The remote command that installs the 0600 env file on red01.
-
-    Root-owned and 0600: the Mythic password never rides the pushed config (which
-    the organizer's diff reads) and never appears in an argument list.
-    """
+    """Installs the 0600 root env file; the password rides stdin, never an argument list."""
     return (f"sudo -n mkdir -p $(dirname {ENV_FILE}) && "
             f"sudo -n tee {ENV_FILE} >/dev/null && sudo -n chmod 600 {ENV_FILE}")
 
 
 def push_env(ssh_key, red_ip, body, *, runner=None, timeout=120):
-    """Push the env file over SSH (stdin), like the config push."""
     runner = runner or _default_runner
     argv = ["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
@@ -680,11 +558,7 @@ def push_env(ssh_key, red_ip, body, *, runner=None, timeout=120):
 
 
 def mythic_enabled(comp_dir):
-    """Whether this competition installs Mythic (`red.c2 off` opts out).
-
-    Default is ON: the club installs and configures Mythic for every
-    competition, and a comp that wants no C2 says so explicitly.
-    """
+    """Default ON: every competition gets a Mythic; a comp that wants none says so."""
     raw = compfile_value(Path(comp_dir) / "Compfile", "red.c2", "") or ""
     return str(raw).strip().lower() not in ("off", "false", "0", "no")
 

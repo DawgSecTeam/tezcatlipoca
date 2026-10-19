@@ -1,19 +1,4 @@
-"""Scoring reads: the phantom round (E3) and the inject-count path (E4).
-
-Two harness-side reading defects from a scale soak, both of which made the
-automated evidence disagree with what actually happened:
-
-E3 — `/api/services` returns `Last10Rounds` newest-first, and at >=8 teams a poll lands
-mid-round: rounds[0] is then the round in flight with an EMPTY `Checks` array, which is
-not a verdict. Reading it as "no check passed" invents a DOWN that the monitors, the
-fire-test and every scoreboard snapshot then believe.
-
-E4 — `INTERACTION.md` reported "injects submitted: 0" and failed the blue inject gate for
-a run that had submitted them: the teams wrote `sub.md`, `sub7.md` … `sub12.md` at the
-team directory root and the counter only looked for `sub-*.md` or files under
-`submissions/`. A gate that reports zero because of a filename fails a team for work it
-did.
-"""
+"""Scoring reads: phantom mid-round polling, and counting blue inject deliverables."""
 
 import importlib.util
 import json
@@ -50,12 +35,13 @@ def _check(result, error=""):
 
 
 class PhantomRound(unittest.TestCase):
-# E3: an in-flight round must not read as a down service.
+    # /api/services Last10Rounds is newest-first; mid-round the head round has an
+    # EMPTY Checks — in flight, not a verdict.
 
     def test_in_flight_empty_round_falls_back_to_the_last_completed_one(self):
         payload = [{"ServiceName": "web01-nginx", "Last10Rounds": [
-            _round([]),                      # in flight — not a verdict
-            _round([_check(True)]),          # last completed — UP
+            _round([]),
+            _round([_check(True)]),
         ]}]
         rows = quotient_api.services_to_rows(payload)
         self.assertTrue(rows[0]["up"], "an in-flight round must not invent a DOWN")
@@ -70,7 +56,7 @@ class PhantomRound(unittest.TestCase):
         self.assertIn("no records received", rows[0]["error"])
 
     def test_no_round_with_checks_stays_down(self):
-        # Unmeasured is not up. Fail closed, exactly like every other gate in this repo.
+        # unmeasured is not up: fail closed, like every gate here
         payload = [{"ServiceName": "db01-sql", "Last10Rounds": [_round([]), _round([])]}]
         self.assertFalse(quotient_api.services_to_rows(payload)[0]["up"])
 
@@ -83,7 +69,7 @@ class PhantomRound(unittest.TestCase):
 
 
 class InjectCounting(unittest.TestCase):
-# E4: count the deliverables where the agents actually write them.
+    # teams write sub.md/sub7.md at the team-dir root, not only sub-*.md under submissions/
 
     def _team(self, *files, subdir=()):
         d = Path(tempfile.mkdtemp())
@@ -96,7 +82,6 @@ class InjectCounting(unittest.TestCase):
         return d
 
     def test_soak_shapes_are_counted(self):
-        # The exact filenames the soak's teams produced.
         d = self._team("sub.md", "sub7.md", "sub8.md", "sub9.md", "sub10.md",
                        "sub11.md", "sub12.md")
         self.assertEqual(blue_side.count_inject_submissions(d), 7)
@@ -108,13 +93,12 @@ class InjectCounting(unittest.TestCase):
         self.assertEqual(blue_side.count_inject_submissions(d), 2)
 
     def test_unrelated_files_are_not_counted(self):
-        # A report that over-counts is as useless as one that under-counts.
         d = self._team("submarine.md", "submission-notes.md", "NOTES.md", "sub.md.bak")
         self.assertEqual(blue_side.count_inject_submissions(d), 0)
 
 
     def test_the_harness_prompt_writes_where_the_counter_looks(self):
-        # The two halves must agree, or the next run repeats the soak exactly.
+        # the prompt and the counter must agree, or the next run fails the gate the same way
         from unittest import mock
         creds = {"TEAM1_PW": "p", "BOX_USER": "u", "BOX_PASSWORD": "b", "KEY_PATH": "/k",
                  "VM_USER": "sysadmin", "ENGINE_IP": "10.0.0.248", "TEAM1_ID": 221,

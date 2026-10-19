@@ -1,23 +1,5 @@
-"""build_golden_set's per-box passes run on a bounded pool — without weakening the
-snapshot/conversion ordering.
-
-Why this file exists: the SNAP_BASE snapshot loop and the "delete snapshot, POST
-/template" conversion loop were serial, so an 8-box-type golden build paid ~60-100s of
-snapshot wall plus ~30-60s of conversion wall for work that is independent per box.
-Measured snapshot wall across 13 competitions (.deploy-timings.jsonl, 460 successful
-records, 16 sub-second warn-path records excluded): median 7.4s, mean 12.1s, p95 33.8s,
-max 103.3s — measured worst case, one snapshot-heavy phase 4 alone was 12 snapshots / 135s. deploy.py
-has run this exact op on a 4-worker pool since M2.1.
-
-What a concurrent rewrite can silently break is not speed but ordering and failure
-semantics, so that is what these tests pin:
-  * every SNAP_BASE snapshot must exist before the conversion loop deletes them;
-  * within a box, the snapshot is deleted before that box's POST /template (qm template
-    refuses a VM holding snapshots);
-  * full-clone loops stay SERIAL (crash-consistent copies / datastore saturation);
-  * a failure aborts with the serial loop's exact message, and the warn-and-continue
-    paths stay warn-and-continue.
-"""
+"""build_golden_set's per-box passes run on a bounded pool, without weakening the
+snapshot/conversion ordering."""
 
 import contextlib
 import io
@@ -95,16 +77,13 @@ class GoldenBuildHarness:
         self.slot = slot
         self.anchor = anchor
         self.events = _Events()
-        # Capturing recorder for the coverage hook — build_golden_set invokes it on
-        # every completion path, and the tests below assert on what it captured.
         self.coverage_calls = []
         self.tmp = tempfile.TemporaryDirectory()
         self.comp_dir = Path(self.tmp.name)
         self.boxes = [{"name": f"box{i}", "template": "base-linux"} for i in range(n)]
         self.vmids = [golden_target_ops.golden_vmid_for(1000, i) for i in range(n)]
         self.ips = [golden_target_ops.golden_ip_for("104", i) for i in range(n)]
-        # A golden stage with no plantable configurations skips the nakon plant
-        # outright (the score-only lineup path) — no nakon in these tests.
+        # no plantable configurations -> the nakon plant is skipped outright (score-only lineup)
         self.golden_config = self.comp_dir / "golden-config.json"
         self.golden_config.write_text(json.dumps(
             {"machines": [{"name": f"box{i}-golden", "configurations": []}
@@ -223,11 +202,7 @@ class GoldenParallelism(unittest.TestCase):
             self.assertLess(deletes[vmid], idx,
                             f"vmid {vmid} was converted before its SNAP_BASE was deleted")
 
-    # An unbooted (DC) golden is generalized and converted in the cold pass — it
-    # must not be snapshotted.
-
-    # Full clones are crash-consistent disk copies onto one datastore, so the loop
-    # stays serial. Nothing here may fan out.
+    # Full clones are crash-consistent disk copies onto one datastore, so the loop stays serial.
     def test_full_clone_loop_stays_serial(self):
         harness = GoldenBuildHarness(n=8, missing=True, clone_sleep=0.05)
         _, events, exc = harness.run()
@@ -241,17 +216,12 @@ class GoldenParallelism(unittest.TestCase):
         self.assertIsInstance(exc, RuntimeError)
         self.assertIn("500 converting", str(exc))
 
-    # take_snapshot never raises (it warns and returns False); the parallel pass
-    # must keep that warn-and-continue behaviour, not turn it into an abort.
+    # take_snapshot never raises (it warns and returns False); the parallel pass must keep that
+    # warn-and-continue behaviour, not turn it into an abort.
 
 
-
-# A golden that already passed its plant is not redone.
-#
-# Measured on a shipped packet's range: `Golden re-entry: rolling golden-<name> back to 'tz-base'`
-# appears 33 times — 11 each for web01, ftp01 and db01 — across 10 runs, while only
-# ftp01 was ever the problem. The checkpoint stops that multiplication; the
-# conversion barrier (every golden stopped before ANY POST /template) must survive it.
+# A golden that already passed its plant is not redone; the conversion barrier (every golden
+# stopped before ANY POST /template) must survive the checkpoint.
 class GoldenCheckpoint(unittest.TestCase):
     def _seed(self, harness, mapping):
         save_template_hashes(
@@ -306,15 +276,14 @@ class GoldenCheckpoint(unittest.TestCase):
                          {"box0": {"hash": "h0", "run": ""},
                           "box1": {"hash": "h1", "run": ""}})
 
-    # Without golden hashes there is no identity to key on, so nothing is skipped —
-    # the conservative default.
+    # Without golden hashes there is no identity to key on, so nothing is skipped.
 
 
-# Phase 4 emits its plant-coverage verdict through the `coverage` callback on EVERY
-# completion path — keyed for verify's '-golden' mapping, slot-qualified on satellite
-# slots. The alpine_services tolerated-failure path is the load-bearing one: those
-# failures must reach the record (not vanish as a warning), so verify's coverage gate
-# can see a golden disk that provably lacked the failed configs.
+# Phase 4 emits its plant-coverage verdict through the `coverage` callback on EVERY completion
+# path — keyed for verify's '-golden' mapping, slot-qualified on satellite slots. The
+# alpine_services tolerated-failure path is load-bearing: those failures must reach the record,
+# not vanish as a warning, or verify's coverage gate cannot see a golden disk that provably
+# lacked the failed configs.
 class GoldenCoverageRecords(unittest.TestCase):
     STAGE = [{"name": "box0-golden", "configurations": ["apache", "roundcube"]},
              {"name": "box1-golden", "configurations": ["Enable WinRM"]}]
@@ -334,9 +303,8 @@ class GoldenCoverageRecords(unittest.TestCase):
         return p_nakon, p_shim, exc
 
 
-    # The point of the hook: a non-strict plant whose steps FAILED must reach the
-    # coverage callback with the result carrying the failures — not vanish as a
-    # WARNING — and ensure_alpine_services must run after the record lands.
+    # A non-strict plant whose steps FAILED must reach the coverage callback carrying the
+    # failures, not vanish as a WARNING, and ensure_alpine_services must run after the record.
     def test_an_alpine_tolerated_failure_still_reaches_the_record(self):
         harness = self._harness()
         partial = NakonResult(
@@ -357,10 +325,8 @@ class GoldenCoverageRecords(unittest.TestCase):
         self.assertEqual(p_nakon.call_args.kwargs["strict"], False)
 
 
-    # caught live: an interrupted POST /template left a golden with
-    # template=1 on a plain vm- volume; every linked clone of it then died with
-    # HTTP 500 "Linked clone feature is not supported". _convert must verify the
-    # base- rename landed and fail loudly when it did not.
+    # An interrupted POST /template left a golden with template=1 on a plain vm- volume; every
+    # linked clone of it then died with HTTP 500 "Linked clone feature is not supported".
     def test_a_half_converted_golden_fails_the_conversion_loudly(self):
         harness = self._harness(golden_hashes={"box0": "h0", "box1": "h1"})
         doc = estate_state.EstateState.load(harness.comp_dir)
@@ -382,11 +348,8 @@ class GoldenCoverageRecords(unittest.TestCase):
         self.assertIsNotNone(exc)
         self.assertIn("never became base- volumes", str(exc))
 
-    # The happy path must not regress: base- volumes (and an ide cloudinit drive
-    # on the renamed form) satisfy the check and the build completes.
-
-    # The M4 all-templates re-entry returns before the plant section ever reads
-    # the stage config — the coverage verdict must still fire.
+    # The all-templates re-entry returns before the plant section reads the stage config — the
+    # coverage verdict must still fire.
     def test_a_fully_converted_resume_records_a_skip_verdict(self):
         harness = self._harness(all_templates=True)
         _r, _e, exc = harness.run()
@@ -400,9 +363,8 @@ class GoldenCoverageRecords(unittest.TestCase):
     # Every golden checkpointed (planted on this hash): the plant
     # must not run, and the verdict must be a skip, not an absent record.
 
-    # Every slot's stage config names its golden machine identically, so a
-    # satellite slot's coverage keys must carry the slot suffix — otherwise one
-    # slot's clean replant would pop another slot's recorded failure.
+    # Every slot's stage config names its golden machine identically, so a satellite slot's
+    # coverage keys must carry the slot suffix.
     def test_satellite_slot_keys_are_slot_qualified(self):
         harness = self._harness(slot=2, anchor="105")
         clean = NakonResult(
@@ -413,8 +375,8 @@ class GoldenCoverageRecords(unittest.TestCase):
         self.assertEqual([m["name"] for m in machines],
                          ["box0-golden-slot2", "box1-golden-slot2"])
 
-    # Strict mode (no alpine shim): a failed step aborts the build — the deploy
-    # dies here, so no coverage verdict fires and verify never runs against it.
+    # Strict mode (no alpine shim): a failed step aborts the build, so no coverage verdict
+    # fires and verify never runs against it.
     def test_a_strict_failure_raises_before_any_verdict_is_recorded(self):
         harness = self._harness()
         failed = NakonResult(

@@ -1,8 +1,4 @@
-"""Three-stage split safety: the golden identity ban on BOTH golden paths (slot 0 and
-every satellite) and the combined post-clone pin merge.
-
-Offline — generate_stage_configs / generate_slot_golden_config run against a written
-nakon-config.json (Proxmox/Nakon boundaries are upstream)."""
+"""Three-stage split safety: the golden identity ban on both golden paths, and the combined post-clone pin merge."""
 
 import copy
 import json
@@ -24,9 +20,8 @@ BOXES = [
 ]
 TEAMS = {"team1": {"identifier": 104}, "team2": {"identifier": 105}}
 
-# A fabricated config that requires ONLY a cross-box identity var and is NOT in
-# POST_CLONE_CONFIGS. This is the shape the old satellite path let through: every real
-# "ip:<box>" config currently also rides PREDOMAIN_STAGE_CONFIGS, which masked the bug.
+# Not in POST_CLONE_CONFIGS: this is the shape a cross-box-only ("ip:<box>") config
+# takes, and riding a golden disk would bake team1's DB IP into every clone.
 CROSSBOX_ONLY = {"hypothetical-crossbox": {"DB_HOST": "ip:db01"}}
 
 
@@ -41,9 +36,6 @@ def _write_crossbox(comp_dir, config_name="hypothetical-crossbox"):
     (comp_dir / "nakon-config.json").write_text(json.dumps({"machines": machines}))
 
 
-# The satellite golden enforced a strictly weaker ban than slot 0, so a
-# cross-box-only ("ip:<box>") config rode the satellite disk with team1's DB IP
-# already baked into the pin.
 class GoldenIdentityBan(unittest.TestCase):
     def test_slot0_golden_rejects_crossbox_only_identity_config(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -56,9 +48,8 @@ class GoldenIdentityBan(unittest.TestCase):
             self.assertFalse((comp_dir / ".nakon-golden.json").exists())
 
     def test_satellite_golden_rejects_crossbox_only_identity_config(self):
-        # Before the fix this path used exact "ip" matching (REQUIRED_VARS values),
-        # so it WROTE .nakon-golden-slot2.json with the config aboard — every clone
-        # on the satellite would have pointed at team1's database.
+        # This path used exact "ip" matching, so it WROTE the satellite golden with the
+        # config aboard and every satellite clone pointed at team1's database.
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             _write_crossbox(comp_dir)
@@ -72,9 +63,8 @@ class GoldenIdentityBan(unittest.TestCase):
 
 
 
-# The combined pre-domain ∪ final view deduped by config name only, silently
-# dropping same-named pins that differ by vars.
 class PostCloneMerge(unittest.TestCase):
+# The combined pre-domain ∪ final view dedupes by config name AND vars.
     COLD_BOXES = [{"name": "dc01", "template": "windows-server-2022"}]
     COLD_TEAMS = {"team1": {"identifier": 104}}
 
@@ -93,8 +83,7 @@ class PostCloneMerge(unittest.TestCase):
 
     def test_postclone_keeps_same_named_decoys_on_cold_box(self):
         # A DC's golden is unbooted, so its otherwise golden-stage configs enter the
-        # pre-domain stage. box_baseline.json ships several same-named local-user decoys;
-        # the name-only merge kept only the first (postclone: 2 pins of 4).
+        # pre-domain stage; box_baseline.json ships several same-named local-user decoys.
         decoys = [
             {"name": "local-user", "vars": {"USERNAME": "scorebot", "PASSWORD": "a"}},
             {"name": "local-user", "vars": {"USERNAME": "blackteam", "PASSWORD": "b"}},
@@ -120,13 +109,11 @@ class AccountFileModeStaging(unittest.TestCase):
     """An account-file MODE must plant in the deploy's LAST pass.
 
     shadow-utils' commonio (useradd/groupadd) recreates /etc/passwd, /etc/shadow and
-    /etc/group at their default modes — probed in the Debian 13 and Ubuntu 24.04
-    base images: `chmod 666` then `useradd` reads 664, while `chpasswd` alone preserves it.
-    Two account writers run after the pre-domain and final passes: fix_services' credlist
-    `useradd` (end of phase 6) and bad-auto's assume-breach seed (persistence `user`,
-    phase 7). A mode staged any earlier is gone before verify probes it — caught live:
-    bad-perms-userConfig read ABSENT on every team clone while writable-sudoers, a DIRECTORY
-    mode neither writer touches, was present on all of them.
+    /etc/group at their default modes, while `chpasswd` alone preserves them; both
+    account writers run after the pre-domain and final passes (fix_services' credlist
+    useradd at the end of phase 6, bad-auto's assume-breach seed in phase 7), so a mode
+    staged earlier is gone before verify probes it — caught live: bad-perms-userConfig
+    read ABSENT on every team clone.
     """
 
     MODE_BOXES = [{"name": "web01", "template": "base-debian13-lite-fix"},
@@ -157,9 +144,8 @@ class AccountFileModeStaging(unittest.TestCase):
         self.assertTrue(checked, "no account-file mode probe is left to guard")
 
     def test_account_file_modes_plant_only_in_the_last_pass(self):
-        # web01 pins the named modes plus a control that must keep riding the golden;
-        # mail01 pins the parameterized shape (loosen-file-mode on /etc/shadow), which the
-        # name list alone cannot see.
+        # web01 pins the named modes plus a control; mail01 pins the parameterized
+        # shape, which the name list alone cannot see.
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp)
             machines = []
@@ -193,8 +179,7 @@ class AccountFileModeStaging(unittest.TestCase):
             self.assertNotIn(name, predomain.get("web01-team1", []))
             self.assertNotIn(name, final.get("web01-team1", []))
             # not in the sweep view either: redeploy replays that before hardening, whose
-            # credlist useradd would clobber a mode planted there. Redeploy runs the late
-            # file itself, after hardening.
+            # credlist useradd would clobber a mode planted there
             self.assertNotIn(name, postclone.get("web01-team1", []))
             self.assertNotIn(name, postclone.get("mail01-team1", []))
 

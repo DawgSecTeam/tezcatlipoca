@@ -1,32 +1,5 @@
 #!/usr/bin/env python3
-"""test-artifacts.py — read, inspect and repair per-run test artifact folders.
-
-`artifacts_lib/artifacts_ops.py` owns the contract: a run leaves `competitions/<comp>/.automated-tests/<key>/`
-holding `test.json` (identity, phases, verdict, write-up status), `collection.json` (what was
-obtained, from where, with sha256), the three canonical documents (`RED-TEAM.md`,
-`BLUE-TEAM.md`, `REPORT.md`) and `evidence/`. This script is the operator's surface over that
-folder — which runs have artifacts, why `RED-TEAM.md` is missing, whether a write-up is really
-finished — and it is deliberately a thin wrapper: it prints and repairs what the module recorded,
-and never grows a second copy of the collection, hashing or verification logic (the harness and
-teardown import the module for exactly that reason).
-
-    list [<comp>] [--json]          index rows for one comp, or a comp-grouped scan
-    show <comp> <key> [--json]      identity, per-target/file statuses, warnings, drift problems
-    plan <comp> <key>               what the collector would attempt now, target by target
-    verify <comp> <key> [--seal]    re-hash everything, count TODO(author); --seal closes it
-    collect <comp> <key>            retry the pull (talks to the estate; --dry-run does not)
-    archive <comp> <key>|--all      copy a finished folder out of a worktree that is going away
-
-`collect`, `archive` and `verify --seal` are the commands that change a test folder; `list` may
-rewrite the derived `index.json`. Nothing here creates, starts, stops or destroys a VM: `collect`
-is the one command that talks to the estate, and it only reads. Reports can quote credentials, so
-`show` prints paths and sha256 and never file contents.
-
-Comps resolve as `competitions/<id>` (destroy-competition.py's convention), or as any path that
-holds a `Compfile`. Exit codes follow verify-competition.py: 0 clean, 1 findings or a refusal,
-2 usage error (unknown competition or key). `show` and `plan` are views and exit 0 once they have
-printed; `verify` is the command whose exit code answers "is this folder finished?".
-"""
+"""test-artifacts.py — read, inspect and repair per-run test artifact folders."""
 
 import argparse
 import sys

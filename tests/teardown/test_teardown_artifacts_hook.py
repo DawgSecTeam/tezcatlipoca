@@ -1,17 +1,8 @@
 """Teardown collects this run's test artifacts, and does it before anything is destroyed.
 
-The ordering is the whole feature, not a detail: the engine's plan puts the
-collector (EVIDENCE) before the red01 destroy, the pre-stop and the estate
-destroy — a collector that runs one line later reads nothing and reports it as
-"absent", which is indistinguishable from a run that produced no evidence at
-all. Under the teardown object model the ordering is ALSO a plan-construction
-rule; these tests drive destroy-competition.main() end-to-end to prove the
-wiring, not just the declaration.
-
-Offline: the engine's destructive steps are patched at their owning modules
-(teardown.machinery, artifacts_ops, red_plant_ops) and the Proxmox API is a
-fake; only main()'s sequencing and the engine's policy application are under
-test.
+The ordering is the whole feature: a collector that runs one line later reads nothing and
+reports "absent", indistinguishable from a run that produced no evidence. Offline — the
+engine's destructive steps are patched at their owning modules and the Proxmox API is a fake.
 """
 
 import contextlib
@@ -47,7 +38,7 @@ def load_module(name, filename):
 destroy = load_module("destroy_competition_for_artifacts_test", "destroy-competition.py")
 
 # Bound before any test patches the module attribute: the patched name is the very function a
-# fake would otherwise call to build its base, and the recursion shows up as a RecursionError
+# fake would otherwise call to build its base, and the recursion surfaces as a RecursionError
 # swallowed by the teardown hook's warn-and-proceed handler.
 _REAL_DEFAULT_TRANSPORT = ao.default_transport
 
@@ -63,10 +54,8 @@ class _OfflinePVE:
 
 
 def _offline_api_patches(collect_log=None):
-# Patch EVERY module that can reach Proxmox at its owning module: the
-#     engine's Inventory resolves infra.client.proxmox_api; the delete primitive
-#     (ownership) imports infra.client directly. A partial patch sends the other
-#     half LIVE — the ownership guard will refuse it, but the test dials the node.
+    # Every module that can reach Proxmox, patched at its owner: a partial patch sends the
+    #     other half LIVE and the test dials the node.
     patches = [
         patch.object(infra.client, "proxmox_api", _OfflinePVE()),
         patch.object(ownership, "proxmox_api", _OfflinePVE()),
@@ -79,8 +68,8 @@ def _offline_api_patches(collect_log=None):
 
 
 def _collecting_fake(calls):
-# A collect_for_teardown stand-in that creates the folder it claims to —
-#     verify_clean demands the evidence dir exist when the step is journalled.
+    # A stand-in that creates the folder it claims to — verify_clean demands the evidence dir
+    # exist when the step is journalled.
     def fake(comp_dir, **kwargs):
         calls.append("collect")
         key, _ = alifecycle.latest_run_key(comp_dir, kwargs.get("run_id"))
@@ -127,8 +116,8 @@ class TeardownArtifactsHook(unittest.TestCase):
             patch.object(ao, "collect_for_teardown", side_effect=collect),
             patch.object(tlaloc_ops, "destroy_tlaloc_red", side_effect=red),
             ] + _offline_api_patches() + [
-            # The entry point refuses without the ambient estate identity (teardown's
-            # verify_clean needs it); this harness exercises the hook, not the refusal.
+            # The entry point refuses without the ambient estate identity (verify_clean needs it);
+            # this harness tests the hook, not the refusal.
             patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://pve.invalid:8006"}),
             patch.object(sys, "argv", argv),
         ]
@@ -163,9 +152,8 @@ class TeardownArtifactsHook(unittest.TestCase):
             self.log.append("collect")
             raise RuntimeError("estate on fire")
 
-        # The destroy is NOT blocked (both destructive steps run) — but the exit
-        # contract is honest: a crashed collection means the evidence was not
-        # archived, so the verdict is nonzero and names exactly that.
+        # The destroy is NOT blocked — but the exit contract is honest: a crashed collection means
+    # the evidence was not archived.
         with self.assertRaises(SystemExit) as ctx:
             self._main(["--yes"], collect=boom)
         self.assertTrue(ctx.exception.code)
@@ -188,9 +176,8 @@ class TeardownArtifactsHook(unittest.TestCase):
 
 
 class CrashedHarnessRecovery(unittest.TestCase):
-# The headline case: the harness died, so teardown is the only thing left that can save the
-#     run's reports. The REAL collector runs here — only the transport is faked, because a unit
-#     test must not dial red01.
+    # The headline case: a dead harness, so teardown is the only thing left that can save the
+    #     run's reports. The REAL collector runs — only the transport is faked.
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -231,7 +218,7 @@ class CrashedHarnessRecovery(unittest.TestCase):
         ao.record_phase(path, "stage_red")
 
     def _transport(self):
-    # Only red01's report exists; everything else is reachable-but-empty.
+        # Only red01's report exists; everything else is reachable-but-empty.
         transport = dict(_REAL_DEFAULT_TRANSPORT())
 
         def scp(ssh, remote, dest, timeout=120):
@@ -264,17 +251,16 @@ class CrashedHarnessRecovery(unittest.TestCase):
                   side_effect=lambda *a, **k: calls.append("estate_destroy") or
                   {"destroyed": [], "skipped": [], "refused": []}),
             patch.object(ao, "default_transport", side_effect=lambda: transport),
-            # stage_red_artifacts shells out to ssh OUTSIDE the transport dict; a
-            # test must not dial the manifest's IP (it blackholes for the full
-            # 75s subprocess timeout). Patched at its owning module.
+            # stage_red_artifacts shells out to ssh OUTSIDE the transport dict; a test must not dial
+            # the manifest's IP (it blackholes for the full 75s subprocess timeout).
             patch("artifacts_lib.lifecycle.stage_red_artifacts",
                   side_effect=lambda manifest: calls.append("stage_red")),
             patch.object(tlaloc_ops, "destroy_tlaloc_red",
                          side_effect=lambda *a, **k: calls.append("red_destroy") or
                          __import__("subprocess").CompletedProcess(["x"], 0, "", "")),
             ] + _offline_api_patches() + [
-            # The entry point refuses without the ambient estate identity (teardown's
-            # verify_clean needs it); this harness exercises recovery, not the refusal.
+            # The entry point refuses without the ambient estate identity (verify_clean needs it);
+            # this harness tests recovery, not the refusal.
             patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://pve.invalid:8006"}),
             patch.object(sys, "argv", ["destroy-competition.py", "--competition", "demo",
                                        "--yes"]),

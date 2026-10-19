@@ -13,11 +13,9 @@ from .hashing import seal_local_file
 
 
 def default_transport():
-# route name -> fetch callable. Injected so the collector is testable with no estate.
     return {"scp-jump": _scp_files, "local": _local_files, "ssh-cmd": _ssh_capture}
 
 def _ssh_options(ssh):
-# (user, host, common option args, jump option) shared by the scp and ssh channels.
     key, user, host = ssh.get("key"), ssh.get("user") or "sysadmin", ssh.get("host")
     if not host:
         raise Unreachable("no address recorded for this target")
@@ -29,19 +27,10 @@ def _ssh_options(ssh):
 
 
 def _scp_files(ssh, remote, dest_dir, timeout=120):
-# scp `remote` into dest_dir. Globs are expanded by the remote shell, so a
-#     `/var/lib/tlaloc/report*.md` pattern needs no directory listing round-trip.
-#
-#     Direct first, then through the engine jump: the control host reaches red01 either way
-#     depending on the estate, and the harness has used this two-attempt shape since the first
-#     scrim (`scrim.red_link.pull_red_snapshot`). A failed attempt's partial file is always removed —
-#     a truncated events.jsonl that looks complete is worse than a loud failure.
-#
-#     The whole route pair retries ONCE after 10s when everything failed network-side:
-#     a teardown's red01 pull died on a seconds-long "no route to host" flap
-#     on the ENGINE's jump address — reachable again before the destroy that ran next —
-#     and the red report was lost to a transient. "No such file" raises immediately: that
-#     is a real absence, not a route flap.
+    # Globs expand remote-side; a failed attempt removes its partial file — a truncated
+    # events.jsonl that looks complete is worse than a loud failure. The route pair
+    # retries once after 10s: a teardown lost the red report to a seconds-long
+    # jump-address flap. "No such file" is a real absence — it raises immediately.
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     user, host, common, jump = _ssh_options(ssh)
@@ -84,7 +73,6 @@ def _scp_files(ssh, remote, dest_dir, timeout=120):
 
 
 def _local_files(source, pattern, dest_dir):
-# Copy local files into the test folder. `pattern` is relative to the target root.
     root, dest_dir = Path(source["root"]), Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     matches = sorted(root.glob(pattern))
@@ -106,11 +94,8 @@ def _local_files(source, pattern, dest_dir):
 
 
 def _ssh_capture(ssh, cmd, dest_file, timeout=90):
-# Run a read-only command over ssh and save its stdout (red's journal, mainly).
-#
-#     Same direct-then-engine-jump shape as the file pull. There is no `scp` equivalent for a
-#     service journal, and the journal is the only record of *why* the red LLM stopped mid-event,
-#     so it is worth one command channel.
+    # Read-only commands only. No scp equivalent exists for a service journal, and the
+    # journal is the only record of why the red LLM stopped mid-event.
     dest_file = Path(dest_file)
     user, host, common, jump = _ssh_options(ssh)
     last_error = ""
@@ -132,7 +117,6 @@ def _ssh_capture(ssh, cmd, dest_file, timeout=90):
 
 
 def fetch(target, want, test_path, timeout, transport):
-# Fetch one wanted item. Returns the list of local paths written.
     if want.get("cmd"):
         fetcher = transport.get("ssh-cmd")
         if fetcher is None:

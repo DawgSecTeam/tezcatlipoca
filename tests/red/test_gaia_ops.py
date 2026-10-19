@@ -1,10 +1,4 @@
-"""gaia_ops — the Mythic install/configure step (engine side, no live C2).
-
-Every subprocess is injected, so these prove the command shapes against Gaia's
-real argparse, the credential handoff (admin password, agent password, API key),
-the callback address the payloads will dial, and the degrade-and-continue
-contract — the parts that go wrong silently on a real deploy.
-"""
+"""gaia_ops — the Mythic install/configure step (engine side, no live C2)."""
 
 import contextlib
 import sys
@@ -33,8 +27,6 @@ def comp_dir(tmp, extra=""):
 
 
 class Runner:
-    """Records argv, answers from a script, and can write Gaia's handoffs."""
-
     def __init__(self, gaia, fail_on=None, creds="mythic_admin:s3cret-pw\n",
                  box_password=None, reject_passwords=()):
         self.gaia, self.fail_on, self.creds = Path(gaia), fail_on, creds
@@ -50,8 +42,7 @@ class Runner:
             return Completed(0, f"{self.box_password}\n" if self.box_password else "")
         is_gaia = len(argv) > 2 and argv[1].endswith("gaia.py")
         sub = argv[2] if is_gaia else argv[0]
-        # fail_on names a gaia SUBCOMMAND (not any argv containing the word: the
-        # setup step installs pip requirements, which also says "install")
+        # fail_on names a gaia SUBCOMMAND exactly: the pip setup argv also says "install".
         if self.fail_on and is_gaia and argv[2] == self.fail_on:
             return Completed(1, "", f"boom {self.fail_on}")
         if sub == "install":
@@ -59,8 +50,6 @@ class Runner:
         if sub == "user":
             return Completed(0, "tlaloc:a-gent-pw\n")
         if sub == "auth":
-            # Mythic answers 403 "Authentication Failed" for a password its database
-            # does not hold (a stale handoff file after an install re-run).
             if (kwargs.get("input") or "").strip() in self.reject_passwords:
                 return Completed(1, "", "403 Authentication Failed")
             (self.gaia / ".env").write_text(
@@ -102,8 +91,7 @@ class CommandShapeTest(unittest.TestCase):
                             "--install-deps", "--install-mythic"]
 
     def test_auth_uses_the_prompt_flag_and_https(self):
-        # No -k: Gaia maps it to ssl=False (http) and Mythic serves TLS on 7443; the
-        # deploy refused a competition on a 400-HTML auth (live 2026-10-17).
+        # Regression: -k makes Gaia auth over http; Mythic serves TLS on 7443 -> 400-HTML auth.
         argv = g.auth_argv("/tmp/gaia", "10.0.0.198")
         assert argv[2:] == ["auth", "-S", "10.0.0.198", "-P", "7443",
                             "-u", "mythic_admin", "-p"]
@@ -117,7 +105,6 @@ class CommandShapeTest(unittest.TestCase):
 
 
 class HandoffTest(unittest.TestCase):
-
     def test_env_file_body_carries_the_secret_and_nothing_else_does(self):
         body = g.env_file_body("pw-1", host="10.0.0.198")
         assert f"{g.PASSWORD_ENV}=pw-1" in body and "MYTHIC_HOST=10.0.0.198" in body
@@ -128,8 +115,7 @@ class HandoffTest(unittest.TestCase):
 
 
     def test_setup_builds_the_venv_and_runs_on_it(self):
-        """Gaia's deps are not in the engine's interpreter: it gets its own venv,
-        and gaia.py runs on that interpreter once it exists."""
+        # Gaia's deps are not in the engine's interpreter: gaia.py runs on the venv python.
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "gaia"
             path.mkdir()
@@ -241,12 +227,8 @@ class PrepareTest(unittest.TestCase):
             assert result["c2"] is None and result["env"] is None
 
     def test_a_stale_creds_password_falls_back_to_the_boxs_own_env(self):
-        """An install re-run leaves the handoff file and Mythic's database disagreeing.
-
-        caught live: /auth answered 403 for the creds file's password while the
-        box's own MYTHIC_ADMIN_PASSWORD returned 200 + an access_token — the stack was
-        healthy and the step was blaming a C2 it could not log in to.
-        """
+        # Regression: an install re-run desyncs the creds handoff from Mythic's DB —
+        # fall back to the box's own MYTHIC_ADMIN_PASSWORD.
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch("time.sleep"):
                 result, _ = self._prepared(tmp, creds="mythic_admin:stale-pw\n",
@@ -270,12 +252,7 @@ class PrepareTest(unittest.TestCase):
 
 
     def test_auth_runs_before_the_agent_user_is_created(self):
-        """`auth` writes the API key the other subcommands authenticate with.
-
-        Run `user create` first and Gaia prints its auth usage and exits non-zero —
-        which is what the first live smoke reported as an argument error in
-        `gaia user create`).
-        """
+        # Ordering: `auth` writes the API key the other subcommands authenticate with.
         with tempfile.TemporaryDirectory() as tmp:
             _, runner = self._prepared(tmp)
             subs = [c["argv"][2] for c in runner.calls

@@ -1,18 +1,4 @@
-"""Repo hygiene gates: no secret-bearing file is tracked, and no env var drifts.
-
-Why this file exists: gitignore curation alone did not hold. A hand-named env backup
-(".env.<qualifier>") stayed tracked under name-based ignore rules and reached the public
-remote carrying a live API token plus box and per-team passwords. Secret-bearing files are
-therefore covered by a BLANKET rule (`.env.*`, no per-name exemptions) and this test pins
-what may be tracked, so a future rule edit cannot silently reopen the hole.
-
-The env-var half exists because the variable reference had drifted: variables the code
-reads were absent from the operator-facing reference. `estate/config.py`'s `_SPEC` is now
-that reference — the one place a config key and its env name are declared — so anything
-read outside it must be an allowlisted internal handoff.
-
-Offline and fast: reads tracked paths via `git ls-files` and scans them as text.
-"""
+"""Repo hygiene gates: no secret-bearing file is tracked, and no env var drifts."""
 
 import re
 import sys
@@ -28,45 +14,34 @@ _REPO = Path(__file__).resolve().parents[2]
 # An internal handoff key is exempt via INTERNAL_ENV below.
 _ENV_NAME_RE = re.compile(r"^(TEZ_[A-Z0-9_]+|NAKON_[A-Z0-9_]+|VULNDB_[A-Z0-9_]+)$")
 
-# Read by code but deliberately NOT user-facing config, with the reason. Keep this
-# list short and justified — it is the escape hatch, not the dumping ground. Entries
-# here are exempt from the naming standard (they are internal handoff keys) but are
-# still checked for staleness by test_internal_allowlist_has_no_dead_entries.
+# Read by code but deliberately NOT user-facing config, with the reason. Entries here are exempt
+# from the naming standard (they are internal handoff keys) but are still checked for staleness
+# by test_internal_allowlist_has_no_dead_entries.
 INTERNAL_ENV = {
-    # Internal handoff between run-agent-scrim.py and the shell/python it generates
-    # into scrim.env. Never set by an operator by hand. (MY_PW is also written there
-    # but is only ever consumed by the generated shell, never read by Python, so it
-    # is deliberately absent here — the staleness check below would flag it.)
-    # Internal handoff within one process: deploy_lib/estate_inputs.py marks its
-    # own DEFAULT export so the preflight cannot read it as an operator-set address.
+    # scrim.env handoff written by run-agent-scrim.py. MY_PW is written there too but only ever
+    # consumed by the generated shell, so the staleness check would flag it.
     "TEZ_ENGINE_MGMT_IP_IS_DEFAULT": "deploy_lib/estate_inputs.py default marker (same process)",
     "TEZ_ENGINE_MGMT_IP_IS_AUTO_SELECTED": "deploy_lib/prepare.py auto-selected marker (same process)",
     "ENGINE_IP": "scrim.env handoff written by run-agent-scrim.py",
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
     "JAR": "scrim.env handoff written by run-agent-scrim.py",
-    # tezcatlipoca-dashboard writes the path of a per-run control file into the driver's
-    # environment; the file's existence is the "hold at the next phase boundary" request.
-    # Internal run-queue handoff, never operator configuration.
+    # The file's existence is the "hold at the next phase boundary" request.
     "TEZ_PAUSE_FILE": "tezcatlipoca-dashboard -> deploy_lib/pause.py boundary hold",
     # tests/conftest.py sets it before any test import; drivers skip .env when it is set
     # so the offline suite cannot inherit the developer's live estate identity.
     "TEZ_TEST_OFFLINE": "tests/conftest.py -> driver .env guard",
-    # The dashboard's own service env, inherited by every driver child it starts, so an
-    # orphan reclaim can retire its range over /api/ranges/retire. Internal run-queue
-    # handoff, never operator configuration.
+    # Inherited by every driver child the dashboard starts, so an orphan reclaim can retire its
+    # range over /api/ranges/retire.
     "TEZ_DASHBOARD_HOST": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire call",
     "TEZ_DASHBOARD_PORT": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire call",
     "TEZ_DASHBOARD_TOKENS": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire bearer",
-    # The portal container's ops-sync handoff: the run queue writes them into the
-    # portal's env, and portal_ops/ops_sync read them directly (container-side).
+    # The portal container's ops-sync handoff: portal_ops/ops_sync read them container-side.
     "TEZ_OPS_URL": "tezcatlipoca-dashboard -> portal ops sync",
     "TEZ_OPS_TOKEN": "tezcatlipoca-dashboard -> portal ops sync bearer",
-    # artifacts_lib/seal.py seal step: default author attribution from the OS user, not
-    # operator configuration.
+    # Default author attribution from the OS user, not operator configuration.
     "USER": "OS username, recorded as the default write-up author on seal",
-    # Student portal container env: written by portal_ops into /opt/tez-portal/.env (or set
-    # by portal/compose.yaml defaults) and read only inside the container by portal/app.py.
-    # Operators configure the portal through the [portal] profile, never these.
+    # Written by portal_ops into /opt/tez-portal/.env (or portal/compose.yaml defaults) and read
+    # only inside the container by portal/app.py; operators configure the portal via [portal].
     "PORTAL_SECRET_KEY": "portal container env (portal_ops -> /opt/tez-portal/.env)",
     "PORTAL_CONFIG": "portal container env (path default /config/portal.json)",
     "PORTAL_EVENT_CONF": "portal container env (path default /config/event.conf)",
@@ -130,10 +105,7 @@ class NoTrackedSecrets(unittest.TestCase):
 
 
     def test_infrastructure_status_is_gitignored_and_untracked(self):
-    # The estate's ground truth (endpoints, node names, tokens-by-reference, vmid maps,
-    # live state) lives in infrastructure-status.md, which every tracked doc points at
-    # instead of copying. Asserting the ignore rule alone is not enough: a force-add has
-    # defeated a .gitignore line in this repo before, so check the tracked set too.
+    # A force-add has defeated a .gitignore line in this repo before, so check the tracked set too.
         r = subprocess.run(
             ["git", "check-ignore", "-q", "infrastructure-status.md"],
             cwd=_REPO, capture_output=True,
@@ -174,17 +146,9 @@ class NoTrackedSecrets(unittest.TestCase):
         self.assertEqual(offenders, [], f"private key material tracked: {offenders}")
 
     def test_no_test_artifact_is_tracked(self):
-    # `competitions/*/.automated-tests/` holds box-pulled evidence, and it stays untracked.
-#
-#         These reports quote flags, credentials and inject answers by construction (the red report
-#         even ships a separate 0600 credlist table), and a `KEY=<16+ chars>` line in one of them
-#         would be caught by the pattern net above while a password quoted in prose would not —
-#         the net is a shape matcher, not a safety guarantee. The decision is therefore "ignored,
-#         with no publish path": a recommendation leaves this folder by being written into
-#         docs/known-issues.md or a fixes plan, never by copying the artifact into git.
-#
-#         A .gitignore line alone is not enough here — a force-add has defeated one before —
-#         so this asserts the tracked set directly rather than trusting the rule.
+    # These reports quote flags, credentials and inject answers by construction, and the secret
+    # net is a shape matcher, not a safety guarantee — so the decision is "ignored, with no
+    # publish path". A force-add has defeated a .gitignore line before, so assert the tracked set.
         offenders = [f for f in _tracked_files() if "/.automated-tests/" in f]
         self.assertEqual(
             offenders, [],
@@ -198,18 +162,11 @@ class NoTrackedSecrets(unittest.TestCase):
         self.assertEqual(r.returncode, 0, "competitions/*/.automated-tests/ is not gitignored")
 
     def test_no_runtime_state_is_tracked_in_comp_dirs(self):
-    # A competition directory ships its AUTHORING inputs, never its runtime state.
-#
-#         Runtime files carry this deploy's secrets (teams.json/credentials.txt are the
-#         generated passwords, estate-state.json holds every one of them plus the run
-#         identity) — and a comp dir that ships them invites a later deploy on another
-#         host to adopt them as its own (wrong run id, wrong credentials, preflight
-#         refusing on a phantom identity). Same reason as the artifacts rule above,
-#         checked against the tracked set rather than the ignore rules.
-#
-#         Tracked on purpose (and NOT matched here): Compfile, boxes.json,
-#         box_services.json, box_vulns.json, domain_roles.json, users.json, packet
-#         inputs, injects/, pfsense seed configs.
+    # A competition directory ships its AUTHORING inputs, never its runtime state. Runtime files
+    # carry this deploy's secrets (teams.json/credentials.txt are the generated passwords) and
+    # invite a later deploy on another host to adopt them as its own. Tracked on purpose and NOT
+    # matched here: Compfile, boxes.json, box_services.json, box_vulns.json, domain_roles.json,
+    # users.json, packet inputs, injects/, pfsense seed configs.
         runtime = ("estate-state.json", "teams.json", "credentials.txt", "nakon-config.json")
         offenders = []
         for f in _tracked_files():
@@ -267,10 +224,7 @@ class EnvVarStandard(unittest.TestCase):
         )
 
     def test_env_names_follow_the_naming_standard(self):
-    # New variables must be TEZ_* (our config) or vendored.
-#
-#         INTERNAL_ENV members are exempt: they are handoff keys between this repo's own
-#         processes, not operator-facing configuration.
+    # New variables must be TEZ_* (our config) or vendored; INTERNAL_ENV handoff keys are exempt.
         bad = sorted(
             n for n in self.used
             if n not in INTERNAL_ENV and not _ENV_NAME_RE.match(n)

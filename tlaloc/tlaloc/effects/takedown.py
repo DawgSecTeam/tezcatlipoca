@@ -1,25 +1,4 @@
-"""takedown — the pressure core: stop a scored service, optionally so it cannot
-come back without blue's investigation.
-
-One effect, five mechanisms, both OSes. The mechanism ladder is the ROE's, not
-this module's: `check()` asks `ctx.policy.allowed_impact_modes()` and the ladder
-rejects anything above the tier in force. Mechanism ranks and the ladder live in
-`tlaloc/policy.py` — never re-declare them here.
-
-Every mechanism is a MOVE or a COPY, never a delete:
-
-* ``stop``        — `systemctl stop` (blue restarts it, one command)
-* ``stop_mask``   — stop + mask (blue must unmask first)
-* ``stop_rename`` — stop + `mv <ExecStart binary> <bin>.tlaloc-off`
-* ``stop_break_config``  — stop + back the config up to `<conf>.tlaloc-bak`
-                            and append an invalid line
-* ``stop_rename_config`` — both, so undoing one alone does not bring it back
-
-The hard mechanisms PROVE the damage by trying to start the unit; a mechanism
-that does not hold degrades to a mask and reports ``did not hold`` — a takedown
-that is not real must never enter the impact ledger (blue's scoreboard is the
-judge, and the verdict reads the ledger).
-"""
+"""takedown — stop a scored service with a ladder-gated mechanism; every mechanism is a MOVE or a COPY, never a delete."""
 
 import re
 import shlex
@@ -27,7 +6,6 @@ import shlex
 from ..errors import PolicyError
 from .base import Effect, Result, can_root, register, root_cmd
 
-# Windows is admin-equivalent without a root label (see _windows_admin).
 _UNIT_RE = re.compile(r"^[a-zA-Z0-9@._\\-]+$")
 
 HARD_MODES = ("stop_rename", "stop_break_config", "stop_rename_config")
@@ -36,10 +14,8 @@ TAKEDOWN_MODES = ("stop", "stop_mask") + HARD_MODES
 BIN_SUFFIX = ".tlaloc-off"
 CONF_SUFFIX = ".tlaloc-bak"
 
-# unit -> config files whose corruption makes the daemon refuse to start. The
-# binary comes from the unit's own ExecStart (works for anything); a config path
-# cannot be derived that way, so the services this range scores are listed and
-# anything unknown degrades to rename-only.
+# Config paths cannot be derived the way ExecStart is, so scored services are
+# listed; unknown services degrade to rename-only.
 SERVICE_CONFS = {
     "nginx": ("/etc/nginx/nginx.conf",),
     "apache2": ("/etc/apache2/apache2.conf",),
@@ -59,10 +35,8 @@ SERVICE_CONFS = {
     "splunk": ("/opt/splunk/etc/splunk-launch.conf",),
 }
 
-# intel carries package-style slugs while the installed unit is often named
-# differently (app01 scores "apache" while its unit is apache2). Probed in
-# order after the exact name: first active candidate wins, else first with a
-# unit file at all.
+# Intel carries package slugs, not installed unit names (apache -> apache2):
+# first active alias wins, else first with a unit file.
 UNIT_ALIASES = {
     "apache": ("apache2", "httpd"),
     "httpd": ("httpd", "apache2"),
@@ -70,9 +44,8 @@ UNIT_ALIASES = {
     "mysql": ("mariadb",),
     "mariadb": ("mysql",),
     "exim": ("exim4",),
-    # roundcube is an apache vhost — the scored Web check dies with the vhost's
-    # server. splunk's scored :8000 is lighttpd on this range. telnet is
-    # inetd-based (no telnet.service), so the listener dies with the superserver.
+    # roundcube is an apache vhost, splunk's scored :8000 is lighttpd on this
+    # range, and telnet is inetd-based (no telnet.service): they die with the daemon.
     "roundcube": ("apache2", "httpd"),
     "splunk": ("lighttpd", "splunk"),
     "telnet": ("openbsd-inetd", "inetutils-inetd", "xinetd", "telnetd"),
@@ -84,14 +57,13 @@ _SSH_UNITS = ("ssh", "sshd", "ssh.service", "sshd.service")
 _PORT_LISTEN_CHECK = ("if (Get-NetTCPConnection -LocalPort %d -State Listen "
                       "-ErrorAction SilentlyContinue) {'LISTENING'} else {'CLOSED'}")
 
-# Scored Windows "services" are nakon task slugs, not service names. Ordered:
-# the FIRST matching slug wins, so "IIS FTP" must sort before "iis".
+# Slugs come from nakon, matched as substrings; first match wins, so entry
+# order is load-bearing.
 WINDOWS_EFFECTS = [
     ("winrm", ("Stop-Service WinRM -Force -ErrorAction SilentlyContinue; "
                "Set-Service WinRM -StartupType Disabled",
                _PORT_LISTEN_CHECK % 5985, "winrm", "CLOSED")),
-    # SMB :445 is hosted by the kernel srv2 driver and survives a LanmanServer
-    # stop — block it with a rule instead.
+    # :445 is held by the kernel srv2 driver and survives a LanmanServer stop — block instead.
     ("smb", ("Remove-NetFirewallRule -Name tlaloc-impact -ErrorAction SilentlyContinue; "
              "New-NetFirewallRule -Name tlaloc-impact -DisplayName 'blk smb' "
              "-Direction Inbound -LocalPort 445 -Protocol TCP -Action Block "
@@ -109,14 +81,12 @@ WINDOWS_EFFECTS = [
     ("ftp", ("Stop-Service ftpsvc -Force -ErrorAction SilentlyContinue; "
              "Set-Service ftpsvc -StartupType Disabled",
              "(Get-Service ftpsvc).Status", "ftp(ftpsvc)", "Stopped")),
-    # IIS: http.sys keeps :80 bound even with W3SVC stopped (it answers 503,
-    # which fails the scored 200-check) — the honest postcheck is service status.
+    # http.sys keeps :80 bound (503) after W3SVC stops, so the postcheck is service status.
     ("iis", ("Stop-Service W3SVC -Force -ErrorAction SilentlyContinue; "
              "Stop-Service WAS -Force -ErrorAction SilentlyContinue",
              "(Get-Service W3SVC).Status", "iis(w3svc)", "Stopped")),
-    # ADDS/LDAP: block :389. NEVER stop NTDS — on a DC the Administrator account
-    # authenticates against the AD database NTDS serves, so stopping it locks
-    # out our own foothold.
+    # NEVER stop NTDS: on a DC the Administrator authenticates against the AD
+    # database it serves — stopping it locks out our own foothold. Block :389.
     ("adds", ("Set-NetFirewallProfile -All -Enabled True -ErrorAction SilentlyContinue; "
               "Remove-NetFirewallRule -Name tlaloc-ldap -ErrorAction SilentlyContinue; "
               "New-NetFirewallRule -Name tlaloc-ldap -DisplayName 'blk ldap' "
@@ -133,8 +103,7 @@ WINDOWS_EFFECTS = [
 
 
 def windows_admin(fh):
-    """Administrator on Windows is admin-equivalent: no privesc exists for the
-    impact paths."""
+    """Windows Administrator is admin-equivalent: no privesc exists for the impact paths."""
     return bool(can_root(fh) or str((fh or {}).get("user", "")).lower()
                 in ("administrator", "admin"))
 
@@ -346,11 +315,6 @@ class Takedown(Effect):
 
 
 def restore_recipe(unit, mode, renamed=None, conf=None):
-    """The undo recipe recorded for the verdict / organizer artifact.
-
-    Every mechanism is a move or a copy, so the undo is derivable from the box
-    alone; naming the artifacts makes it a one-liner for whoever restores.
-    """
     steps = []
     if mode in ("stop", "stop_mask"):
         steps.append(f"systemctl unmask {unit}; systemctl start {unit}")

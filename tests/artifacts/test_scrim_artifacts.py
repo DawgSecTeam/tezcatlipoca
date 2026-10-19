@@ -1,25 +1,4 @@
-"""The scrim harness writes into its run's per-run test folder (artifacts_lib/artifacts_ops.py).
-
-Each test here pins one invariant of the harness half of the artifact contract:
-
-  INV1  the default run dir IS `competitions/<comp>/.automated-tests/<key>`, and a resume
-        resolves to the same folder (no second key, no forked evidence);
-  INV2  `--run-dir` still works, with `paths.run_dir` recorded so the collector finds the
-        evidence outside the test folder;
-  INV3  `ensure_test(...)` runs at start with the comp's identity, stashed on `args.test_dir`;
-  INV4  `record_phase` mirrors into test.json and keeps writing run.json exactly as before;
-  INV5  red's and blue's identity is recorded when it is known, from the same ssh helper
-        `_red_ssh_ctx` uses (bad-auto's config.yaml is a rewritten singleton at teardown time);
-  INV6  teardown collects BEFORE the red01 destroy, reports are best-effort, finalize runs
-        last and on the --keep-range path too;
-  INV7  the blue submission globs match what the prompt actually asks for (`sub.md`);
-  INV8  the engine capture is COPIED into evidence/engine/ (scrim-report.py reads the original);
-  INV9  re-recording agents/paths on a resume merges instead of erasing;
-  INV10 blue is told to write the REPORT.md the collector looks for.
-
-Offline: no network, no ssh, no Proxmox. The collector, `badauto`, and the engine are patched
-wherever the point of the test is sequencing; file placement is exercised for real in tmp dirs.
-"""
+"""The scrim harness writes into its run's per-run test folder (artifacts_lib/artifacts_ops.py)."""
 
 import contextlib
 import importlib.util
@@ -57,7 +36,6 @@ BOXES = [{"name": "dc01", "last_octet": 2, "template": "base-windows-server"},
 
 
 def make_comp(root, *, name="demo", run_id=RUN_ID):
-# A competition dir with just the files the harness reads at start.
     comp = Path(root) / "competitions" / name
     comp.mkdir(parents=True)
     (comp / "Compfile").write_text(f"name {name}-fixture\nscenario x\n")
@@ -78,19 +56,14 @@ def make_args(comp, **over):
 
 class TmpCase(unittest.TestCase):
     def setUp(self):
-        # `_red_vm_still_exists` asks the real cluster (infra.client.live_vmids): with a
-        # resolvable vmid a live red01 made teardown assert "STILL PRESENT" and fail
-        # tests that are about ordering. Pin it for every test in this file.
+        # Pin `_red_vm_still_exists`: it asks the real cluster, and a live red01 made
+        # teardown assert "STILL PRESENT" in tests that are about ordering.
         #
         # enterContext(), not addCleanup(patcher.start): the latter registered `patcher.start`
-        # as the cleanup callable, so each setUp applied a patch that was never stopped — the
-        # real `_red_vm_still_exists` stayed replaced for the whole rest of the process, which
-        # is both a masked-coverage hole and why an unrelated module's assertions on the real
-        # behavior failed only in a full-suite run (caught live).
+        # as the cleanup, so every setUp applied a patch nothing ever stopped.
         self.enterContext(mock.patch.object(teardown_stage, "_red_vm_still_exists",
                                             lambda *a, **k: False))
-        # These tests assert teardown ORDERING and collection; they must not dial
-        # red01 (a real ssh attempt per case turned a 1s file into 170s).
+        # These tests must not dial red01 (a real ssh per case turned a 1s file into 170s).
         self.enterContext(mock.patch.object(red_link, "pull_red_state", lambda *a, **k: []))
         self.enterContext(mock.patch.object(red_link, "start_red_director",
                                             lambda *a, **k: True))
@@ -100,7 +73,6 @@ class TmpCase(unittest.TestCase):
         self.comp = make_comp(self.root)
 
     def resolve(self, args, comp=None):
-    # resolve_run_dir with the node/endpoint env a deploy would have set.
         with mock.patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve",
                                           "TEZ_PROXMOX_ENDPOINT": "https://203.0.113.20:8006"}):
             return test_folder.resolve_run_dir(comp or self.comp, args)
@@ -119,7 +91,6 @@ class RunDirResolution(TmpCase):
         self.assertEqual(args.test_dir, str(test_dir))
         for sub in ao.EVIDENCE_DIRS:
             self.assertTrue((test_dir / "evidence" / sub).is_dir())
-        # the collector's view of the same folder: harness evidence is right here
         targets = ao.plan_targets(ao.load_manifest(test_dir), comp_dir=self.comp)
         harness = next(t for t in targets if t["name"] == "harness")
         self.assertEqual(harness.get("root"), str(test_dir))
@@ -127,11 +98,8 @@ class RunDirResolution(TmpCase):
 
 
     def test_untagged_comp_gets_one_stable_key(self):
-    # The untagged fallback is stable per deploy AND per run.
-#
-    #         Stable: a resume returns to the folder its first attempt made. Per run: a
-    #         second fresh run gets its own folder, so one run's REPORT.md can never sit
-    #         next to another's (the evidence-mixing bug).
+    # INV1: the untagged key is stable per deploy AND per run — a resume returns to its own
+    # folder, a second fresh run gets its own, so one run's evidence never sits beside another's.
         comp = make_comp(self.root, name="legacy", run_id=None)
         first_run, first_test = self.resolve(make_args(comp), comp=comp)
         self.assertTrue(first_test.name.startswith("untagged-"))
@@ -147,16 +115,13 @@ class RunDirResolution(TmpCase):
 
     def test_resume_resolves_to_the_same_folder(self):
         first_run, first_test = self.resolve(make_args(self.comp))
-        # a live run leaves its clock and manifest in the folder before the driver dies
         (first_run / "T0.txt").write_text(json.dumps({"t0": 1000.0, "duration_min": 90}))
         (first_run / "run.json").write_text(json.dumps({"phase": "event", "t0": 1000.0}))
-        # the --resume-event call: a fresh args object, no --run-dir
         second_run, second_test = self.resolve(make_args(self.comp, resume_event=True))
         self.assertEqual(second_run, first_run)
         self.assertEqual(second_test, first_test)
         folders = sorted(p.name for p in (self.comp / ao.DIRNAME).iterdir() if p.is_dir())
         self.assertEqual(folders, [RUN_ID], "a resume must not mint a second key")
-        # ...but a second RUN does, which is what keeps two runs' evidence apart
         third_run, third_test = self.resolve(make_args(self.comp))
         self.assertNotEqual(third_test, first_test)
         self.assertEqual(third_run, third_test)
@@ -182,7 +147,7 @@ class PhaseMirror(TmpCase):
         args = make_args(self.comp, keep_range=True)
         run_dir, test_dir = self.resolve(args)
         run_manifest.record_phase(run_dir, args, "stage_red")
-        man = run_manifest.load_manifest(run_dir)  # run.json, unchanged in shape
+        man = run_manifest.load_manifest(run_dir)
         self.assertEqual(man["phase"], "stage_red")
         self.assertIsNone(man["t0"])
         self.assertTrue(man["keep_range"])
@@ -202,10 +167,8 @@ class PhaseMirror(TmpCase):
 
 
 class KeepTemplates(TmpCase):
-# INV11: --keep-templates reaches run_terminal_teardown as full=False, and the intent
-# survives a resume. Without the first, a practice run's templates die and the next run
-# silently rebuilds them; without the second, a resume drops the intent and the exact
-# artifacts the practice verified are destroyed by the run that was asked to keep them.
+# INV11: --keep-templates reaches run_terminal_teardown as full=False and survives a resume —
+# otherwise the next run silently rebuilds, or destroys, the artifacts the practice verified.
 
     def _comp_with_lineup(self):
         (self.comp / "teams.json").write_text(json.dumps({"team1": {"identifier": 1}}))
@@ -221,7 +184,7 @@ class KeepTemplates(TmpCase):
     def test_keep_templates_tears_down_the_range_without_the_templates(self):
         comp = self._comp_with_lineup()
         call = self._range_teardown(make_args(comp, keep_templates=True))
-        self.assertEqual(call.args[0], comp)          # the comp dir it resolved to
+        self.assertEqual(call.args[0], comp)
         self.assertFalse(call.kwargs["full"])
 
     def test_default_teardown_is_still_full(self):
@@ -231,15 +194,13 @@ class KeepTemplates(TmpCase):
         args = make_args(self.comp)
         run_manifest.resume_intent(args, {"keep_templates": True})
         self.assertTrue(args.keep_templates)
-        # and the recorded intent is what a resume reads back
         run_manifest.record_phase(self.root, args, "teardown")
         self.assertTrue(run_manifest.load_manifest(self.root)["keep_templates"])
 
 
 class EvidenceDoneFollowsTheCollection(TmpCase):
-# A collection that never produced a record must not journal the artifact step done — the plan's
-# own artifact step is the retry, and the destroy that follows makes a second attempt impossible.
-# red01's absence proof is independent of that outcome and is journalled either way.
+# A collection that never produced a record must not journal the artifact step done: the destroy
+# that follows makes a second attempt impossible. red01's absence proof is journalled either way.
 
     def _stage(self, collection):
         args = make_args(self.comp)
@@ -273,9 +234,8 @@ class AgentIdentity(TmpCase):
 
     def setUp(self):
         super().setUp()
-        # A fake repo root, so the ssh helper reads THIS run's files without
-        # ever touching the real repo, the sibling bad-auto, or the network.
-        # red01's address lives in the competition's own recorded identity.
+        # A fake repo root so the ssh helper reads THIS run's files without the real repo,
+        # the sibling bad-auto, or the network.
         self.repo = self.root
         from estate import state as estate_state
         estate_state.write_flat(self.comp, {"red": {"vmid": 999, "ip": "10.0.0.199"}})
@@ -324,8 +284,7 @@ class AgentIdentity(TmpCase):
                                   lambda *a, **k: ["192.168.101.2", "192.168.102.2"]), \
                 mock.patch("scrim.clean_trails.clean_trails", lambda *a, **k: None), \
                 mock.patch.object(red_link, "start_red_director", lambda *a, **k: None):
-            # creds must be real-shaped: routed red runs the pre-T0 reachability gate,
-            # which reads ENGINE_IP/ADMIN_PW (mocked run answers with PASS lines)
+            # creds must be real-shaped: the pre-T0 reachability gate reads ENGINE_IP/ADMIN_PW
             red_stage.stage_red(args, self.comp, {"ENGINE_IP": "203.0.113.20",
                                               "ADMIN_PW": "pw"}, run_dir)
         red = ao.load_manifest(test_dir)["agents"]["red"]
@@ -335,7 +294,7 @@ class AgentIdentity(TmpCase):
         self.assertEqual(red["node"], "pve")
         spec, _common = red_link._red_ssh_spec(args)
         self.assertEqual(red["ssh"], spec)
-        # the collector's red target is live and dials EXACTLY this spec, not config.yaml
+        # the collector's red target dials EXACTLY this spec, not config.yaml
         targets = ao.plan_targets(ao.load_manifest(test_dir), comp_dir=self.comp)
         red_target = next(t for t in targets if t["name"] == "red01")
         self.assertEqual(red_target["ssh"], spec)
@@ -352,7 +311,7 @@ class TeardownCollection(TmpCase):
         super().setUp()
         self.args = make_args(self.comp, run_dir=None, competition="demo")
         self.run_dir, self.test_dir = self.resolve(self.args)
-        self.args.run_dir = str(self.run_dir)  # what main() sets before teardown
+        self.args.run_dir = str(self.run_dir)
         self.calls = []
         self.warnings = []
 
@@ -379,9 +338,7 @@ class TeardownCollection(TmpCase):
             # the range teardown is in-process now: the label records the seam
             mock.patch.object(teardown_stage, "run_range_teardown",
                               side_effect=lambda *a, **k: self.calls.append("destroy-competition")),
-            # this scenario is a run that DID stage red (a red01 exists to destroy). A run
-            # that staged no red is skipped outright by teardown_red — covered in
-            # the teardown suite
+            # this scenario is a run that DID stage red (a red01 exists to destroy)
             mock.patch.object(teardown_stage, "_manifest_red_vmid", lambda *a, **k: 999),
             mock.patch("red.tlaloc_ops.destroy_tlaloc_red",
                        side_effect=lambda *a, **k: self.calls.append("red destroy") or
@@ -431,8 +388,8 @@ class TeardownCollection(TmpCase):
 
 
     def test_interaction_md_reaches_the_verdict_ingest_reads(self):
-    # The bridge that makes the ordering useful: scrim-report writes <run_dir>/, ingest
-    #         reads <test_dir>/evidence/harness/ — the same place the collector would have put it.
+    # The bridge that makes the ordering useful: scrim-report writes <run_dir>/, ingest reads
+    # <test_dir>/evidence/harness/ — the same place the collector would have put it.
         (self.run_dir / "INTERACTION.md").write_text(
             "# INTERACTION — demo\n\n## Verdict\n\n"
             "**GREEN** — interaction score 11; gates 9 pass / 1 fail / 3 n/a\n")
@@ -464,7 +421,6 @@ class Finalize(TmpCase):
         super().setUp()
         self.args = make_args(self.comp, run_dir=None, competition="demo")
         self.run_dir, self.test_dir = self.resolve(self.args)
-        # main() sets run_dir before run_event_and_finish; the harness records its stages there
         self.args.run_dir = str(self.run_dir)
         self.calls = []
 
@@ -475,8 +431,7 @@ class Finalize(TmpCase):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     def test_finalize_runs_last_on_the_keep_range_path(self):
-        # this scenario is a run that DID stage red (a red01 exists to destroy); a run that
-        # staged no red skips `red destroy` entirely (tests/teardown)
+        # this scenario is a run that DID stage red (a red01 exists to destroy)
         self.args.keep_range = True
         with mock.patch.object(event_run, "stage_run", lambda *a: self.calls.append("stage_run")), \
                 mock.patch.object(evidence, "stage_capture",
@@ -499,7 +454,7 @@ class Finalize(TmpCase):
         self.assertIsNone(failure)
         self.assertEqual(self.calls[-1], "finalize")
         self.assertIn("red destroy", self.calls)
-        self.assertNotIn("destroy-competition", self.calls)  # --keep-range kept the range
+        self.assertNotIn("destroy-competition", self.calls)
         self.assertLess(self.calls.index("red destroy"), self.calls.index("finalize"))
 
 
@@ -511,11 +466,11 @@ class CaptureRegressions(TmpCase):
         run_dir = self.root / "run"
         workdir = run_dir / "blue-team1"
         workdir.mkdir(parents=True)
-        (workdir / "sub.md").write_text("## deliverable\n")       # what the prompt asks for
+        (workdir / "sub.md").write_text("## deliverable\n")
         (workdir / "sub.txt").write_text("notes\n")
         (workdir / "deliverable-notes.md").write_text("not a submission\n")
         (workdir / "LOG.md").write_text("# log\n")
-        (run_dir / "blue-team2").mkdir()                          # no files: skipped
+        (run_dir / "blue-team2").mkdir()
         ev = run_dir / "evidence"
         ev.mkdir()
         written = evidence.capture_blue_evidence(run_dir, ev, 2)
@@ -560,7 +515,7 @@ class BluePrompt(TmpCase):
         args = SimpleNamespace(competition="demo", teams=1, run_dir=str(self.run_dir),
                                blue_base_url="https://openrouter.ai/api/v1",
                                blue_model="m", reasoning_effort="minimal")
-        _run_dir, test_dir = self.resolve(args)  # main() resolves before stage_blues
+        _run_dir, test_dir = self.resolve(args)
         with mock.patch.object(core, "REPO", self.root), \
                 mock.patch.object(endpoints, "api_key", lambda *a, **k: "k"):
             blue_agent.stage_blues(args, self.comp, self.run_dir, self.creds, 0.0)
@@ -574,12 +529,9 @@ class BluePrompt(TmpCase):
 
 
 class FireTest(TmpCase):
-# The fire test, with the box and the scoreboard scripted (no SSH, no engine).
-#
-#     Pins three behaviors the first scrims bought the hard way: the residue guard
-#     (an aborted earlier run can leave the unit down — restore BEFORE testing), the
-#     watched row (web01-<display>, not "first web01*"), and agreement polling (probe and
-#     scoreboard must agree within the deadline, not one stale sample).
+# The fire test, with the box and the scoreboard scripted (no SSH, no engine): pins the residue
+# guard (an aborted earlier run can leave the unit down), the watched row (web01-<display>, not
+# "first web01*"), and agreement polling (probe and scoreboard agree, not one stale sample).
 
     def setUp(self):
         super().setUp()
@@ -613,8 +565,7 @@ class FireTest(TmpCase):
         return runner
 
     def _scoreboard(self, downs):
-    # parsed_status handing out one row-set per poll: `downs` says whether
-    #         web01-http is down on each successive poll; exhausted -> all green.
+    # one row-set per poll: `downs` says whether web01-http is down on each successive poll
         seq = [[{"service": "web01-ssh", "up": True},
                 {"service": "web01-http", "up": not d}] for d in downs]
 
@@ -624,8 +575,8 @@ class FireTest(TmpCase):
         return parsed
 
     def _run(self, states, downs, codes):
-    # Run the fire test on a FAKE clock: sleep is a no-op and each time.time()
-    #         call advances 30s, so the deadline loops terminate after a few polls.
+    # Run the fire test on a FAKE clock: sleep is a no-op and each time.time() call advances 30s,
+    # so the deadline loops terminate after a few polls.
         clock = {"t": 0.0}
 
         def fake_time():
@@ -658,14 +609,13 @@ class FireTest(TmpCase):
     def test_pre_existing_outage_is_restored_before_the_stop(self):
         self._run(["inactive", "active", "active"], [True], ["000", "200"])
         self.assertTrue(any("pre-existing outage" in l for l in self.logs))
-        # the unmask/start came before the stop
         self.assertLess([i for i, c in enumerate(self.sudo_calls) if "start" in c][0],
                         [i for i, c in enumerate(self.sudo_calls) if "stop" in c][0])
 
     def test_unrestorable_outage_aborts_before_the_stop(self):
         with self.assertRaises(RuntimeError) as raised:
-            # every is-active poll answers inactive; time.time advances 30s per call so
-            # the guard's bounded loop terminates after a handful of polls
+            # every is-active poll answers inactive; time.time advances 30s per call so the
+            # guard's bounded loop terminates
             clock = {"t": 0.0}
 
             def fake_time():

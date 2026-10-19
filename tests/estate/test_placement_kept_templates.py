@@ -1,12 +1,4 @@
-"""Kept templates are not vmid collisions.
-
-`--keep-templates` / `destroy-competition.py --teams-only` leave this competition's engine
-template and goldens on the node so the next deploy can adopt them (or rebuild them when the
-node's `tezcatlipoca-m4 hash=` stamp no longer matches). The placement probe's quick veto
-counted those vmids as collisions, so the node became ineligible for the very run the templates
-were kept for and the deploy died at `no eligible node for team(s) …` before it could reuse
-anything (caught live).
-"""
+"""Kept templates are not vmid collisions."""
 
 import os
 import unittest
@@ -77,33 +69,22 @@ class ProbeKeptTemplates(unittest.TestCase):
         self.assertFalse(probe["ok"])
 
     def test_another_competitions_range_still_collides(self):
-        # The template-slot exemption is not a licence to build over a foreign range: a VM
-        # carrying another competition's tag on our slot refuses, even mid-build.
+        # the template-slot exemption is not a licence to build over a foreign range
         probe = self._probe([_vm(GOLDENS[0], template=0, status="running",
                                  tags="tezcatlipoca;comp-someone-else;run-abc123")])
         self.assertEqual(probe["collisions"], [GOLDENS[0]])
 
-
     def test_our_own_dead_template_attempt_is_not_a_collision(self):
-        # A clone whose task failed before the tag PUT wears the base image's own
-        # `cloud-init;template` tags. Phase 2 adopts and rebuilds it, but the probe refused
-        # the node over it, so the deploy could never clean up its own wreckage
-        # (caught live "vmid collisions: [2340]").
+        # a clone that died before the tag PUT wears the base image's own
+        # `cloud-init;template` tags; phase 2 adopts and rebuilds it
         probe = self._probe([_vm(ET, template=0, tags="cloud-init;template",
                                  name="engine-template")])
         self.assertEqual(probe["collisions"], [])
         self.assertTrue(probe["ok"], probe["reasons"])
 
 
-
 class GoldenRebuildAdoption(unittest.TestCase):
-    """A drifted golden kept from an EARLIER run must still be rebuildable.
-
-    a real run died in phase 4: the golden's node stamp no longer matched, the
-    gate went to rebuild it, and the ownership proof refused — the kept template carries the
-    PREVIOUS run's tag while the reclaim tag falls back to this run's id. Adoption (the path a
-    REUSED engine template already takes) makes the destroy legitimate.
-    """
+    """A drifted kept golden carries the previous run's tags; adoption legitimises its destroy."""
 
     def test_adoption_requires_our_comp_tag_and_the_golden_marker(self):
         def api(cfg):

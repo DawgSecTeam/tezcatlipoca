@@ -1,25 +1,4 @@
-"""Seeding: assume-breach as a pipeline stage, not loop logic.
-
-`assume_breach: full` means red is ALREADY inside when the event starts — the
-doctrine the club grades red behaviour against. Seeding is therefore a stage of
-the deploy pipeline (run after the clones are up and before T0), and it runs
-through the SAME effect registry and gates as the live loop: dry-runnable,
-re-runnable, and unable to do anything the live loop could not.
-
-Depth tiers (per box, in order):
-
-    0  access only          (foothold via known creds)
-    1  + escalation         (root/admin path)
-    2  + channel            (C2 implant, verified by callback)
-    3  + persistence/evasion (one persistence family + one evasion touch)
-
-`assume_breach: light` = channel only (a foothold is established if needed, but
-nothing else is planted). `off` = cold start, practice only.
-
-Every box's record lands in `world.meta["seed"][ip]` (resumable), and the run
-writes `competitions/<id>/red/manifest.json` — what is planted where, with the
-restore recipe — which `red-verdict`, destroy and the organizer report consume.
-"""
+"""Seeding: assume-breach as a deploy pipeline stage, planted through the same effects.execute() path and gates as the live loop."""
 
 import json
 from pathlib import Path
@@ -29,13 +8,11 @@ from .state.schema import atomic_write, now_iso
 
 DEPTH_STAGES = ("access", "escalate", "channel", "persist")
 
-# One evasion touch per box at full depth: families whose point is making blue's
-# hunting harder rather than adding a new channel.
+# One evasion touch per box: these families cost blue hunting time, they add no channel.
 EVASION_FAMILIES = ("immu", "timestomp", "logwipe", "preload", "decoy")
 
 
 def plan_for(cfg, world, intel, depth=None, teams=None):
-    """The seed plan: one entry per box that needs work, with its next stage."""
     depth = int(cfg["red"].get("depth", 3) if depth is None else depth)
     out = []
     for box in intel.boxes():
@@ -53,7 +30,6 @@ def plan_for(cfg, world, intel, depth=None, teams=None):
 
 def seed_range(ctx, *, depth=None, teams=None, dry_run=False, max_steps=None,
                manifest_dir=None):
-    """Run the seed. Returns a report dict; every action goes through execute()."""
     from .policy import Policy
 
     cfg = ctx.cfg
@@ -70,9 +46,8 @@ def seed_range(ctx, *, depth=None, teams=None, dry_run=False, max_steps=None,
         ctx.world.ensure_event_start()
 
     plan = plan_for(cfg, ctx.world, ctx.intel, depth=depth, teams=teams)
-    # A previous run that ended with work outstanding must not make this one a no-op:
-    # seed_done used to be set even when every stage failed, and the loop below breaks on
-    # it (live: the deploy's planted-box guard kept failing a range whose re-seed never ran).
+    # Unfinished work must not make a re-run a no-op: seed_done can be set with stages
+    # still todo (caught live: the planted-box guard failed a range whose re-seed never ran).
     if not dry_run and ctx.world.seed_done() and any(e["todo"] for e in plan):
         ctx.world.set_seed_done(False)
     steps = 0
@@ -99,7 +74,6 @@ def seed_range(ctx, *, depth=None, teams=None, dry_run=False, max_steps=None,
                 if stage == "channel":
                     record["channel"] = True
             steps += 1
-        # persistence at full depth: one family plus one evasion touch
         if mode == "full" and (depth is None or depth >= 3) and "persist" in record["stages"]:
             evasion = _run_evasion(ctx, ip, dry_run=dry_run)
             if evasion:
@@ -126,8 +100,7 @@ def _run_stage(ctx, ip, stage, mode, dry_run=False):
                     "detail": "foothold already present"}
         result = execute("spray_access", {"ip": ip}, ctx, source="seed")
         if not result.ok:
-            # a foothold may already exist through a key we hold; try the
-            # eviction-recovery path second, but never fake success
+            # spray failure falls back to eviction-recovery (foothold may exist via a held key); ok is the fallback's, never faked
             fallback = execute("reestablish", {"ip": ip}, ctx, source="seed")
             return {"stage": stage, "effect": "spray_access",
                     "ok": bool(fallback.ok),
@@ -162,7 +135,6 @@ def _run_stage(ctx, ip, stage, mode, dry_run=False):
 
 
 def _run_evasion(ctx, ip, dry_run=False):
-    """One evasion touch per box (the families whose point is blue's hunting cost)."""
     available = _families_for(ctx, ip)
     for family in EVASION_FAMILIES:
         if family not in available:
@@ -179,7 +151,7 @@ def _families_for(ctx, ip):
 
 
 def write_manifest(ctx, results, *, mode, depth, out_dir=None):
-    """`red/manifest.json`: what is planted where, with the restore recipes."""
+    """red/manifest.json: what is planted where, with restore recipes; consumed by red-verdict, destroy and the organizer report."""
     comp_dir = Path(ctx.cfg["run"].get("comp_dir") or ctx.cfg["run"]["state_dir"])
     out = Path(out_dir) if out_dir else comp_dir / "red"
     boxes = {}

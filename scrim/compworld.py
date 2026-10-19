@@ -3,13 +3,8 @@ from pathlib import Path
 from scrim import core
 
 
-# which unit exists is resolved on the box (apache2 vs httpd across distros); a
-# hardcoded nginx stopped a non-existent unit, saw no scoreboard change, and aborted.
-# Also caught live: a port-less ssh pin took the `or 80`
-# default, tied nginx on the sort, and won — the test stopped sshd while probing HTTP :80
-# and the scoreboard never moved. So: a pin is httpish from its display, an explicit :80,
-# or a well-known web NAME; a non-http pin gets no default port; the ssh unit is only
-# ever a last resort — stopping it severs the operator's own path to the box.
+# The ssh unit is a last resort — stopping it severs the operator's own path to the box —
+# and a non-http pin gets no default port so it cannot take :80 and outrank web.
 def _web01_units(comp):
     pins = core.read_comp_json(comp, "box_services.json").get("web01", [])
     candidates = []
@@ -31,14 +26,10 @@ def _web01_units(comp):
     if not candidates:
         raise SystemExit("  ERROR: no serviceable web01 unit for the fire test — "
                          "web01 pins in box_services.json map to nothing in _WATCHDOG_UNITS")
-    # httpish first, then anything-but-sshd, then lowest port
     candidates.sort(key=lambda c: (not c[0], c[1], c[2]))
     return candidates[0][3], candidates[0][2], candidates[0][4]
 
 
-# from the comp's own files: the prompt used to hardcode the Meridian 5-box world (box
-# names, '8 scored services', nginx restore example, wardops ROE) and lied on every
-# other lineup
 def comp_world(comp):
     boxes = core.read_comp_json(comp, "boxes.json")
     windows = [b["name"] for b in boxes if core.is_windows_box(b)]
@@ -57,10 +48,7 @@ def comp_world(comp):
             "web_unit": units[0] if units else None}
 
 
-# an empty box_vulns.json means the misconfig spot-check has nothing to confirm and must
-# be skipped (a packet-compiled comp failed verify as 'FAIL' with every summary line PASS —
-# the packet AD-misconfig model plants no box configurations); packet-sourced comps get the packet
-# fidelity gates
+# A no-vuln comp must get --expect-no-vulns or verify fails it with every summary line PASS.
 def _verify_flags(comp):
     flags = []
     try:
@@ -90,10 +78,8 @@ _WATCHDOG_UNITS = {
 }
 
 
-# The scoreboard service name a catalog pin registers as (<box>-<Display>): the fire
-# test watches its own row, and "first row starting with web01" is web01-ssh on any
-# comp whose web01 carries an ssh pin — a stale ssh row "detected down" from a
-# stale ssh outage and then failed to restore the nginx service it never watched.
+# Scoreboard rows are <box>-<Display>: the fire test must watch its own unit's row;
+# "first row starting with web01" is web01-ssh on any comp that has an ssh pin there.
 _WATCHDOG_DISPLAY = {
     "nginx": "http", "apache": "http", "httpd": "http", "iis": "http",
     "bind": "dns", "named": "dns", "mysql": "sql", "mariadb": "sql", "mysqld": "sql",
@@ -104,13 +90,7 @@ _WATCHDOG_DISPLAY = {
 
 
 def comp_arg(comp):
-    """The competition argument for a driver process.
-
-    Relative when the competition lives inside the engine tree (short, readable paths in logs
-    and state), absolute when it does not — the dashboard's per-run workspace sits outside the
-    repo, where `relative_to()` raises ValueError and a bare name would resolve under the
-    comps root instead of the workspace.
-    """
+    """Relative when inside the repo; absolute otherwise — the dashboard workspace sits outside it."""
     try:
         return str(Path(comp).relative_to(core.REPO))
     except ValueError:

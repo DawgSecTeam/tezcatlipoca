@@ -1,25 +1,4 @@
-"""World: the agent's belief state, one schema-versioned JSON document.
-
-Changes from the earlier agent (each kills an audited defect):
-
-* schema `v` field + comp stamp — a state file written for another competition
-  (or another schema) is REFUSED at load. The earlier agent's --reset-event
-  leaked tallies, burndown rows and seed_done across events; here the
-  fresh-dir-per-comp contract is enforced by the loader, not by operator memory.
-* restore table (`restores`) is first-class: every recoverable effect appends
-  its undo recipe here, and the verdict/organizer artifact is a projection of
-  it (principle 6). The earlier agent scattered restore knowledge through notes
-  and three hardcoded unrecoverable-mode lists.
-* `ensure_event_start` saves ONLY when it creates the key (the earlier agent
-  write-amplified every elapsed_min() call).
-* c2 section: callback freshness per box (implant success is "the callback is
-  in the operation", never process liveness).
-
-Concurrency contract is unchanged from the earlier agent and deliberate: flock on
-world.json.lock (EX save / SH reload), reload-then-mutate-then-save, every
-mutator saves the whole file, no merge. The loop reloads at the top of every
-cycle — disk is truth.
-"""
+"""World: the agent's only belief store — one schema-versioned, comp-stamped JSON document; flock + reload-then-mutate-then-save, disk is truth."""
 
 import fcntl
 import json
@@ -30,8 +9,8 @@ from pathlib import Path
 from ..errors import StateError
 from .schema import SCHEMA, atomic_write, now_iso, parse_ts
 
-# Unit name or beacon id inside an artifact's detail — the discriminator that
-# makes a per-instance key (one box can carry several implants of one kind).
+# A box can carry several implants of one kind: the unit/beacon id inside the
+# detail makes the artifact key per-instance.
 _UNIT_RE = re.compile(r"\(([\w.@-]+\.(?:service|timer|task))\)")
 _ID_RE = re.compile(r"id=(\S+)")
 
@@ -56,8 +35,6 @@ class World:
         if not self.reload():
             self._d = _blank(comp)
             self.save()
-
-    # -- persistence ---------------------------------------------------------
 
     @property
     def lock_path(self):
@@ -100,8 +77,6 @@ class World:
             fcntl.flock(lock, fcntl.LOCK_UN)
             lock.close()
 
-    # -- meta / event clock ----------------------------------------------------
-
     @property
     def meta(self):
         return self._d["meta"]
@@ -109,10 +84,8 @@ class World:
     def ensure_event_start(self):
         if "event_start" not in self.meta:
             self.meta["event_start"] = time.time()
-            self.save()          # only on create (the earlier agent saved on every read)
+            self.save()
         return self.meta["event_start"]
-
-    # -- targets ---------------------------------------------------------------
 
     def target(self, ip):
         return self._d["targets"].setdefault(
@@ -148,11 +121,8 @@ class World:
         t["creds_tried"][user] = t["creds_tried"].get(user, 0) + 1
         self.save()
 
-    # -- credentials / footholds ----------------------------------------------
-
     def add_cred(self, user, password, source, ip=None, key_path=None):
-        """key_path marks a private-key credential (password may be empty);
-        consumers must prefer key_path when present."""
+        """key_path marks a private-key credential; consumers must prefer it over the password."""
         for cred in self._d["creds"]:
             if cred["user"] == user and cred.get("key_path", password) in (password, key_path):
                 if ip and ip not in cred["valid_on"]:
@@ -179,10 +149,8 @@ class World:
 
     def add_foothold(self, ip, user, password, kind, windows=False,
                      key_path=None, escalation=None):
-        """One foothold per IP (update in place). Escalation survives only for
-        the SAME user — a re-drop with different creds lands a user foothold
-        with escalation=None (the earlier agent silently kept the stale root
-        label)."""
+        """One foothold per IP, updated in place; escalation is dropped on a user
+        change so a fresh user foothold cannot keep a stale root label."""
         existing = self.foothold(ip)
         if existing and existing["user"] != user:
             escalation = None
@@ -228,13 +196,9 @@ class World:
             fh["last_ok"] = now_iso()
             self.save()
 
-    # -- artifacts ---------------------------------------------------------------
-
     def add_artifact(self, ip, kind, detail, check_cmd=None, paths=None, **tags):
-        """One artifact row. The five named fields are the schema; `**tags`
-        carries the effect's own identifying fields — `persist` tags every row
-        with its `family` and the re-plant logic reads it back (policy._family_of),
-        so a row that cannot carry the tag makes every persist plant unrecordable."""
+        """`**tags` carries the effect's identifying fields; the re-plant logic
+        reads the persist `family` tag back (policy._family_of)."""
         rec = {"ip": ip, "kind": kind, "detail": detail, "check_cmd": check_cmd,
                "paths": list(paths or []), "planted_at": now_iso(),
                "last_ok": now_iso()}
@@ -259,8 +223,6 @@ class World:
         self.meta["dead_artifacts"] = sorted(set(keys))
         self.save()
 
-    # -- impacts -----------------------------------------------------------------
-
     def add_impact(self, ip, service, mode, detail=None):
         rec = {"ip": ip, "service": service, "mode": mode, "at": now_iso()}
         if detail:
@@ -271,13 +233,9 @@ class World:
     def impacts(self):
         return list(self._d["impacts"])
 
-    # -- restore table (principle 6) ------------------------------------------
-
     def add_restore(self, effect, ip, service, recipe, secrets=None):
-        """One undo record. `recipe` is a string or list of steps blue-side or
-        organizer-side; `secrets` (e.g. the original password of a rotated
-        account) is kept for the 0600 organizer artifact only, never rendered
-        into the secrets-free report."""
+        """`secrets` renders only into the 0600 organizer artifact, never the
+        secrets-free report."""
         rec = {"effect": effect, "ip": ip, "service": service,
                "at": now_iso(), "recipe": recipe}
         if secrets:
@@ -287,8 +245,6 @@ class World:
 
     def restore_table(self):
         return list(self._d["restores"])
-
-    # -- credlist rotations (organizer restore-only) ---------------------------
 
     def add_sabotage(self, ip, user, old_password, new_password):
         self._d["sabotage"].append({"ip": ip, "user": user,
@@ -300,12 +256,10 @@ class World:
     def sabotage(self):
         return list(self._d["sabotage"])
 
-    # -- blue restores (scoreboard DOWN->UP) ------------------------------------
-
     def add_blue_event(self, team, service, ip=None):
         self._d["blue_events"].append({"team": team, "service": service,
                                        "ip": ip, "at": now_iso()})
-        if len(self._d["blue_events"]) > 512:      # bounded, oldest dropped
+        if len(self._d["blue_events"]) > 512:
             self._d["blue_events"] = self._d["blue_events"][-512:]
         self.save()
 
@@ -344,16 +298,12 @@ class World:
         return [e for e in self._d.get("blue_events", [])
                 if now - parse_ts(e["at"]) <= minutes * 60]
 
-    # -- scoreboard mirror --------------------------------------------------------
-
     def last_service_map(self):
         return self.meta.get("last_service_map") or {}
 
     def set_last_service_map(self, mapping):
         self.meta["last_service_map"] = mapping
         self.save()
-
-    # -- c2 callback mirror ---------------------------------------------------------
 
     def note_callback(self, box, seen_at, agent=None, external_id=None):
         self._d["c2"][box] = {"seen_at": seen_at, "agent": agent,
@@ -416,8 +366,6 @@ class World:
 
     def reject_memory(self):
         return dict(self.meta.get("reject_memory") or {})
-
-    # -- seed bookkeeping -----------------------------------------------------------
 
     def seed_record(self, ip):
         return (self.meta.get("seed") or {}).get(ip)

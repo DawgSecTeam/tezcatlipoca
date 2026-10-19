@@ -1,6 +1,4 @@
-"""deploy() phase-boundary defects, offline: the M4 golden hash loop (every box must get
-an entry, unmanaged included), the --from-phase resume guard against `last_phase`, and the
-always-persist rule for phase 6's coverage repair."""
+"""deploy() phase-boundary defects, offline: golden hash, resume guard, coverage persistence."""
 
 import contextlib
 import io
@@ -31,8 +29,7 @@ BASE_IDS = {"base-windows-server": 9000, "base-ubuntu24.04-fix": 9001, "pfsense-
 
 
 def _bundle(tmp):
-# A nakon bundle dir whose manifest names no golden machines (golden_payload_hash
-#     returns None — the hash still has to be produced and stable).
+    # Empty manifest: golden_payload_hash returns None, yet the hash must still be produced.
     d = Path(tmp) / "bundle"
     d.mkdir()
     (d / "manifest.json").write_text(json.dumps({"inventory": [], "plans": {}}))
@@ -40,12 +37,10 @@ def _bundle(tmp):
 
 
 class GoldenHashEntries(unittest.TestCase):
-# The loop that feeds phase 1's waves, the phase-4 rebuild gate and the
-#     document's template record. It must cover EVERY box name in boxes.json.
+    # Feeds phase 1's waves and the phase-4 rebuild gate: must cover EVERY box name.
 
     def _entries(self, boxes, unbooted=(), golden_machines=None):
         with tempfile.TemporaryDirectory() as d:
-            # golden_bundle is read through golden_payload_hash; keep it a real dir.
             bundle = _bundle(d)
             return dl_golden_plan.golden_hash_entries(
                 boxes, BASE_IDS, golden_machines or {}, bundle,
@@ -56,8 +51,7 @@ class GoldenHashEntries(unittest.TestCase):
         inputs, hashes = self._entries(
             boxes, golden_machines={"dc01": {"configurations": []},
                                     "web01": {"configurations": []}})
-        # An unmanaged box gets an entry too: skipping it would leave fw01 out of
-        # `hashes` and the phase-4 gate would KeyError on golden_hashes["fw01"].
+        # Skipping unmanaged fw01 KeyErrors the phase-4 gate on golden_hashes["fw01"].
         self.assertEqual(set(hashes), {"dc01", "web01", "fw01"})
         self.assertEqual(set(inputs), {"dc01", "web01", "fw01"})
         self.assertEqual(inputs["fw01"]["config"]["golden"], "unmanaged")
@@ -67,19 +61,16 @@ class GoldenHashEntries(unittest.TestCase):
 
 
 class GoldenRebuildGate(unittest.TestCase):
-# Second half: the gate decides rebuilds from the hash entries, which
-#     golden_hash_entries gives every box.
-
     def setUp(self):
         self.boxes = MANAGED_BOXES + [UNMANAGED]
         self.destroyed = []
-        self.stamp = Mock(return_value=False)            # node stamp does not match by default
+        self.stamp = Mock(return_value=False)
         self._patches = [
             patch.object(dl_golden_plan, "_is_template",
-                         lambda node, vid: True),       # every slot holds a template
+                         lambda node, vid: True),
             patch.object(dl_golden_plan, "template_stamp_current", self.stamp),
             patch.object(dl_golden_plan, "frozen_gate",
-                         lambda *a, **k: True),         # rebuild permitted
+                         lambda *a, **k: True),
             patch.object(dl_golden_plan, "destroy_vm_if_exists",
                          lambda node, vid, **kw: self.destroyed.append(vid)),
         ]
@@ -94,36 +85,33 @@ class GoldenRebuildGate(unittest.TestCase):
     def test_matching_stored_hash_is_left_alone(self):
         hashes = {"dc01": "h-dc", "web01": "h-web", "fw01": "h-fw"}
         inputs = {"dc01": {"config": {}}, "web01": {"config": {}}, "fw01": {"config": {}}}
-        # the node's own stamp, compared against the CURRENT inputs — dc01 matches, the rest
-        # do not. This is the whole reuse decision: the stored hash record is not consulted.
+        # Reuse is decided by the node's stamp vs CURRENT inputs; the stored
+        # hash record is never consulted.
         self.stamp.side_effect = lambda node, vid, expected: vid == self._slot(0)
         with contextlib.redirect_stdout(io.StringIO()):
             dl_golden_plan.golden_rebuild_gate(".", "node1", 0, self.boxes, ENGINE, {}, hashes,
                                        inputs, "c1")
-        self.assertNotIn(self._slot(0), self.destroyed)   # node stamp matches -> kept
+        self.assertNotIn(self._slot(0), self.destroyed)
         self.assertIn(self._slot(1), self.destroyed)
 
 
 
 class ResumeFromPhaseGuard(unittest.TestCase):
-# --from-phase must not skip phases the state document never saw complete.
-
     def test_next_phase_after_last_completed_is_allowed(self):
-        dl_gates.guard_resume_from_phase(4, 3, "estate-state.json")  # no raise
+        dl_gates.guard_resume_from_phase(4, 3, "estate-state.json")
 
 
     def test_far_beyond_last_completed_is_refused(self):
         with self.assertRaises(SystemExit) as ctx:
             dl_gates.guard_resume_from_phase(6, 3, "estate-state.json")
         msg = str(ctx.exception)
-        self.assertIn("--from-phase 6", msg)          # names the requested phase
-        self.assertIn("records phase 3", msg)         # and what actually completed
-        self.assertIn("--from-phase 4", msg)          # and the safe target
+        self.assertIn("--from-phase 6", msg)
+        self.assertIn("records phase 3", msg)
+        self.assertIn("--from-phase 4", msg)
         self.assertIn("--force-from-phase", msg)
 
     def test_state_without_last_phase_is_treated_as_zero(self):
-        # Missing last_phase reads as 0 — nothing is recorded complete, so even
-        # --from-phase 2 would skip phase 1. Refuse rather than assume.
+        # Missing last_phase reads as 0: refuse rather than assume anything completed.
         with self.assertRaises(SystemExit) as ctx:
             dl_gates.guard_resume_from_phase(2, None, "estate-state.json")
         self.assertIn("records phase 0", str(ctx.exception))
@@ -132,8 +120,6 @@ class ResumeFromPhaseGuard(unittest.TestCase):
 
 
 class CoveragePersistence(unittest.TestCase):
-# Phase 6's coverage repair must reach disk even when the tally is empty.
-
     def _machines(self):
         return [{"name": "web01-team101",
                  "configurations": [{"name": "systemd-system-masked"}]}]
@@ -149,8 +135,8 @@ class CoveragePersistence(unittest.TestCase):
             dl_coverage.record_stage_coverage(
                 state, self._machines(), self._green_result(),
                 lambda: path.write_text(json.dumps(state)))
-            self.assertEqual(state.get("plant_coverage_failed"), {})   # in memory
-            on_disk = json.loads(path.read_text())                     # and on disk
+            self.assertEqual(state.get("plant_coverage_failed"), {})
+            on_disk = json.loads(path.read_text())
             self.assertEqual(on_disk.get("plant_coverage_failed"), {})
 
 
@@ -165,10 +151,8 @@ SECRET_WRITES = [
 
 
 class AtomicSecretWrites(unittest.TestCase):
-# Every secret-bearing write in the deploy pipeline (deploy_lib/) must go through
-#     config_ops.write_text_atomic: 0600 is applied at CREATION (os.open), not by a chmod
-#     after the process umask already exposed the file, and the content lands via a temp
-#     file that never survives the rename. These are the exact shapes deploy writes.
+    # Secret writes must get 0600 at CREATION (os.open), not by chmod after the umask
+    # already exposed the file; the temp must not survive the rename.
 
     def test_mode_0600_at_creation_and_no_tmp_survives(self):
         for name, text in SECRET_WRITES:
@@ -178,9 +162,8 @@ class AtomicSecretWrites(unittest.TestCase):
                 real_replace = os.replace
 
                 def spy(src, dst):
-                    # At the instant of the swap the temp already holds the COMPLETE
-                    # content AND already carries 0600 — this is what a plain
-                    # write_text-then-chmod round-trip test cannot see.
+                    # The swap instant is what a round-trip test cannot see: the temp must
+                    # already hold the complete content at 0600.
                     seen["tmp_mode"] = stat.S_IMODE(Path(src).stat().st_mode)
                     seen["tmp_text"] = Path(src).read_text()
                     return real_replace(src, dst)

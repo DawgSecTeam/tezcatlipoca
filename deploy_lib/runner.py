@@ -11,19 +11,9 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
            team_node=None, engine_node=None, force_from_phase=False, nodes_path=None,
            team_identifiers=None, engine_mgmt_ip=None, hold_start=False,
            replant_goldens=False):
-# Run the eight-phase deploy for one competition; from_phase > 1 resumes from the state document.
-#
-#     scoring_vmid overrides the scoring-engine VMID (default 1000) so several
-#     competitions can run concurrently on one node; it is persisted to the state document
-#     and reused on resume.
-#     team_node (--team-node id=NODE,...) and engine_node (--engine-node NAME) pin the
-#     multi-node placement when nodes.json exists; without them teams are placed by
-#     capacity-fill. force_from_phase (--force-from-phase) bypasses the guard that refuses
-#     to skip phases the state document never recorded as completed.
-#     hold_start (--hold-start) records a hold in the state document that phase 8 obeys:
-#     everything is deployed (teams seeded, portal up) but the competition is not started
-#     and the engine stays paused — competition-ops.py start begins it. A resume of a held
-#     deploy stays held (the flag lives in the state file; the argument is only the mint).
+# scoring_vmid is persisted to the state document and reused on resume, so concurrent
+    # competitions on one node keep their own engine. hold_start likewise lives in the
+    # state file (the argument only mints it), so a resume of a held deploy stays held.
     acquire_deploy_lock(comp_dir)
     if replant_goldens:
         from engine.template_freeze import clear_golden_plant_checkpoints
@@ -49,21 +39,17 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
 
 
 def run_pipeline(ctx):
-# Walk PHASES: call each, checkpoint the ones that ran, read the engine context.
-#
-#     Any failure is recorded (streak + degradations) and re-raised with a resume hint.
+# Any phase failure is recorded (streak + degradations) and re-raised with a resume hint.
     current_phase = max(ctx.from_phase, 1)
-    # A run that died while parked leaves its marker in the state file, and the observer reads
-    # that marker as the live truth: this process is holding nothing, so clear it before it can
-    # label a resume as paused.
+    # A run that died while parked leaves its marker in the state file, and the observer
+    # reads that marker as the live truth — clear it before it can label a resume paused.
     if ctx.state.pop("paused_after_phase", None) is not None:
         ctx.save_state()
     try:
         for n, phase in enumerate(phases.PHASES, 1):
             # Every phase is CALLED so it can print its own "[N/8] Skipped (resume)"
-            # banner, but only a phase that actually ran may become the failure's
-            # phase or write last_phase: checkpointing a skipped phase would move the
-            # resume guard's answer forward for a phase this run never executed.
+            # banner, but only a phase that ran may checkpoint or become the failure's
+            # phase — checkpointing a skipped one moves the resume guard's answer forward.
             running = ctx.from_phase <= n
             if running:
                 current_phase = n
@@ -71,18 +57,13 @@ def run_pipeline(ctx):
             if running:
                 ctx.checkpoint(n)
             if n == 2:
-                # The engine/SSH context is read once, exactly where the inline
-                # code read it: after phase 2's checkpoint, before phase 3. A fresh
-                # run only has the engine's coordinates after it is created; a --from-phase 3+
-                # resume skips the apply but still needs them. Outside the `running`
-                # gate on purpose, so a failure here reports the phase the operator
-                # asked to resume at rather than phase 2.
+                # Read once, after phase 2's checkpoint: a --from-phase 3+ resume skips the
+                # apply but still needs the engine's coordinates. Outside the `running` gate
+                # on purpose, so a failure names the phase the operator asked to resume at.
                 phases.connect_estate(ctx)
             if running:
-                # Last in the iteration, so a hold lands on a phase that is completely done
-                # (phase 2's engine read included). A skipped phase is no boundary: its
-                # checkpoint never moved, so holding there would name a phase this run did
-                # not run.
+                # Last, so a hold lands on a completely done phase; a skipped phase is no
+                # boundary and would name a phase this run did not run.
                 pause_at_boundary(ctx, n)
     except BaseException as e:
         report_failure(ctx, current_phase, e)
@@ -90,12 +71,11 @@ def run_pipeline(ctx):
 
 
 def report_failure(ctx, current_phase, exc):
-# Record the tolerated-failure ledger, print the resume hint.
     record_degradations(ctx)
     print(f"\n  [!] Deploy failed during phase {current_phase} of '{ctx.comp_name}'.")
     if current_phase >= 2 and "already exists" in str(exc).lower():
-        # A deploy never destroys a leftover range, so no --from-phase helps here: the
-        # range has to be reclaimed first (docs/usage-agents.md § run ownership).
+        # A deploy never destroys a leftover range, so no --from-phase helps here
+        # (docs/usage-agents.md § run ownership).
         print("      Something the prior attempt created still exists and this deploy did not "
               "record it as its own (a half-built clone, an interrupted bridge). A deploy "
               "never destroys a leftover range — reclaim it, then start fresh:")

@@ -2,10 +2,6 @@
 from scrim import core
 
 
-# one case branch per box from boxes.json: the helper used to hardcode one lineup
-# with fixed octets — on any other comp it silently targeted the wrong hosts or refused
-# known boxes. Windows = boxes whose template name contains "windows" (password auth as
-# Administrator); everything else = key auth as the provisioning user
 def mybox_script(comp):
     boxes = core.read_comp_json(comp, "boxes.json")
     proxy = f'"ProxyCommand=ssh -i $KEY_PATH {core.SSH_OPTS} -W %h:%p $VM_USER@$ENGINE_IP"'
@@ -151,10 +147,7 @@ OPENCODE_PROJECT_CFG = """{
 """
 
 
-# per-comp scored-check oracle: runs each pinned check the way the engine does, from the
-# engine's vantage (HTTP GET / credlist password login / TCP connect), so blue can
-# reconcile 'locally healthy but scorer DOWN' — run 1 showed both teams flying blind on
-# exactly that after sshd hardening broke the scored ssh check
+# probes each pinned check from the engine's vantage: blue's own ssh sees "locally healthy" while the scorer sees DOWN
 def scorch_script(comp):
     boxes = {b["name"]: b for b in core.read_comp_json(comp, "boxes.json")}
     pins = core.read_comp_json(comp, "box_services.json")
@@ -169,7 +162,7 @@ def scorch_script(comp):
                 pin = {"name": pin}
             port = pin.get("port")
             if not port:
-                continue  # plant_only software with no listener isn't externally checkable
+                continue
             if pin.get("score_only") or pin.get("plant_only"):
                 kind = "code" if pin.get("display") in ("http", "https") else "port"
             else:
@@ -187,10 +180,7 @@ def scorch_script(comp):
              '-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$VM_USER@$ENGINE_IP""',
              'echo "== scored-check oracle (engine vantage) — team $MY_TEAM =="']
     if not (http_specs or port_specs or ssh_specs):
-        # Catalog-name pins ("apache") carry no port metadata, so no engine-vantage
-        # probe can be derived — the header alone printed and
-        # nothing else, and blue read the silence as "scorch is broken". Fall back to
-        # the scorer's own view so the oracle always says SOMETHING actionable.
+        # catalog-name pins carry no port metadata — no probe derivable; fall back to the scorer's view so output is never empty
         lines.append('echo "(this comp\'s pins carry no ports, so there is no independent')
         lines.append(' engine-vantage probe — showing the scorer\'s own view instead)"')
         lines.append('exec ./score.py')

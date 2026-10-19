@@ -1,31 +1,12 @@
-"""One SSH transport for both OSes (paramiko, pooled, imported lazily).
-
-Every hard-won fix from the earlier agent's transport is carried here verbatim in
-spirit:
-
-* TCP keepalive on every connection (15 s) — a half-dead link (session gone,
-  no RST, NAT/conntrack drop) otherwise stays ESTAB forever and wedges the
-  next blocked wait (caught live).
-* Every wait bounded: exec_command's timeout only gates reads; recv_exit_status
-  waits on the status event with NO timeout of its own (caught live: seed
-  sat in poll() forever after its real work finished). status_event.wait(tmo)
-  is mandatory; a breach closes the client and raises TransportError.
-* Close-before-replace: a dropped paramiko client owns a socket + a thread;
-  leaking them surfaces hours in as "Too many open files" (caught live,
-  ~35 min into an event hammering one unreachable box).
-* Drain stdout/stderr before waiting on the exit status (paramiko warns of a
-  deadlock once output exceeds the channel window).
-* Reentry key fallback: password auth failing retries with the planted red
-  key and remembers (ip,user) — the pairing with the persistence sshkey.
-* sftp_put supports key_path (the earlier agent's asymmetry: sftp_get had it,
-  put didn't, so every staging path died on a key-only foothold).
-"""
+"""One SSH transport for both OSes (paramiko, pooled, imported lazily)."""
 
 import subprocess
 
 from ..errors import TransportError
 from . import winexec
 
+# Without keepalive a half-dead link (session gone, no RST, NAT/conntrack drop) stays ESTAB
+# forever and wedges the next blocked wait.
 _KEEPALIVE_SEC = 15
 _READ_TIMEOUT_DEFAULT = 300
 
@@ -34,14 +15,12 @@ class SSH:
     def __init__(self, cfg, state_dir):
         self.action_timeout = cfg["limits"]["action_timeout"]
         self._clients = {}
-        # The persistence sshkey family plants this key's public half; when
-        # blue closes password auth, the private half is the way back in.
+        # The persistence sshkey family plants this key's public half; when blue closes
+        # password auth, the private half is the way back in.
         from pathlib import Path
         key = Path(state_dir) / "red_key"
         self.reentry_key = str(key) if key.exists() else None
         self._key_auth = set()  # (ip, user) pairs whose password path blue closed
-
-    # -- local ------------------------------------------------------------------
 
     def run_local(self, cmd, timeout=None, dry_run=False):
         """Run a command on red01 (recon tooling). Returns (rc, out, err)."""
@@ -55,8 +34,6 @@ class SSH:
             return p.returncode, p.stdout, p.stderr
         except subprocess.TimeoutExpired:
             return 124, "", f"timeout after {timeout or self.action_timeout}s"
-
-    # -- connection pool ----------------------------------------------------------
 
     def _connect(self, ip, user, password, key_path=None):
         import paramiko  # lazy: status/report/config work without it installed
@@ -108,24 +85,27 @@ class SSH:
                 return client
             except Exception:
                 pass
-            self._close_client(key, client)  # dead: close before replace
+            self._close_client(key, client)  # dead: a dropped client owns a socket + a thread
         client = self._connect(ip, user, password, key_path=key_path)
         self._clients[key] = client
         return client
 
-    # -- exec ---------------------------------------------------------------------
-
     def ssh(self, ip, user, password, cmd, timeout=None, windows=False,
             key_path=None):
-        """Run a command. Returns (rc, stdout, stderr). Every wait bounded;
-        a deadline breach closes the pooled client and raises TransportError
-        so the effect records ok=False instead of hanging."""
+        """Run a command. Returns (rc, stdout, stderr).
+
+        exec_command's timeout only gates reads and recv_exit_status waits on the status
+        event with no timeout of its own, so status_event.wait(tmo) is mandatory and a breach
+        closes the pooled client and raises TransportError instead of hanging forever.
+        """
         tmo = timeout or self.action_timeout or _READ_TIMEOUT_DEFAULT
         try:
             client = self._client(ip, user, password, key_path=key_path)
             if windows:
                 cmd = winexec.wrap(cmd)
             _, out, err = client.exec_command(cmd, timeout=tmo)
+            # Drain both streams before the status wait: paramiko deadlocks once output
+            # exceeds the channel window.
             out_bytes = out.read()
             err_bytes = err.read()
             chan = out.channel
@@ -157,8 +137,6 @@ class SSH:
             return rc == 0, out.strip()
         except TransportError:
             return False, ""
-
-    # -- sftp ---------------------------------------------------------------------
 
     def sftp_put(self, ip, user, password, local_path, remote_path,
                  mode=0o755, key_path=None):

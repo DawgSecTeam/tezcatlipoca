@@ -46,6 +46,10 @@ competitions/
 */red/manifest.json
 
 
+# In-tree scratch a live run writes (run/event logs, world.json, submitted-run dumps):
+# run identity and captured range state, and never a tracked artifact.
+.tmp/
+
 # vim swap files (a twin session's live editor buffer must never be commit-swallowed)
 *.swp
 

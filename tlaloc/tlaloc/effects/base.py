@@ -1,25 +1,4 @@
-"""The effect registry: ONE description of what an effect is, what it may do,
-where it runs, and how to undo it.
-
-Doctrine (the earlier agent kept it in 4-5 places that drifted — prompt prose,
-tactic-id sets, a policy elif-chain, the fallback ladder):
-
-* ``tags``     capability + danger class, THE single source:
-               access | c2 | pressure | persistence | endgame
-               plus passive | impacty | unrecoverable.
-               ("unrecoverable" replaces the earlier agent's three hardcoded mode
-               lists.)
-* ``check()``  per-effect precondition (needs root, needs C2, ladder window).
-               Raise PolicyError to reject a candidate; raise GuardrailError
-               only if something unsafe was attempted.
-* ``run()``    the body. Effects do NOT call gate primitives — the shared
-               execute() template runs the kill switch, ensure_target,
-               free-form lint, check(), the dry-run short-circuit, and the
-               bookkeeping. An effect cannot forget a gate.
-* Attribution is code-side: an effect that took a scored service down sets
-  ``Result.impact``; the ledger never depends on a caller remembering a
-  ``service=`` parameter (the earlier agent's honor-system audited defect, twice).
-"""
+"""The effect registry: tags, preconditions and the shared execute() template's contract."""
 
 import shlex
 from dataclasses import dataclass, field
@@ -38,10 +17,8 @@ class Result:
     impact: dict | None = None   # {"service","mode"} -> impact ledger (template adds)
     restore: dict | None = None  # {"recipe": str|list, "secrets"?: str} -> restore table
     artifacts: list = field(default_factory=list)   # add_artifact kwargs
-    # Set when the box was MUTATED even though the objective was not met (a C2
-    # implant that installed but never checked in). The template records the
-    # artifact and the undo recipe from this flag, never from ok — a record
-    # gated on a channel proof disappears exactly when it is most needed.
+    # Box was MUTATED even though the objective was not met; bookkeeping reads this, never
+    # ok — a record gated on a channel proof disappears exactly when it is most needed.
     installed: bool | None = None
 
 
@@ -49,13 +26,11 @@ class Effect:
     id = ""
     name = ""
     description = ""
-    # param spec: {name: {type: str|int|enum|list, required, choices, freeform,
-    #                     max, desc}}. "freeform": True marks LLM-authored
-    # shell text — the gate lints it with the target-OS pattern set.
+    # {name: {type: str|int|enum|list, required, choices, freeform, max, desc}};
+    # "freeform" marks LLM-authored shell text, which the gate lints per target OS.
     params = {}
     tags = frozenset()
-    # declarative preconditions read by check() default: any foothold / root
-    # path / c2 availability / os ("linux"|"windows"|"any")
+    # declarative preconditions read by check() default: foothold / root / c2 / os
     needs = {"foothold": None, "root": False, "c2": False, "os": "any"}
     # param name that scopes the retry budget; None is per box
     failure_scope = None
@@ -80,8 +55,6 @@ class Effect:
     def run(self, ctx, params):
         raise NotImplementedError
 
-
-# --- the routing predicate every root-capable path shares ----------------------
 
 ESCALATIONS = ("sudo", "sudo_pw", "escape:", "capexec:")
 
@@ -154,9 +127,7 @@ def catalog():
 
 
 def validate_params(effect, params):
-    """Shape validation only (content safety is the gate's job). Unknown or
-    missing-required params are EffectParamError — a malformed decision is a
-    bug upstream, not something to execute partially."""
+    """Shape validation only; a malformed decision is a bug upstream, not something to run partially."""
     params = dict(params or {})
     clean = {}
     for name, spec in effect.params.items():

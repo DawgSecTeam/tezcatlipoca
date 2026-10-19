@@ -1,6 +1,4 @@
-"""In-path firewall support, offline: the SSH config push, the per-team pfSense config
-surgery (against the same anchor stanzas the real factory seed carries), the per-team
-VyOS set-command generation, and the post-cutover netplan the engine cutover writes."""
+"""In-path firewall support, offline: the SSH config push, pfSense/VyOS config generation, and the cutover netplan."""
 
 import sys
 import unittest
@@ -12,9 +10,8 @@ from net.firewall_ops import (cutover_netplan_yaml, firewall_kind, generate_team
                           generate_vyos_commands, generate_vyos_lan_commands,
                           vyos_lan_config_path)
 
-# The anchors generate_team_config's string surgery keys on — a minimal stand-in for the
-# factory config.xml (the real seed lives in competitions/*/pfsense/, not in the repo
-# proper, so tests carry their own).
+# A minimal stand-in for the factory config.xml; the real seed lives in
+# competitions/*/pfsense/, not in the repo proper.
 SEED = """<?xml version="1.0"?>
 <pfsense>
 \t<system>
@@ -47,14 +44,14 @@ TEAMS = {"team2": {"identifier": "121", "password": "x"},
 
 class TeamConfig(unittest.TestCase):
     def test_wan_allows_only_the_engine_to_ssh_the_firewall(self):
-    # The phase-5 success probe is SSH to the firewall's own WAN address; pfSense blocks
-    #         WAN-inbound to itself unless a rule says otherwise (caught live).
+    # The phase-5 probe SSHes to the firewall's own WAN address; pfSense blocks WAN-inbound
+    # to itself unless a rule says otherwise (caught live).
         out = generate_team_config(SEED, "120")
         at = out.index("Allow engine SSH to the firewall")
         rule = out[out.rindex("<rule>", 0, at):out.index("</rule>", at)]
         self.assertIn("<interface>wan</interface>", rule)
         self.assertIn("<protocol>tcp</protocol>", rule)
-        self.assertIn("<address>172.31.120.1</address>", rule)   # engine transit only
+        self.assertIn("<address>172.31.120.1</address>", rule)
         self.assertIn("<network>(self)</network>", rule)
         self.assertIn("<port>22</port>", rule)
 
@@ -64,15 +61,14 @@ class TeamConfig(unittest.TestCase):
         self.assertIn("<ipaddr>172.31.120.2</ipaddr>", out)
         self.assertIn("<subnet>30</subnet>", out)
         self.assertIn("<ipaddr>192.168.120.1</ipaddr>", out)
-        self.assertIn("<gateway>172.31.120.1</gateway>", out)   # WANGW = engine transit
+        self.assertIn("<gateway>172.31.120.1</gateway>", out)
         self.assertIn("<hostname>fw-team120</hostname>", out)
-        self.assertIn("<ssh><enable>enabled</enable></ssh>", out)  # probe + operator SSH
+        self.assertIn("<ssh><enable>enabled</enable></ssh>", out)
         self.assertIn("<mode>disabled</mode>", out)             # engine keeps the NAT
         # caught live: <network> takes the `lan` keyword, never a CIDR
         self.assertIn("<network>lan</network>", out)
         self.assertNotIn("<network>192.168.120.0/24</network>", out)
-        # the WAN pass rule must be the FILTER section's first rule
-        flt = out[out.index("<filter>"):]
+        flt = out[out.index("<filter>"):]                       # WAN pass rule goes first
         first_rule = flt[flt.index("<rule>"):flt.index("</rule>")]
         self.assertIn("Allow engine scoring", first_rule)
 
@@ -89,19 +85,18 @@ class TeamConfig(unittest.TestCase):
     def test_dnat_spec_targets_and_substitution(self):
         out = generate_team_config(SEED, "121", red_dnat_spec=["4470->10.200.0.{tid}"])
         self.assertIn("<port>4470</port>", out)
-        self.assertIn("<target>10.200.0.121</target>", out)     # {tid} → team identifier
-        self.assertIn("<address>192.168.121.1</address>", out)  # DNAT rides the LAN addr
+        self.assertIn("<target>10.200.0.121</target>", out)
+        self.assertIn("<address>192.168.121.1</address>", out)
 
 
 
 
 
 class VyosCommands(unittest.TestCase):
-# The generated pass-A/pass-B CLI scripts (pure functions).
 
     def test_wan_side_config_but_no_lan_address_change(self):
-    # Pass A must not touch eth1: a commit that moves it kills the SSH session
-    #         pushing the config (bootstrap_firewalls flips eth1 as pass B over the WAN).
+    # Pass A must not touch eth1: a commit that moves it kills the SSH session pushing the
+        # config (bootstrap_firewalls flips eth1 as pass B over the WAN).
         out = generate_vyos_commands("120")
         self.assertIn("set interfaces ethernet eth0 address 172.31.120.2/30", out)
         self.assertIn("set protocols static route 0.0.0.0/0 next-hop 172.31.120.1", out)
@@ -110,10 +105,8 @@ class VyosCommands(unittest.TestCase):
         self.assertNotIn("set interfaces ethernet eth1", out.split("commit")[0])
 
     def test_no_filter_rules_circinus_default_accepts_the_path(self):
-    # The 1.5 firewall revamp removed interface-attached rulesets AND the
-    #         `firewall interface` attachment (caught live); the pfSense WAN rule
-    #         set's effect is what circinus's default-accept chains already allow, so the
-    #         generated script ships none of it.
+    # The 1.5 revamp removed interface-attached rulesets AND the `firewall interface`
+    # attachment (caught live); the default-accept chains already allow the path.
         out = generate_vyos_commands("120")
         self.assertNotIn("set firewall", out)
         self.assertNotIn("inbound-interface", out)
@@ -135,8 +128,6 @@ class VyosCommands(unittest.TestCase):
 
 
 class VyosBootstrap(unittest.TestCase):
-# The two-pass orchestration, with the engine/SSH layer faked.
-
     def _run(self, wan_up):
         import tempfile
         from net import firewall_ops as fo
@@ -151,8 +142,7 @@ class VyosBootstrap(unittest.TestCase):
                 return wan_up if ip == "172.31.120.2" else False
 
             def wait(ctx, ip, port, budget_s=300, interval_s=10):
-                # the bootstrap address answers (template SSH) and the WAN answers after
-                # pass A's live commit
+                # the bootstrap address answers (template SSH); the WAN answers after pass A's commit
                 return ip in ("172.31.120.2", fo.BOOTSTRAP_FW_IP)
 
             def push(ctx, ip, script, canary, who, budget_s=420):
@@ -187,8 +177,7 @@ FAKE_SSH_CTX = {"ssh_key_path": "k", "vm_username": "ops",
 
 class PushVyos(unittest.TestCase):
     def test_success_needs_clean_exit_and_the_canary(self):
-    # circinus commits print NOTHING on success — canary + clean exit are the only
-    #         signals; a non-zero exit or a quiet canary is a failure either way.
+    # circinus commits print NOTHING on success — canary + clean exit are the only signals.
         from net import firewall_ops as fo
         from unittest.mock import patch
         clock = {"t": 0.0}
@@ -212,10 +201,10 @@ class PushVyos(unittest.TestCase):
 class CutoverNetplan(unittest.TestCase):
     def test_team_nics_lose_address_transit_routes(self):
         yaml = cutover_netplan_yaml(TEAMS)
-        # sorted team key order: team1 (120) then team2 (121); team NICs ens19, ens20;
-        # transit NICs continue the positional sequence: ens21, ens22
+        # team NICs ens19/ens20 in sorted team order, transit NICs continuing the
+        # positional sequence as ens21/ens22
         self.assertIn("    ens19:\n      dhcp4: false\n      optional: true", yaml)
-        self.assertNotIn("192.168.120.1/24", yaml)  # the gateway address is GONE
+        self.assertNotIn("192.168.120.1/24", yaml)
         self.assertIn("    ens21:\n      addresses: [\"172.31.120.1/30\"]", yaml)
         self.assertIn("    ens22:\n      addresses: [\"172.31.121.1/30\"]", yaml)
         self.assertIn("- to: \"192.168.120.0/24\"\n          via: \"172.31.120.2\"", yaml)
@@ -273,7 +262,6 @@ class PushRetry(unittest.TestCase):
 
 
 class BootstrapFirewalls(unittest.TestCase):
-# The orchestration, with the engine/SSH layer faked.
 
     def _run(self, wan_up, push_result="APPLIED", boot_ok=True):
         import tempfile
@@ -311,7 +299,7 @@ class BootstrapFirewalls(unittest.TestCase):
                                  ("wait", "172.31.120.2")])
         cmds = [c.args[1] for c in ssh_on.call_args_list]
         self.assertIn("sudo ip addr add 192.168.1.2/24 dev ens19 || true", cmds)
-        self.assertIn("sudo ip addr del 192.168.1.2/24 dev ens19 || true", cmds)  # always released
+        self.assertIn("sudo ip addr del 192.168.1.2/24 dev ens19 || true", cmds)
 
 
     def test_unchanged_config_skips_the_reboot_wait(self):
@@ -325,7 +313,7 @@ class BootstrapFirewalls(unittest.TestCase):
 
 
 class VerifyInPathConvergence(unittest.TestCase):
-# The cutover moves the gateway MAC; the box probe must retry, not fail on probe #1.
+# The cutover moves the gateway MAC, so the box probe must retry, not fail on probe #1.
 
     def test_box_probe_retries_until_it_answers(self):
         from net import firewall_ops as fo
@@ -340,11 +328,9 @@ class VerifyInPathConvergence(unittest.TestCase):
 
 
 class GuestAgentShellcmd(unittest.TestCase):
-# The qemu-guest-agent's boot hook. pfSense never runs /usr/local/etc/rc.d/* (the
-#     local-script pass in /etc/rc only globs *.sh), so rc.conf.local alone is inert —
-#     the <system><afterbootupshellcmd> tag in config.xml (/etc/rc.bootup mwexec's it)
-#     is the only mechanism that survives, and it must ride EVERY config the firewall
-#     runs: the template's and the generated per-team ones.
+# pfSense never runs /usr/local/etc/rc.d/* (the local-script pass in /etc/rc only globs
+#     *.sh), so the <system><afterbootupshellcmd> tag is the only mechanism that survives —
+#     and it must ride every config the firewall runs, the template's and the per-team ones.
 
     def test_generated_config_carries_the_agent_boot_hook(self):
         out = generate_team_config(SEED, "120")
@@ -354,9 +340,7 @@ class GuestAgentShellcmd(unittest.TestCase):
 
 
 class AgentDiagnostics(unittest.TestCase):
-# fw_agent_diagnostic: never raises, never fires on agentless (pre-retrofit)
-#     clones, and when the agent answers it reports interfaces + whether the pushed
-#     config.xml actually landed.
+# fw_agent_diagnostic: never raises, never fires on an agentless clone.
 
     def test_agentless_clone_returns_empty_string(self):
         from net import firewall_ops as fo

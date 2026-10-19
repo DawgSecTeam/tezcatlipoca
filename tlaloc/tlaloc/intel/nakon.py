@@ -1,19 +1,7 @@
-"""Nakon intel: facts the club already plants, read instead of guessed.
-
-This is the sanctioned cheat the plan calls for (principle 4: facts belong to
-nakon). It parses the competition artifacts staged on red01 into ground-truth
-credentials, the planted-vuln set per box, and the service/pin inventory, with
-technique hints for slugs whose exploitation is not obvious from the name.
-
-Nothing here is hand-maintained: every value comes from a nakon artifact
-(`nakon-config.json`, `.deploy_state.json`, `box_vulns.json`,
-`box_services.json`, `users.json`). A slug that nakon does not know still works —
-it degrades to the raw slug with dashes as spaces.
-"""
+"""Nakon intel: ground truth read from the competition artifacts staged on red01 — creds, planted vulns, service/pin inventory."""
 
 from .base import Intel
 
-# vuln slug -> one-line exploitation hint (fed to the digest / arbiters).
 VULN_HINTS = {
     "sudo-nopasswd": "sudo -n runs anything as root",
     "writable-sudoers": "/etc/sudoers is writable — append NOPASSWD",
@@ -84,8 +72,7 @@ VULN_HINTS = {
     "mutual-watchdog-tasks-win": "two scheduled tasks each re-create the other — delete BOTH in one pass",
 }
 
-# Plants that re-assert themselves: symptom-fixing regrows them, so the digest
-# must say the MECHANISM is the real target.
+# Regrow when only the symptom is fixed: the digest must send the agent at the mechanism.
 SELF_HEALING_SLUGS = {
     "cron-sudo-users": "root cron re-adds a sudo account every 5 min",
     "priv-user-respawn-service": "systemd timer re-creates a sudo account every 60s",
@@ -106,7 +93,6 @@ _SERVICE_WORDS = ("nginx", "apache", "dovecot", "postfix", "bind", "vsftpd", "my
 
 
 def _iter_vuln_entries(entries):
-    """Yield (slug, vars) from a configurations list (slug or {name, vars})."""
     for e in entries or []:
         if isinstance(e, str):
             yield e, {}
@@ -131,8 +117,6 @@ class NakonIntel(Intel):
 
     def _machine_for(self, ip):
         return self._machines().get(ip)
-
-    # -- credentials ---------------------------------------------------------
 
     def known_creds(self):
         state = self.file(".deploy_state.json") or {}
@@ -200,8 +184,6 @@ class NakonIntel(Intel):
                 pairs += [(u, PAM_ANY_PASSWORD) for u in sorted(users)]
         return list(dict.fromkeys(pairs))
 
-    # -- per-box facts -------------------------------------------------------
-
     def hints_for(self, ip):
         m = self._machine_for(ip)
         if not m:
@@ -248,13 +230,7 @@ class NakonIntel(Intel):
 
 
 def escalation_label(machine):
-    """The escalation label nakon's plants imply for this box, most capable first.
-
-    Labels are the routing vocabulary `tlaloc.policy` and the `escalate` effect
-    share: ``sudo`` (passwordless), ``sudo_pw`` (sudo with the known password),
-    ``escape:<cmd>`` (a one-shot escape), ``capexec:<path>`` (capability/SUID
-    binary), or ``system`` (Windows admin).
-    """
+    """Escalation label the box's plants imply; values are routing vocabulary shared with tlaloc.policy/escalate."""
     if is_windows_local(machine):
         return "system"
     slugs = {slug for slug, _ in _iter_vuln_entries(machine.get("configurations"))}

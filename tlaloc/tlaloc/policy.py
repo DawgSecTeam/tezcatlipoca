@@ -1,26 +1,4 @@
-"""Policy: the ROE as data, the candidate list, and the question bundle.
-
-Three jobs, all deterministic and all pure enough to unit-test without a box:
-
-1. **Bounds.** The event clock, the escalation ladder, the pressure caps and the
-   final windows all come from the config/Compfile — never from a constant baked
-   into a module (the earlier agent's 420-minute clock misfired on every shorter
-   event, and its unrecoverable set existed in three places that drifted).
-   Everything a candidate needs to be legal is asked here, and every answer is a
-   reason string a human can read in the decision log.
-
-2. **Candidates.** The list the decision model chooses from: which effects are
-   applicable on which box right now, with a deterministic score and a reason.
-   The model never invents a candidate — it picks between bounded options
-   (principle 1). Scoring is arithmetic, so it is testable and reproducible.
-
-3. **The question bundle.** The typed questions sent to clef, built from the
-   digest + the top candidates, sized to the model's batch budget. The
-   probabilities that come back are what the gate reads.
-
-The model's *judgment* is the only non-deterministic input, and it can only
-choose among what `candidates()` produced and `validate()` accepts.
-"""
+"""Policy: the ROE as data, the candidate list, and the question bundle."""
 
 import random
 import re
@@ -31,9 +9,8 @@ from .errors import PolicyError
 from .state import digest as digest_mod
 from .state.world import parse_ts
 
-# Takedown mechanism strength order — used only for "strongest unlocked" and for
-# tie-breaking a candidate list. The authoritative allowlist is the LADDER's
-# `modes` per tier (config/Compfile), not this tuple.
+# Strength order only ("strongest unlocked" + tie-break); the authoritative
+# allowlist is the ladder's per-tier `modes`, not this tuple.
 MODE_RANK = {
     "recon": -1,
     "stop": 0,
@@ -47,12 +24,9 @@ MODE_RANK = {
 TAKEDOWN_MODES = ("stop", "stop_mask", "stop_rename", "stop_break_config",
                   "stop_rename_config")
 
-# Deterministic base weights: what is worth doing at all, before any context.
-# Higher = better. Deliberately small integers so the scores stay readable in a
-# decision log and a tie-break is obvious.
-BASE_SCORE = {
-    "reestablish": 90,     # being locked out is the worst state we can be in
-    "implant_channel": 70,  # the channel is how everything else survives eviction
+BASE_SCORE = {  # higher = better; small integers so a decision frame stays readable
+    "reestablish": 90,
+    "implant_channel": 70,
     "escalate": 60,
     "takedown": 55,
     "spray_access": 50,
@@ -67,14 +41,11 @@ BASE_SCORE = {
 
 COST = {"low": 0.0, "med": 1.0, "high": 3.0}
 
-# Effects whose outcome is expensive to get wrong (the confidence gate and the
-# LLM arbiter treat these differently — see decide.py).
+# The gate/arbiter in decide.py treat these differently:
 HIGH_STAKES = ("takedown", "rotate_credlist", "lockout", "block_port")
 
 
 class Candidate(dict):
-    """A bounded option: {id, effect, params, score, reason, cost, tag}."""
-
     @property
     def effect(self):
         return self["effect"]
@@ -126,9 +97,7 @@ class Policy:
         self.rng = rng or random.Random()
         self.red = cfg["red"]
         self.duration_sec = float(self.red["duration_min"]) * 60
-        self.counts = {}          # team -> (up, down) from the scoreboard mirror
-
-    # -- event clock ---------------------------------------------------------
+        self.counts = {}
 
     def elapsed_min(self):
         return (self._now() - self.world.ensure_event_start()) / 60.0
@@ -158,10 +127,7 @@ class Policy:
         return self.remaining_sec() <= float(minutes) * 60
 
     def teardown_active(self):
-        """The final window: ROE suspends the pacing gates and the SAME loop,
-        registry and gate run full-board takedowns at a faster cadence. There is
-        no separate sweeper (the earlier agent's coverage/endgame/burndown
-        collapse into this)."""
+        """Final window: the pacing gates suspend and the SAME loop runs full-board takedowns faster."""
         return self.window_open("endgame_teardown")
 
     def event_phase(self):
@@ -180,11 +146,8 @@ class Policy:
         return self.teardown_active() or self.remaining_sec() <= 5 * 60
 
     def recon_allowed(self):
-        """Read-only work is worth it until the last tenth of the event; after
-        that every cycle belongs to pressure."""
+        """Read-only work pays until the last tenth of the event."""
         return self.remaining_sec() > self.duration_sec * 0.10
-
-    # -- escalation ladder ---------------------------------------------------
 
     def _restored_recently(self, minutes):
         if not minutes:
@@ -192,12 +155,8 @@ class Policy:
         return bool(self.world.restores_within(float(minutes)))
 
     def ladder(self):
-        """The tier in force now (a plain dict), or None when the ladder is off.
-
-        The packet's "give them a break if they remediate one" is
-        `ladder.pause_after_restore_min`: the clock is shifted back instead of
-        advancing, which is stateless across a restart.
-        """
+        """The tier in force now, or None when off. A restore pause shifts the
+        clock back rather than advancing — stateless across a restart."""
         ladder = self.red.get("ladder") or {}
         if not ladder.get("enabled", True):
             return None
@@ -231,8 +190,7 @@ class Policy:
         return None
 
     def allowed_modes(self):
-        """Every mechanism token the ROE allows right now (ladder tier, or the
-        whole vocabulary when the ladder is disabled)."""
+        """Every mechanism token the ROE allows right now."""
         tier = self.ladder()
         if tier is None:
             return list(MODE_RANK)
@@ -249,8 +207,8 @@ class Policy:
         return max(modes, key=lambda m: MODE_RANK[m]) if modes else None
 
     def impact_started(self):
-        """The opening grace: red is inside at T0 but takes nothing down until
-        the ladder (or `caps.grace_min` when the ladder is off) says so."""
+        """Opening grace: red is inside at T0 but takes nothing down until the
+        ladder (or `caps.grace_min` when off) says so."""
         if self.teardown_active():
             return True
         tier = self.ladder()
@@ -260,8 +218,7 @@ class Policy:
         return self.elapsed_min() >= float(self.red["caps"].get("grace_min", 10))
 
     def unrecoverable_unlocked(self):
-        """Port blocks / credential rotations / lockouts are gated: recoverable
-        pressure only in the early half, unless the tier says otherwise."""
+        """Recoverable pressure only until half-time unless the tier unlocks it."""
         if self.teardown_active():
             return True
         tier = self.ladder()
@@ -285,8 +242,6 @@ class Policy:
                                        * self.duration_sec / 60.0)
                                  if nxt else None),
         }
-
-    # -- pressure caps -------------------------------------------------------
 
     def update_counts(self, counts):
         self.counts = counts or {}
@@ -380,14 +335,8 @@ class Policy:
     # -- pacing helpers ------------------------------------------------------
 
     def focus_team(self, rotation_min=None):
-        """The team the loop is concentrating on, rotated on a clock.
-
-        A shuffle bag, not a bare random pick: a uniform re-pick can starve a
-        team for a whole event (a live soak of the earlier agent had five
-        consecutive rotations land on the same half of the range and half the
-        board took zero red pressure). The bag holds the teams not yet focused
-        this cycle.
-        """
+        """Focus team, rotated on a clock. A shuffle bag, not a re-pick: uniform
+        random can starve a team of pressure for a whole event."""
         teams = [t["team"] for t in self.intel.teams()]
         if not teams:
             raise PolicyError("no teams in intel — nothing to red team")
@@ -408,15 +357,9 @@ class Policy:
             self.world.save()
         return current
 
-    # -- candidates ----------------------------------------------------------
-
     def candidates(self, ctx):
-        """Every legal option this cycle, scored deterministically.
-
-        A candidate is {id, effect, params, score, reason, cost, tag,
-        high_stakes}. `id` is stable across cycles for the same option (it is
-        the clef criteria key and the decision-log key).
-        """
+        """Every legal option this cycle; `id` is stable across cycles (the clef
+        criteria key and the decision-log key)."""
         out = []
         focus = self.focus_team()
         counts = self.counts or {}
@@ -424,17 +367,14 @@ class Policy:
             ip, team, windows = box["ip"], box["team"], box["windows"]
             self._candidates_for_box(ctx, out, box, focus, counts)
         out.extend(self._candidates_global(ctx, out))
-        # Only offer effects this deployment actually has. A module that is not
-        # built (a phased migration) or that failed to import must not become a
-        # candidate the loop then throws on — the catalogue's completeness is a
-        # test-time invariant (effects.MISSING_MODULES), not a runtime gamble.
+        # An effect that failed to import must not become a candidate; catalogue
+        # completeness is a test-time invariant (effects.MISSING_MODULES).
         from . import effects as effects_mod
         registered = set(effects_mod.REGISTRY)
         out = [c for c in out if c["effect"] in registered]
         for cand in out:
             cand["score"] = round(cand["score"], 2)
-            # explicit flag OR the configured high-stakes effect list (one rule,
-            # applied in one place — the gate reads this, not its own copy)
+            # one rule, one place: the gate reads this flag, not its own copy
             cand["high_stakes"] = bool(cand["high_stakes"]
                                        or cand["effect"] in self._high_stakes())
         out.sort(key=lambda c: (-c["score"], c["effect"],
@@ -456,7 +396,6 @@ class Policy:
         standing = {a.get("kind") for a in self.world.artifacts(ip)}
         dead = self._dead_artifacts(ip)
 
-        # 1. access
         if fh is None:
             out.append(make_candidate("reestablish", {"ip": ip},
                                       BASE_SCORE["reestablish"] + score_bonus,
@@ -474,7 +413,6 @@ class Policy:
                                           "useful needs root/admin",
                                           cost="low", tag=f"escalate {ip}"))
 
-        # 2. channel (C2)
         if ctx.c2 is not None and root:
             if not live_channel:
                 age = self.world.callback_age(self._box_id_for_ip(ip))
@@ -496,7 +434,6 @@ class Policy:
                                           "does not need SSH",
                                           cost="low", tag=f"task {ip}"))
 
-        # 3. persistence (missing families, or a re-plant after blue cleaned)
         if root and not dead:
             if not any(k and k.startswith("persist-") for k in standing):
                 out.append(make_candidate("persist", {"ip": ip, "family": "auto"},
@@ -513,7 +450,6 @@ class Policy:
                                       f"re-plant ({family or 'auto'})",
                                       cost="med", tag=f"replant {ip}"))
 
-        # 4. pressure
         if root:
             up, down = counts.get(team, (None, None))
             ok, why = self.can_impact(team)
@@ -561,7 +497,6 @@ class Policy:
                     "lockout window is open — deny blue their own logins",
                     cost="low", high_stakes=True))
 
-        # 5. cheap read-only work
         target = self.world.target_record(ip) or {}
         if not target.get("recon_done") and self.recon_allowed():
             out.append(make_candidate("recon", {"ip": ip},
@@ -570,7 +505,6 @@ class Policy:
                                       cost="low", tag=f"recon {ip}"))
 
     def _pressure_targets(self, ctx, ip, up):
-        """Scored services worth hitting here, tagged with the scoreboard state."""
         services = self.intel.services_for(ip)
         team_status = {}
         if self.sensors is not None:
@@ -600,8 +534,7 @@ class Policy:
         return out
 
     def _candidates_global(self, ctx, existing):
-        """Options that are not tied to one target: improvisation when nothing
-        else is bounded (the escape hatch always exists)."""
+        """Options not tied to one target: improvisation is the escape hatch."""
         out = []
         if not existing and ctx.cfg["llm"]["enabled"]:
             out.append(make_candidate(
@@ -647,15 +580,9 @@ class Policy:
     def _family_of(artifact):
         return artifact.get("family") or (artifact.get("kind") or "").removeprefix("persist-")
 
-    # -- validation ----------------------------------------------------------
-
     def validate(self, candidate, ctx):
-        """The ROE check the loop runs before execute(). Raises PolicyError.
-
-        Effects check their own preconditions too (defense in depth, and the
-        seed path calls effects directly) — this is the layer that keeps a
-        *candidate list* honest: the caps, the ladder and the windows.
-        """
+        """The ROE check before execute(); raises PolicyError. Effects re-check
+        their own preconditions too — the seed path calls effects directly."""
         if not isinstance(candidate, dict) or "effect" not in candidate:
             raise PolicyError("candidate must be a dict with an 'effect'")
         effect = candidate["effect"]
@@ -683,16 +610,8 @@ class Policy:
             raise PolicyError("lockout window is not open")
         return candidate
 
-    # -- the frame + questions ----------------------------------------------
-
     def frame(self, ctx, candidates, recent=None, budget_tokens=8192):
-        """The digest input: what the model is allowed to see (typed, ordered).
-
-        Typed and compact, but no longer squeezed: the endpoint takes a 16k-token
-        batch, so the frame carries every interesting box with its service
-        states and blue-response history, and `budget_tokens` is only the guard
-        `state/digest.build` trims against if a smaller endpoint is configured.
-        """
+        """The digest input: what the model is allowed to see (typed, ordered)."""
         boxes = []
         untouched = 0
         for box in self.intel.boxes():
@@ -706,9 +625,7 @@ class Policy:
             dead = len(self._dead_artifacts(ip))
             interesting = bool(fh or down or dead or box["team"] == self.focus_team())
             if not interesting:
-                # A box we have never touched and that is fully up is noise to a
-                # decision: report the count, not the rows (this is what keeps
-                # the digest inside the model's batch at 8+ boxes).
+                # never-touched fully-up boxes count instead of costing rows
                 untouched += 1
                 continue
             entry = {
@@ -785,18 +702,12 @@ class Policy:
     def question_bundle(self, digest, candidates, ctx, *, max_options=8,
                         cycle=0, include_escalation=True, include_blue_check=False,
                         compact=False, include_pressure=True):
-        """The typed questions for clef (choice / score / noul).
-
-        The bundle is built from the digest + the top candidates; nothing in it
-        invents an option that `candidates()` did not produce. Returned as
-        (questions, meta) so the caller can log both.
-        """
+        """Typed questions for clef; nothing invents an option candidates() omitted."""
         top = list(candidates)[:max_options]
         limit = 32 if compact else 160
         criteria = {}
         for cand in top:
-            # Compact mode drops the duplicated "effect id — " prefix: the id
-            # already carries the effect and the target, so the text is the reason.
+            # compact: the id carries effect+target already, so text is the reason
             criteria[cand["id"]] = (cand["reason"][:limit] if compact
                                     else self._option_text(cand))
         hold = "hold"
@@ -852,5 +763,4 @@ class Policy:
         return f"{cand['effect']} {cand['tag']} — {cand['reason']}"[:160]
 
     def request(self, digest, questions):
-        """The exact clef request body (state + questions)."""
         return {"state": digest, "questions": questions}

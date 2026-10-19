@@ -1,5 +1,4 @@
-"""Phase 8: seed teams, unpause the engine, create injects — each once; then the
-student portal (opt-in, non-fatal)."""
+"""Phase 8: seed teams, unpause the engine, create injects (each once), then the opt-in portal."""
 
 from config.injects_config import injects_fingerprint, resolve_inject_times
 from portal.portal_ops import deploy_portal
@@ -9,12 +8,6 @@ from common.timing import timed
 
 
 def phase8_seed(ctx):
-# [8/8] Seed teams, unpause the engine, create injects — each once.
-#
-#     None of the three POSTs is idempotent, so each is guarded by its own state
-#     flag: a resume in the crash window between a POST and the flag-save must not
-#     repeat it. The unpause window is the one that asks the engine first
-#     (engine_paused) because a re-POST there is the visible failure mode.
     if ctx.from_phase > 8:
         print("[8/8] Skipped (resume).")
         return
@@ -40,18 +33,14 @@ def phase8_seed(ctx):
         print("  Teams already seeded (resume) — skipping.")
 
     if held:
-        # The hold outlives the deploy: the engine stays paused and the competition
-        # clock stays unstarted until competition-ops.py start flips both. State keeps
-        # engine_unpaused/injects_created unset so the start has clean guards to work
-        # with, and a resume of a held deploy holds too (hold_start lives in state).
+        # the hold outlives the deploy: engine stays paused and the clock unstarted
+        # until competition-ops.py start flips both, so those flags stay unset
         print("  Start is HELD (--hold-start): the engine stays paused and injects are "
               "deferred — begin the competition with:")
         print(f"      python3 competition-ops.py start --comp-dir {ctx.comp_dir}")
     else:
         if not ctx.state.get("engine_unpaused"):
-            # The unpause POST isn't idempotent, so a resume in the crash
-            # window between POST and flag-save asks the engine first and
-            # re-POSTs only when it really is still paused.
+            # the unpause POST is not idempotent: a resume asks the engine first
             paused = engine_paused(ctx.scoring_ip, quotient_ctx)
             if paused is False:
                 print("  Engine reports itself unpaused — recording and skipping.")
@@ -63,11 +52,8 @@ def phase8_seed(ctx):
         else:
             print("  Engine already unpaused (resume) — skipping.")
 
-        # `injects_created` alone is not a done-marker: it cannot tell "already created"
-        # from "already created, but the inject set has since changed". The fingerprint is
-        # taken BEFORE resolve_inject_times (which pops the offsets), and a mismatch
-        # re-enters create_injects — safe because that call dedups on titles, so only the
-        # genuinely new injects are posted.
+        # `injects_created` cannot tell current from stale: the fingerprint gates
+        # re-entry and must be taken BEFORE resolve_inject_times pops the offsets
         want_injects = injects_fingerprint(ctx.injects) if ctx.injects else None
         if ctx.injects and (not ctx.state.get("injects_created")
                             or ctx.state.get("injects_fingerprint") != want_injects):

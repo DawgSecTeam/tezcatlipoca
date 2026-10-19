@@ -1,13 +1,4 @@
-"""Regression tests for the red-vs-blue scrim harness defect audit.
-
-Every test here pins a defect that only shows up
-on live infrastructure (a 90-minute run against real ranges), where the evidence is a
-post-hoc report — so the failure paths matter more than the happy path. The source
-carries the why for each fix; each test below names the mechanism it protects.
-
-Offline and fast: no network, no SSH, no real opencode. The one slow fixture is D1's
-orphaned-grandchild reproduction, which is two sub-second timeouts.
-"""
+"""Regression tests for the red-vs-blue scrim harness defect audit."""
 
 import contextlib
 import importlib.util
@@ -29,8 +20,7 @@ from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
-    # run-agent-scrim.py imports utils/config_ops at module scope; the harness tests in
-    # this repo load modules that rely on the repo root being importable.
+    # the harness modules loaded below assume the repo root is importable
     sys.path.insert(0, str(_REPO))
 
 
@@ -68,9 +58,9 @@ def _wait_dead(pid, timeout=5.0):
 class ProcessTreeSupervision(unittest.TestCase):
 # run_tree must reap the whole process group; subprocess.run(timeout=) does not.
 
-    # A grandchild that IGNORES SIGINT/SIGTERM: only the SIGKILL escalation can reap it,
-    # which is exactly the nakon/badauto case (they keep mutating infra and holding the
-    # deploy lock after the direct child is killed).
+    # A grandchild that IGNORES SIGINT/SIGTERM: only the SIGKILL escalation can reap it, which
+    # is exactly the nakon/badauto case (they keep mutating infra and holding the deploy
+    # lock after the direct child is killed).
     @staticmethod
     def _orphan_script(pidfile):
         return (f"bash -c 'trap \"\" INT TERM; exec sleep 300' & "
@@ -138,8 +128,7 @@ class BlueFeedLockAndTimeout(unittest.TestCase):
                                            lock, threading.Event(), team=1)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(len(calls), 2)
-        # pre-fix this was one acquisition around BOTH attempts ("acquire", "release"):
-        # two hung attempts held the shared endpoint lock for up to 2x CYCLE_TIMEOUT.
+        # pre-fix this was one acquisition around BOTH attempts
         self.assertEqual(lock.events, ["acquire", "release", "acquire", "release"])
         self.assertFalse(lock._lock.locked())
 
@@ -167,8 +156,8 @@ class BlueFeedLockAndTimeout(unittest.TestCase):
         self.assertEqual(len(calls), 2, "the retry should have been attempted")
         feed = (rd / "blue-team1" / "feed.log").read_text()
         self.assertIn("===== cycle T+0 TIMEOUT =====", feed)
-        # ...and the rehearsal gate reads exactly this header. Pre-fix, a retried-then-
-        # timed-out cycle was the one timeout the report could not see.
+        # the rehearsal gate reads exactly this header: a retried-then-timed-out cycle used to
+        # be the one timeout the report could not see
         self.assertEqual(blue_side.blue_metrics(rd)["timeouts"], 1)
 
 
@@ -181,7 +170,7 @@ class WorkerSupervision(unittest.TestCase):
 
     def test_team_tid_raises_a_clear_error_on_an_error_body(self):
         # an error/HTML body used to make next(...) raise StopIteration/TypeError inside
-        # the monitor thread; that thread then died with nothing watching it.
+        # the monitor thread, killing it with nothing watching
         for body in ('{"error":"Forbidden"}', "<html>500</html>", '{"ID":1}'):
             with mock.patch.object(quotient_api, "qget",
                                    lambda *a, **k: SimpleNamespace(stdout=body)):
@@ -252,9 +241,9 @@ class RedLlmWatchdog(unittest.TestCase):
 
 
     def test_report_survives_red_events_without_a_world_clock(self):
-        # A run dir with red events but no world.json has no event_start; the stall maths
-        # used to compare None to a float and abort the WHOLE report (so a timeout the
-        # rehearsal gate must see was never counted).
+        # A run dir with red events but no world.json has no event_start; the stall maths used to
+        # compare None to a float and abort the WHOLE report, so a timeout the rehearsal gate
+        # must see was never counted.
         run = Path(tempfile.mkdtemp())
         (run / "evidence" / "red").mkdir(parents=True)
         (run / "evidence" / "red" / "events.jsonl").write_text(json.dumps(
@@ -262,7 +251,7 @@ class RedLlmWatchdog(unittest.TestCase):
              "tactic": "impact_service", "target": "192.168.101.4", "detail": "x"}) + "\n")
         out, meta = render.build_report(run)
         self.assertIn("## Gates", out)
-        self.assertEqual(meta["gates_failed"], meta["gates_failed"])  # built, did not raise
+        self.assertEqual(meta["gates_failed"], meta["gates_failed"])
 
 
 
@@ -275,10 +264,7 @@ class EvidenceHygiene(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(p.parent.stat().st_mode), 0o700)
         self.assertTrue(str(p).startswith(str(rd)))
         self.assertFalse(str(p).startswith("/tmp/jar."))
-        # deterministic basename: the generated qlogin/score.py helpers and the driver
-        # must agree on one file across processes.
         self.assertEqual(quotient_api.jar_path(rd, "team1"), str(p))
-        # an existing jar is never truncated by looking it up again
         p.write_text("cookie")
         quotient_api.jar_path(rd, "team1")
         self.assertEqual(p.read_text(), "cookie")
@@ -325,7 +311,6 @@ class EvidenceHygiene(unittest.TestCase):
             self.assertTrue(quotient_api._qlogin(creds, "team1", str(jar)))
         self.assertEqual(jar.read_text(), "new-cookie")
         self.assertEqual(stat.S_IMODE(jar.stat().st_mode), 0o600)
-        # the temp file was renamed onto the jar, not left behind
         self.assertEqual(sorted(p.name for p in (rd / ".jars").iterdir()), ["team1.jar"])
 
     def test_jar_lock_is_per_account_and_reentrant(self):
@@ -467,7 +452,6 @@ class LineupDerivation(unittest.TestCase):
         fake_run = self._run_dir("totally-unknown-run")
         labels = host_labels.box_labels(fake_run)
         self.assertEqual(labels, {})
-        # empty map -> raw dotted octet, never a guessed name
         self.assertEqual(host_labels.host_label("192.168.101.4", labels), "1:.4")
 
 
@@ -503,14 +487,10 @@ class AuthoredCompSweepMarker(unittest.TestCase):
                 os.environ["TEZ_COMPETITIONS_ROOT"] = old_root
         dst = tmp / "competitions" / "demo"
         self.assertTrue((dst / "Compfile").exists())
-        # pre-fix the REAL marker was copied, so the new competition claimed to be
-        # post-clone swept and deploy skipped the sweep the fresh range needs.
         self.assertFalse((dst / ".postclone-swept").exists())
 
     def test_bare_from_template_name_resolves_against_competitions(self):
-    # caught live: a bare --from-template <name> resolved as a cwd-relative Path,
-    #     a cwd-relative path, so a driver launched from anywhere but the repo root
-    #     died in authoring on a template that demonstrably exists.
+    # a bare --from-template <name> must resolve against the comps root, not the cwd
         tmp = Path(tempfile.mkdtemp())
         (tmp / "competitions" / "tmpl").mkdir(parents=True)
         (tmp / "competitions" / "tmpl" / "Compfile").write_text("name tmpl\n")
@@ -526,17 +506,10 @@ class AuthoredCompSweepMarker(unittest.TestCase):
         self.assertTrue((tmp / "competitions" / "demo" / "Compfile").exists())
 
 class RedReachabilityGate(unittest.TestCase):
-# pre-T0 gate: red01 can dial a box on every team.
-#
-#     a scale soak: routed red01 could not reach any satellite team box (15/15
-#     cred_sprays, both db_attacks "unreachable over SSH", 0 footholds) and the run went
-#     40 minutes before anyone noticed. `verify --red-identity` only proved red reached
-#     ONE box on its own segment, and stage_verify runs before red exists, so nothing
-#     checked red's path across the range before T0.
-#
-#     The gate must (a) run the every-team verify, (b) fail the run rather than warn, and
-#     (c) stay out of a masq-mode run, where red shares the team gateways and has no path
-#     of its own to prove.
+# pre-T0 gate: red01 can dial a box on every team. Nothing checked red's path across the range
+# before T0, so a routed red01 that could reach no satellite team box went 40 minutes unnoticed.
+# The gate must run the every-team verify, fail the run rather than warn, and stay out of a
+# masq-mode run, where red shares the team gateways and has no path of its own to prove.
 
     def _args(self, mode=None, red_ip="10.0.0.196"):
         return SimpleNamespace(red_mode=mode, red_ip=red_ip)
@@ -575,9 +548,8 @@ class RedReachabilityGate(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--red-ip") + 1], "10.0.0.196")
 
     def test_unrelated_estate_fails_do_not_kill_the_red_gate(self):
-    # full-scrim-20261013c: verify exited rc=1 on misconfig/plant_coverage while
-    #     red_identity/red_teams both PASSED — the gate read the estate's rc and
-    #     killed the run before T0. The gate's subject is red's path only.
+    # verify can exit rc=1 on an unrelated estate failure while red_identity/red_teams both
+    # PASS: the gate's subject is red's path only
         with self._repo_rooted() as comp, \
                 mock.patch.object(procs, "run", return_value=SimpleNamespace(
                     returncode=1, stdout=self.PASS_OUT, stderr="")), \

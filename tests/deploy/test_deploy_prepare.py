@@ -1,13 +1,4 @@
-"""Offline unit tests for prepare()'s extracted steps (each step fills the DeployContext it is given).
-
-prepare() is a short sequencer over _load/_resolve/_apply/_build/_run/_enumerate helpers,
-all filling one DeployContext. These tests are the call-boundary half of that split: the
-decidable logic of each step (the resume guards, the golden gate's position, the stale-state
-guard, the engine mgmt IP/gw defaults, the target split) and — most importantly — the ORDER
-the sequencer must keep, because several of those orderings are load-bearing and commented.
-
-Every infrastructure call is patched: none of this touches Proxmox, SSH or the network.
-"""
+"""Offline unit tests for prepare()'s extracted steps (each step fills the DeployContext it is given)."""
 
 import contextlib
 import io
@@ -66,8 +57,7 @@ class EngineVmidResolution(unittest.TestCase):
 
 
     def test_fresh_run_without_a_flag_takes_the_env_vmid(self):
-        # TEZ_SCORING_VMID ships in every env variant; caught live it was
-        # silently ignored (the default 1000 was taken) until a second range collided.
+        # TEZ_SCORING_VMID ships in every env variant and used to be silently ignored
         with tempfile.TemporaryDirectory() as d:
             with patch.dict(os.environ, {"TEZ_SCORING_VMID": "777"}):
                 ctx = DeployContext()
@@ -75,8 +65,7 @@ class EngineVmidResolution(unittest.TestCase):
         self.assertEqual(ctx.engine_vmid, 777)
 
     def test_a_non_numeric_env_vmid_refuses_by_name(self):
-        # Silently taking the default is what made a wrong scoring vmid invisible; a bad
-        # value must name the key instead.
+        # Silently taking the default makes a wrong scoring vmid invisible
         with tempfile.TemporaryDirectory() as d:
             with patch.dict(os.environ, {"TEZ_SCORING_VMID": "not-a-number"}):
                 ctx = DeployContext()
@@ -151,13 +140,12 @@ class PlacementAndLock(unittest.TestCase):
 
     def test_lock_is_taken_after_placement_and_keyed_on_the_resolved_vmid(self):
         placement, order = self._run(1234, ({"team_slots": {"team1": 0}}, None))
-        # resolve -> activate (env now points at the engine's host) -> lock at that vmid
         self.assertEqual(order, [("resolve", 1234), "activate", ("lock", 1234)])
         self.assertEqual(placement, {"team_slots": {"team1": 0}})
 
     def test_the_engine_record_is_an_input_to_the_one_mgmt_ip_resolution(self):
-        # The record used to overwrite the resolved value AFTER prepare, silently beating
-        # --engine-mgmt-ip; it is now one input to the single resolution, and the flag wins.
+        # the record used to overwrite the resolved value AFTER prepare, silently beating
+        # --engine-mgmt-ip; it is now one input to the single resolution, and the flag wins
         from deploy_lib.prepare import _resolve_engine_mgmt_ip
         from multinode.nodes_config import NodeRecord
         record = NodeRecord(name="n1", endpoint="https://n1.lab:8006", node="pve1",
@@ -277,7 +265,6 @@ class GoldenGatePosition(unittest.TestCase):
                                  side_effect=lambda *a: calls.append("gate")
                                  or {"code": True, "config": False}):
                 dl_configs.generate_stage_configs_and_hashes(ctx, comp_dir)
-        # the gate is the LAST thing that runs, i.e. before prepare() returns
         self.assertEqual(calls, ["bundle", "templates", "hashes", "gate"])
         self.assertEqual(ctx.golden_hashes, {"web01": "HASH"})
 
@@ -308,7 +295,6 @@ class GoldenGatePosition(unittest.TestCase):
                                  return_value={"hashes": {"golden": {}}, "frozen_at": "t"}), \
                     dpatch("golden_freeze_gate", side_effect=gate):
                 dl_configs.generate_stage_configs_and_hashes(ctx, comp_dir)
-        # one classification per box, from the frozen record's stored inputs
         self.assertEqual(set(seen), {"keepme", "rebuildme"})
         self.assertEqual(seen["keepme"], ({}, {}, "t"))
 
@@ -324,10 +310,10 @@ class EstateInputs(unittest.TestCase):
         self.addCleanup(config.reset)
         ctx = _ctx(engine_vmid=1000, placement=placement)
         with patch.dict(os.environ, env if env is not None else self.ENV, clear=True):
-            ctx.engine_mgmt_ip = dl_estate_inputs.engine_mgmt_ip_from_env()  # as prepare() does
+            ctx.engine_mgmt_ip = dl_estate_inputs.engine_mgmt_ip_from_env()
             dl_estate_inputs.build_estate_inputs(ctx, comp_dir)
             # os.environ is restored when patch.dict exits, so snapshot the two engine
-            # vars here — that is where the code under test exported them.
+            # vars here
             env_view = {"engine_mgmt_ip": config.active().engine.mgmt_ip,
                         "engine_mgmt_gw": config.active().engine.mgmt_gw,
                         "marked_default":
@@ -379,7 +365,7 @@ class EstateInputs(unittest.TestCase):
 
 class TargetSplit(unittest.TestCase):
     def test_unmanaged_boxes_stay_in_all_targets_but_leave_the_work_lists(self):
-        # The real shape enumerate_targets returns — the roster mirror needs all of it.
+        # the real shape enumerate_targets returns — the roster mirror needs all of it
         targets = [
             {"vmid": 1, "vm_name": "team1-web01", "ip": "192.168.101.2", "node": "pve",
              "slot": 0, "box_name": "web01", "team_key": "team1",
@@ -410,13 +396,10 @@ class TargetSplit(unittest.TestCase):
 
 
 class PrepareSequencer(unittest.TestCase):
-# prepare()'s step order and its early-None return, with every step stubbed.
-#
-#     This is the test that says the ordering the comments argue for is the ordering the
-#     code runs: engine-vmid first, placement+lock next, preflight before the fresh
-#     credential mint (a gate abort must not leave minted credentials no engine ever
-#     received), the golden/frozen step before the confirmation (and therefore before
-#     phase 1), targets only after the prompt.
+# prepare()'s step order and its early-None return, with every step stubbed: engine-vmid first,
+# placement+lock next, preflight before the fresh credential mint (a gate abort must not leave
+# minted credentials no engine ever received), the golden/frozen step before the confirmation
+# (and therefore before phase 1), targets only after the prompt.
 
     def _prepare(self, comp_dir, order, confirm=True, buf=None):
         def rec(name, setter=None):
@@ -480,7 +463,6 @@ class PrepareSequencer(unittest.TestCase):
         self.assertEqual(order, ["spec", "prior", "inputs", "teams", "resolve", "activate",
                                  ("lock", 1234), "preflight", "mint", "generated",
                                  "estate-inputs", "confirm", "targets"])
-        # prepare() hands back the one context the phases share, carrying what the steps set
         self.assertIsInstance(result, DeployContext)
         self.assertEqual(result.engine_vmid, 1234)
         self.assertEqual(result.comp_name, "probe")
@@ -491,13 +473,10 @@ class PrepareSequencer(unittest.TestCase):
 
 class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
 # Regression guard: this step READS the spec and writes only the generated fields, so the
-#     competition's event name survives. Reading the spec's `name` as the loop variable
-#     would assign each golden box name onto the spec and leave the LAST one there,
-#     replacing the Compfile event name. The generated `event_name` — and with it the
-#     ownership tag stamped on the engine and every team box — would become
-#     `comp-<lastbox>` while phase 1 compares against `comp-<competition>`, so phase 1's
-#     `comp_tags <= tags` ownership check would refuse to reclaim the range's own VMs;
-#     `confirm_deploy` would also display the wrong name.
+# competition's event name survives. Reading the spec's `name` as the loop variable would leave
+# the LAST golden box name there, so the generated `event_name` — and the ownership tag on every
+# VM — would become `comp-<lastbox>` while phase 1 compares `comp_tags <= tags` against
+# `comp-<competition>`, refusing to reclaim the range's own VMs.
 
     def _run(self, comp_dir, frozen):
         golden = comp_dir / "golden.json"
@@ -519,9 +498,7 @@ class FrozenGateDoesNotClobberTheEventName(unittest.TestCase):
         return ctx
 
     def test_gate_mutates_no_spec_field(self):
-    # The general invariant behind the bug: this step READS the spec and writes only
-    #         into the generated fields. Any attribute mutation here is a latent version of
-    #         the same clobbering bug, so guard the whole context rather than just `name`.
+    # any attribute mutation here is a latent version of the same clobbering bug
         with tempfile.TemporaryDirectory() as d:
             golden_dir = Path(d)
             with dpatch("frozen_state",

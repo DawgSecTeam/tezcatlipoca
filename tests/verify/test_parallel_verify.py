@@ -1,22 +1,4 @@
-"""verify-competition.py's three big remote loops run on a bounded pool, and every
-gate still returns the same verdict, the same messages, and the same exit code.
-
-Why these tests exist: verify had ZERO concurrency even though four sibling modules
-use utils.run_concurrent. For a 4-team x 5-box range:
-  * check_domains was ~20 sequential per-VM probes at 120s (Windows) / 60s (Linux)
-    each — 3-10 minutes realistically and up to ~40 minutes in the all-timeout case,
-    which is exactly the half-deployed range the gate exists to catch;
-  * check_misconfig was a groups x configs x machines loop of 60s SSH probes.
-
-The regression risk of a concurrent rewrite is never "did it get faster" — it is
-"did a status, a message, or an exit code change". These tests pin:
-  * parallel and re-serialised runs produce byte-identical stdout and the same status
-    for representative inputs, including the all-probes-failed case (FAIL, not PASS);
-  * the verdict tables the pre-refactor tests encoded (present-on-all PASS,
-    present-on-some FAIL, absent-everywhere FAIL, all-unknown SKIP, no domain_roles
-    SKIP, duplicate DomainSID FAIL) still hold;
-  * exceptions the serial loops let escape still escape;
-"""
+"""verify's parallel loops must return the same verdicts, messages, and exit codes as the serial loops."""
 
 import contextlib
 import io
@@ -59,8 +41,7 @@ def _run(fn, *args, **kwargs):
     return result, out.getvalue()
 
 
-# The pre-W11 shape, used as the control: identical code, one item at a time,
-# exceptions captured per slot exactly as utils.run_concurrent captures them.
+# Serial control mirroring utils.run_concurrent's contract, exceptions captured per slot.
 def _serial_run_concurrent(items, fn, max_workers=8):
     out = []
     for item in items:
@@ -125,10 +106,7 @@ def _valid_responses(dc1=_dc_out("team104.local", SID_A),
     return out
 
 
-# check_domains: same verdict and same stdout as the serial loop, overlapping.
 class DomainsParallelism(unittest.TestCase):
-    # (label, responses, expect_status) — representative inputs, including the
-    # all-probes-failed and duplicate-SID cases the gate exists for.
     def _cases(self):
         return [
             ("all_valid_distinct", _valid_responses(), v_model.Status.PASS),
@@ -150,8 +128,7 @@ class DomainsParallelism(unittest.TestCase):
                 self.assertIs(result.status, expect)
 
 
-    # The half-deployed case: every probe times out/errors. Serial semantics were
-    # one FAIL line per box and a FAIL verdict — the parallel pass must match.
+    # Serial semantics: one FAIL line per box plus a FAIL verdict.
     def test_all_probes_failed_is_a_fail_not_a_pass(self):
         every = {vm_id_for(t, i) for t in (104, 105) for i in range(4)}
         probe = _windows_probe({}, fail=every)
@@ -227,7 +204,7 @@ def _survival_run(outputs_by_ip, serial=False):
         return _misconfig_run(CTX, SURVIVAL_BOXES)
 
 
-# The D3/D4 verdict table must survive the rewrite, message for message.
+
 class MisconfigSurvivalParallelism(unittest.TestCase):
     def _both(self, outputs):
         par, par_out = _survival_run(outputs)
@@ -259,8 +236,7 @@ class MisconfigSurvivalParallelism(unittest.TestCase):
         _, passed = v_verdict.gate_verdict([result])
         self.assertFalse(passed)
 
-    # The serial loop only caught TimeoutExpired/CheckError; a bug elsewhere must
-    # not be silently recorded as 'unknown' by the pool.
+    # Only TimeoutExpired/CheckError are caught; a bug elsewhere must not become 'unknown'.
     def test_unexpected_exception_still_escapes(self):
         def boom(ctx, ip, cmd, timeout=60):
             raise OSError("something unrelated broke")

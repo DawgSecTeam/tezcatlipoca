@@ -1,29 +1,4 @@
-"""Wipe the deploy's own traces from every team box, before blue ever looks.
-
-The deploy, the nakon plant and the day-0 seed all reach each box over ssh as
-root, and they leave the whole operation in the box's own logs: the sessions in
-`auth.log`, the package installs in the apt/dpkg history, the unit and registry
-writes in the journal and the Windows event log (SCM 7045 "service installed"),
-the commands themselves in the shell histories. A blue agent that greps any of
-those gets the plant handed to it — every service name, every path, every
-callback — which is precisely what the randomized naming exists to prevent.
-
-So this runs as the LAST tezcatlipoca step before the clock starts:
-
-  * deploy phase 7, AFTER the plant/seed and BEFORE the `tz-ready` snapshot, so
-    the restore point every box carries is clean too (a wipe after the snapshot
-    would leave the traces restorable);
-  * the agent harness, AFTER the day-0 seed and before red's director starts.
-
-The wipe is scoped by red01's world.json first: every planted artifact path goes
-on an explicit never-touch skip-list, because a decoy IS payload the operator
-planted on purpose — one run lost a decoy in this window (cause unproven;
-the staging rm globs and the journal vacuum are the prime suspects). After the
-wipe the artifact checks are re-run and anything that was alive before and is
-dead after is named loudly. Best-effort by design: a box that cannot be reached
-is logged and skipped. A wipe is not allowed to fail a deploy — but it is also
-not allowed to be silent.
-"""
+"""Wipe the deploy's own traces from every team box, before blue ever looks."""
 
 import json
 import os
@@ -36,15 +11,14 @@ from common.targets import frozen_roster
 from scrim import core, procs
 from scrim.core import log
 
-# Windows wipe budget: 180 s ScrimTimeout-ed on BOTH Windows boxes live
-#  — Remove-Item -Recurse over Temp/LogFiles is simply slow.
+# Windows wipe budget: Remove-Item -Recurse over Temp/LogFiles is simply slow, and this
+# ScrimTimeout-ed on both Windows boxes live.
 WIN_WIPE_TIMEOUT = 600
 
-# What a deploy/plant/seed leaves behind on a Linux box. Truncation (not
-# deletion) keeps the files' ownership/mode intact, so a blue reader sees an
-# empty log rather than a missing one — a deleted file is its own tell.
-# $SKIP_PATHS/in_skip come from the caller-built skip block and guard every
-# destructive line: a planted path must never match a wipe glob.
+# What a deploy/plant/seed leaves behind on a Linux box. Truncation (not deletion) keeps the
+# files' ownership/mode intact, so a blue reader sees an empty log rather than a missing one —
+# a deleted file is its own tell. $SKIP_PATHS/in_skip come from the caller-built skip block and
+# guard every destructive line.
 LINUX_SCRIPT = r"""
 set +e
 for f in /var/log/auth.log /var/log/secure /var/log/syslog /var/log/messages \
@@ -79,12 +53,8 @@ journalctl --vacuum-time=1s >/dev/null 2>&1
 echo TRAILS_LINUX_OK
 """
 
-# Windows: the SCM event log (7045) records every service install, the
-# PowerShell console history records the exact install scripts, and Panther/Setup
-# keep the provisioning scripts. Clearing Security/System/Application wholesale
-# is itself loud, so the payload-driven traces go and the event logs are
-# truncated only when the operator asks (SCRIM_CLEAR_WIN_EVENTLOGS=1).
-# $skip/Test-SkipPath come from the caller-built header.
+# Windows: the SCM event log (7045) records every service install and the PowerShell console
+# history the exact install scripts. $skip/Test-SkipPath come from the caller-built header.
 WINDOWS_PS = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 $wipeRoots = @("$env:SystemRoot\Temp", "$env:SystemRoot\Panther",
@@ -140,9 +110,9 @@ def box_targets(comp, creds):
     return out
 
 
-# world.json is what the plant/seed recorded: its artifact paths are the never-touch
-# set, and its per-artifact check_cmd is the integrity probe the post-wipe re-check
-# re-runs. Best-effort: any failure logs and returns empty.
+# world.json is what the plant/seed recorded: its artifact paths are the never-touch set and
+# its per-artifact check_cmd the post-wipe re-check re-runs. Best-effort; failure logs and
+# returns empty.
 def red01_world_artifacts(comp, creds):
     state = estate_state.load_flat(comp)
     red_ip = (state.get("red") or {}).get("red_ip")
@@ -204,12 +174,9 @@ def _windows_skip_header(paths):
 
 
 def _run_windows_script(creds, ip, script, timeout=WIN_WIPE_TIMEOUT):
-    # -EncodedCommand dies above the Windows shell's command-line limit (the 103-path
-    # skip header pushed the UTF-16LE base64 past cmd.exe's 8191 chars: "The command
-    # line is too long.", caught live), and `-Command -` parses stdin LINE BY LINE
-    # so any multi-line construct breaks ("Missing expression after ','"). A staged
-    # .ps1 + -File has neither cliff. The script must stay ASCII (the skip-list
-    # extraction already filters to a safe charset).
+    # -EncodedCommand dies above cmd.exe's 8191-char limit and `-Command -` parses stdin line by
+    # line, so multi-line constructs break; a staged .ps1 + -File has neither cliff. The script
+    # must stay ASCII.
     base = core.box_ssh_base(creds, connect_timeout=15)
     env = {**os.environ, "SSHPASS": creds.get("BOX_PW") or ""}
     remote_path = "C:/Windows/Temp/.tz-wipe.ps1"
@@ -219,8 +186,7 @@ def _run_windows_script(creds, ip, script, timeout=WIN_WIPE_TIMEOUT):
         fh.write(script)
         local = fh.name
     try:
-        # base is an SSH argv (starts with "ssh"); scp takes the same options
-        # with its own program name.
+        # base is an SSH argv; scp takes the same options with its own program name
         scp_argv = ["sshpass", "-e", "scp"] + base[1:] + [
             local, f"Administrator@{ip}:{remote_path}"]
         scp = procs.run_tree(scp_argv, timeout=90, check=False, env=env)
@@ -257,8 +223,6 @@ def _clean_windows(creds, ip, skip_paths=()):
     detail = "" if ok else (r.stderr or r.stdout or "").strip()[-200:]
     return ok, detail
 
-
-# plant integrity
 
 def _linux_integrity_script(arts):
     lines = []
@@ -341,9 +305,8 @@ def _integrity_report(pre, post, artifacts, phase):
     return alive, checked, casualties
 
 
-# planted paths go on the never-touch skip-list, and the plant is integrity-checked
-# before AND after the wipe so a casualty is named in the log instead of surfacing as a
-# mystery dead beacon at T+30; returns {ip: bool}, never raises
+# Planted paths go on the never-touch skip-list, and the plant is integrity-checked before AND
+# after the wipe so a casualty is named in the log; returns {ip: bool}, never raises
 def clean_trails(comp, creds, targets=None, skip_paths=None, artifacts=None):
     targets = targets if targets is not None else box_targets(comp, creds)
     if artifacts is None and skip_paths is None:
