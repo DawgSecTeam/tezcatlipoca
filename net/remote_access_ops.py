@@ -39,7 +39,10 @@ def team_tag(comp_id, identifier):
 
 
 def router_node_name(comp_id):
-    return f"eng-{comp_id}"
+    # A competition name with a space ("CDE 2026") is not a hostname; tailscale
+    # rejects it outright (live: cde-2026 deploy, 2026-10-19).
+    slug = re.sub(r"[^a-z0-9-]+", "-", str(comp_id).lower()).strip("-")
+    return f"eng-{slug}"
 
 
 def load_roster(comp_dir):
