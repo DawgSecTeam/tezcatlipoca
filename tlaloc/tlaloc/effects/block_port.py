@@ -167,6 +167,7 @@ class BlockPort(Effect):
     }
     tags = frozenset({"pressure", "impacty"})
     needs = {"foothold": True, "root": False, "c2": False, "os": "any"}
+    failure_scope = "port"
 
     # -- preconditions ---------------------------------------------------------
 
@@ -195,9 +196,9 @@ class BlockPort(Effect):
             ok, why = policy.can_impact(ctx.intel.team_of(ip))
             if not ok:
                 raise PolicyError(why)
-        if ctx.world.failure_count(self.id, ip) >= 2:
-            raise PolicyError(f"block_port already failed twice on {ip} — inspect "
-                              "the box instead of re-running")
+        if ctx.world.failure_count(self.id, ip, port) >= 2:
+            raise PolicyError(f"block_port already failed twice on {ip}:{port} — "
+                              "inspect the box instead of re-running")
 
     @staticmethod
     def _allow_ssh(params):

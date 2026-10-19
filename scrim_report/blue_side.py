@@ -22,6 +22,7 @@ def down_windows(snaps):
                 elif up and down_at is not None:
                     windows.append((down_at, tp, svc))
                     ttrs.append(tp - down_at)
+                    down_sec += tp - down_at
                     down_at = None
             if down_at is not None:
                 end = series[-1][0]

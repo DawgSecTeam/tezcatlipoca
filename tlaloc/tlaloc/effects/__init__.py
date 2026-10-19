@@ -35,6 +35,7 @@ def execute(effect_id, params, ctx, *, source="deterministic", cycle=None):
     started = ctx.now()
     params = validate_params(effect, params)
     ip = params.get("ip")
+    refused = False
     try:
         ctx.gate.check_kill_switch()
         if ip:
@@ -55,6 +56,7 @@ def execute(effect_id, params, ctx, *, source="deterministic", cycle=None):
     except GuardrailError:
         raise                       # hard safety: never a failed-continue
     except PolicyError as exc:
+        refused = True
         ctx.world.tally_reject(effect_id, ctx.intel.team_of(ip) if ip else None,
                                str(exc))
         result = Result(ok=False, detail=f"precondition: {exc}")
@@ -79,8 +81,14 @@ def execute(effect_id, params, ctx, *, source="deterministic", cycle=None):
                                   result.restore.get("secrets"))
     if result.ok and "unrecoverable" in effect.tags:
         result.data["unrecoverable"] = True
-    if not result.ok:
-        ctx.world.tally_failure(effect_id, ip)
+    # A policy refusal is deterministic, not a failed attempt: counting it
+    # toward the per-box retry budget poisons every later service on that box
+    # (live: ssh refused twice on web01 and blocked nginx/mysql outright).
+    if not result.ok and not refused:
+        # service-specific effects scope their retry budget to the service they
+        # targeted: one broken unit must not make its siblings uncandidateable
+        scope = effect.failure_scope
+        ctx.world.tally_failure(effect_id, ip, params.get(scope) if scope else None)
 
     ctx.log.action(cycle=cycle, effect=effect_id, params=params,
                    result=result, source=source, duration_s=ctx.now() - started)

@@ -522,8 +522,11 @@ class Decider:
 
     # -- the smaller questions ----------------------------------------------
 
-    def pressure_count(self, digest, *, default=1, cycle=None):
+    def pressure_count(self, digest, *, default=None, cycle=None):
         """How many extra takedowns this cycle (a `score` answer)."""
+        budget = int((self.policy.red.get("budget") or {}).get("extra_pressure_max", 1))
+        if default is None:
+            default = budget
         questions = {"pressure_count": {
             "type": "score",
             "instructions": (f"Additional scored services to take down this cycle "
@@ -546,6 +549,7 @@ class Decider:
                           top_prob=round(prob, 3), theta=theta, expected=expected)
             value = default
             source = "deterministic"
+        value = min(int(value), budget)
         return self._log(cycle, Decision(
             "pressure_count", value, _probabilities(answer), prob, theta, source,
             note=f"expected {expected:.2f} from levels {levels}"))

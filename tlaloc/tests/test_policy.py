@@ -1,5 +1,8 @@
 """Policy: the ROE bounds as behaviour, and the candidate list as arithmetic."""
 
+import json
+import shutil
+
 import pytest
 
 from tests.helpers import DEFAULT_COMP, FakeSensors, make_ctx
@@ -10,8 +13,8 @@ from tlaloc.state.world import now_iso
 FIXTURE = str(DEFAULT_COMP)
 
 
-def policy_for(tmp_path, *cfgs, hours=0.0, **cfg_over):
-    ctx = make_ctx(tmp_path, comp_dir=FIXTURE, **cfg_over)
+def policy_for(tmp_path, *cfgs, hours=0.0, comp_dir=FIXTURE, **cfg_over):
+    ctx = make_ctx(tmp_path, comp_dir=comp_dir, **cfg_over)
     policy = Policy(ctx.cfg, ctx.world, ctx.intel, sensors=ctx.sensors, rng=ctx.rng)
     ctx.policy = policy
     # put the event clock where the test wants it
@@ -288,3 +291,42 @@ def test_failure_counts_age_out(tmp_path):
         ctx.world.tally_failure("takedown", ip)
     assert ctx.world.failure_count("takedown", ip) == 3
     assert ctx.world.failure_count("takedown", ip, within_min=0) == 0
+def test_pressure_skips_a_scored_service_the_scoreboard_has_down(tmp_path):
+    """`web01-http` DOWN must mean nginx is not offered again (the engine names
+    scores `<box>-<short>`; intel names the package)."""
+    comp = tmp_path / "comp"
+    shutil.copytree(FIXTURE, comp)
+    cfg = json.loads((comp / "nakon-config.json").read_text())
+    for machine in cfg["machines"]:
+        if machine["hostname"] == "web01":
+            machine.pop("configurations", None)      # fall back to the scored pins
+    (comp / "nakon-config.json").write_text(json.dumps(cfg))
+    ctx, policy = policy_for(tmp_path / "state", hours=1.0, comp_dir=str(comp),
+                             sensors=FakeSensors({"Blue1": {"web01-http": False}}))
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    targets = {t["name"]: t for t in policy._pressure_targets(ctx, "192.168.1.10", None)}
+    assert targets["nginx"]["down"] is True
+    ids = [c["id"] for c in policy.candidates(ctx)]
+    assert "takedown:192.168.1.10:nginx" not in ids
+    assert policy._is_down("192.168.1.10", "nginx") is True
+
+
+def test_pressure_only_offers_names_the_scoreboard_scores(tmp_path):
+    """Misconfig slugs that merely contain a service word are not units to stop."""
+    comp = tmp_path / "comp"
+    shutil.copytree(FIXTURE, comp)
+    cfg = json.loads((comp / "nakon-config.json").read_text())
+    for machine in cfg["machines"]:
+        if machine["hostname"] == "web01":
+            machine["configurations"] = ["nginx", "nginx-off-by-slash", "ssh"]
+    (comp / "nakon-config.json").write_text(json.dumps(cfg))
+    ctx, policy = policy_for(tmp_path / "state", hours=1.0, comp_dir=str(comp),
+                             sensors=FakeSensors({"Blue1": {"web01-http": True,
+                                                            "web01-ssh": True}}))
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    ids = [c["id"] for c in policy.candidates(ctx)]
+    assert "takedown:192.168.1.10:nginx" in ids
+    assert "takedown:192.168.1.10:ssh" not in ids
+    assert not [i for i in ids if "nginx-off-by-slash" in i]

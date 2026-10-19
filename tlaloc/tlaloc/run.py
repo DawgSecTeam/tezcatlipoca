@@ -31,7 +31,7 @@ from . import report as report_mod
 from . import seed as seed_mod
 from .c2 import FakeMythic, MythicClient
 from .ctx import Ctx
-from .effects import execute, reload_registry
+from .effects import execute, get as get_effect, reload_registry
 from .errors import (EffectParamError, GuardrailError, PolicyError,
                      TlalocError)
 from .events import EventLog
@@ -133,8 +133,8 @@ class Loop:
                 self.world.artifact_ok(_artifact_index(self.world, artifact))
             elif key not in dead:
                 dead.add(key)
-                self.log.emit("artifact_dead", ip=ip, kind=artifact.get("kind"),
-                              check=check)
+                self.log.emit("artifact_dead", ip=ip,
+                              artifact_kind=artifact.get("kind"), check=check)
         self.world.set_dead_artifacts(dead)
 
     # -- one cycle ----------------------------------------------------------
@@ -314,7 +314,14 @@ class Loop:
                 continue
             try:
                 self.policy.validate(candidate, self.ctx)
-            except PolicyError:
+                # validate() knows the ROE, not the effect's own refusals (ssh is
+                # our access path, a box already failed twice); preflight the real
+                # check so a refused candidate cannot absorb the budget.
+                get_effect(candidate["effect"]).check(self.ctx, candidate["params"])
+            except PolicyError as exc:
+                self.log.emit("pressure_candidate_rejected", cycle=self.cycle,
+                              candidate=candidate["id"], reason=str(exc))
+                self.recent.append(f"pressure skip {candidate['id']}: {exc}")
                 continue
             holder = type(decision)("next_effect", candidate["id"],
                                     source="deterministic", chosen=candidate,

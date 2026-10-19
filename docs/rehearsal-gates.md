@@ -17,11 +17,11 @@ blue's actions change what red does next and vice versa.
 
 | Gate | Threshold | Why |
 |---|---|---|
-| Takedowns | ≥ 6 | Sustained pressure, not one sweep |
+| Takedowns | ≥ 6 | Sustained pressure, not one sweep. Service stops only — `block_port` is firewall tamper and counts under distinct tactics |
 | Restore-reactions | ≥ 3 | Red must punish blue's restores — the tug-of-war |
 | Distinct tactics | ≥ 4 | stop_mask + firewall tamper + cred rotation + persistence |
 | Windows footholds | ≥ 1 | The DC is the CCDC heart |
-| Max simultaneous down | ≥ 4 | Of 8 services per team (floor: 2 standing) |
+| Max simultaneous down | ≥ 4 | Of 8 services per team (floor: 2 standing). Capped at the scored services red may take down: SSH is red's own access path and is never a target, so `scrim-one-light` (two SSH pins) caps at 3 |
 | Stalls ≥ 10 min | 0 | Includes the opening — red attacks within minutes of T0 |
 
 Evictions are **not** a red gate: red's health checks only see SSH-class footholds, so a zero
@@ -37,7 +37,7 @@ Numbers recalibrated from the scrim campaigns; the measured basis is in each row
 | Cycles rc=0 | ≥ 2 | One completed cycle per blue team. Measured: a cycle with real incident work costs 20–30 min wall clock on a mid-size local model (a trivial completion took 11.5 min) and the two teams serialise on one shared LLM lock, so a 30-minute scrim affords about one cycle per team. Measured basis: 4 cycles in 45 min, 3 in 30 min, 1 rc=0 in 30 min, 0 in 25 min. Recalibrated from ≥ 6. A cadence floor for `--teams 2`, not a target |
 | Restorations | ≥ 2 | Blue answers red's takedowns. **Not recalibrated**: all four scrims logged 0 restorations, so nothing measures blue's restore capacity — lowering it would launder the measurement gap into a pass |
 | Time-to-restore | ≤ 15 min | A restore 40 min later is not a game. **Not recalibrated**: no run has produced a restoration to time |
-| Injects | ≥ 2 | The paperwork layer of CCDC is real points. **Not recalibrated**: measured 0, 1, and 2 in three scrim runs — one run met it, so the cadence does not bound it |
+| Injects | ≥ 2 | The paperwork layer of CCDC is real points. Capped at the injects whose window opened inside the run (an inject that opens after the run ends cannot be submitted; `run-0637d642`: 4 published, 1 open in 20 minutes). **Not recalibrated** otherwise: measured 0, 1, and 2 in three scrim runs — one run met it, so the cadence does not bound it |
 | Notebook entries | ≥ 10 | Working memory, not a write-only diary. **Not recalibrated**: measured 0 and 2, both in windows where blue completed at most one cycle; a single cycle can write many lines, so no measured ceiling |
 | Cycle timeouts | ≤ 2 | One window-edge cut per blue team: with 20–30 min cycles and the 25–45 min scrims this club runs, a cycle started near the end is always cut at the event deadline (and is logged as a TIMEOUT, since the deadline is now authoritative). Measured 2 in a 25-minute scrim, 1 in a 30-minute one. Recalibrated from 0; three or more means the endpoint stopped producing, and `Cycles rc=0` still fails a run that never completed a cycle |
 

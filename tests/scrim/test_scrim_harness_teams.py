@@ -75,6 +75,18 @@ class ReportTeamScaling(unittest.TestCase):
         self.assertEqual(down["team4"]["restorations"], 0)
         self.assertEqual(down["team4"]["max_simultaneous_down"], 1)
 
+    def test_a_closed_down_window_counts_toward_down_minutes(self):
+        # Only windows still open at the last snapshot used to add to down_min, so a
+        # team that restored every service reported "down 0 min" beside 11 restores
+        # (live run-8f91036c).
+        snaps = [(0, {"team1": {"web01": True}}),
+                 (300, {"team1": {"web01": False}}),
+                 (900, {"team1": {"web01": True}})]
+        down = blue_side.down_windows(snaps)
+        self.assertEqual(down["team1"]["restorations"], 1)
+        self.assertEqual(down["team1"]["ttrs_min"], [10.0])
+        self.assertEqual(down["team1"]["down_min"], 10.0)
+
 
 
 

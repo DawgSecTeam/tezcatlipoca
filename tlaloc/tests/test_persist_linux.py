@@ -12,6 +12,7 @@ test_effects.py).
 """
 
 import base64
+import shlex
 
 import pytest
 
@@ -75,7 +76,15 @@ def _cmd(ssh, index=0):
 
 def _sudo(script):
     """The script as root_cmd() wraps it for a `sudo` foothold label."""
+    if "\n" in script:
+        return f"sudo -n sh -c {shlex.quote(script)}"
     return f"sudo -n {script}"
+
+
+def _inner(cmd):
+    """The script inside the one root shell root_cmd() wraps multi-line text in."""
+    parts = shlex.split(cmd)
+    return parts[parts.index("-c") + 1]
 
 
 def _wrap(family, guard, create, owned=None):
@@ -347,7 +356,7 @@ def test_preload_hides_reds_artifacts_behind_a_load_tested_hider(tmp_path):
     assert ssh.calls[1]["kind"] == "sftp_put"
     assert ssh.calls[1]["cmd"] == "sftp put -> /tmp/.collector-upload"
     script = _cmd(ssh, 2)
-    assert script.startswith("sudo -n set -u\n")
+    assert script.startswith("sudo -n sh -c ") and "set -u" in script
     # the conf is the hide list (red's own artifact names), base64'd like the
     # earlier agent's
     assert f"echo {_b64('name renew\n')} | base64 -d > {conf}" in script
@@ -468,7 +477,7 @@ def test_decoy_plants_the_procfilter_hunt_bait_behind_the_load_test(tmp_path):
         f'else echo "TLALOC_PROBE state=absent"; fi')
     assert ssh.calls[1]["kind"] == "sftp_put"
     assert ssh.calls[1]["cmd"] == "sftp put -> /tmp/.digest-upload"
-    script = _cmd(ssh, 2)
+    script = _inner(_cmd(ssh, 2))
     # the filter is moved into place from staging, then load-tested
     assert f"mkdir -p /usr/local/lib && mv -f {NAMES['bait_staging']} {lib} && " \
            f"chmod 644 {lib} || st=failed" in script
@@ -564,7 +573,7 @@ def test_re_assertion_never_duplicates_on_the_box(tmp_path):
     ctx = _ctx(tmp_path, keys_ssh)
     pl.apply(ctx, IP, "keys", dict(NAMES))
     pub = _pubkey(ctx)
-    script = _cmd(keys_ssh)
+    script = _inner(_cmd(keys_ssh))
     for path in ("/home/ubuntu/.ssh/authorized_keys", "/root/.ssh/authorized_keys"):
         guard = f"grep -qF probe {path} 2>/dev/null"
         assert f"( {guard} || echo '{pub}' >> {path} )" in script, path
@@ -572,7 +581,8 @@ def test_re_assertion_never_duplicates_on_the_box(tmp_path):
     cron_ssh = FakeSSH().on(pl.MARKER, out=f"TLALOC_PLANT family=user_cron {CREATE}")
     ctx2 = _ctx(tmp_path / "cron", cron_ssh)
     pl.apply(ctx2, IP, "user_cron", dict(NAMES))
-    assert "| grep -qF 'touch /var/tmp/.sweep' || ( (crontab" in _cmd(cron_ssh)
+    assert ("| grep -qF 'touch /var/tmp/.sweep' || ( (crontab"
+            in _inner(_cmd(cron_ssh)))
 
 
 def test_auto_walks_the_order_and_a_forced_re_plant_adds_a_family(tmp_path):

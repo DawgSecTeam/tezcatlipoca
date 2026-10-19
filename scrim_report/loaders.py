@@ -105,6 +105,14 @@ def load_scoreboard(run_dir):
     return sorted(out, key=lambda rec: rec[0])
 
 
+def load_run(run_dir):
+    try:
+        data = json.loads((Path(run_dir) / RUN_MANIFEST).read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def load_pacing(run_dir):
     try:
         run = json.loads((Path(run_dir) / RUN_MANIFEST).read_text())

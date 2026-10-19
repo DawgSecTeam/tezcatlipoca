@@ -425,3 +425,20 @@ def test_tokens_needed_tracks_the_bundle_size():
     big = decide_mod.tokens_needed({"a": "y" * 400}, {"q": {"type": "noul",
                                                             "instructions": "x"}})
     assert small < big
+
+
+def test_pressure_count_defaults_to_the_configured_bound(tmp_path):
+    ctx, policy, decider = decider_for(tmp_path, StubClef(answers={
+        "pressure_count": {"type": "score", "score": 2.9,
+                           "probabilities": {"0": 0.3, "1": 0.3, "2": 0.2, "3": 0.2}}}))
+    policy.red["budget"]["extra_pressure_max"] = 3
+    decision = decider.pressure_count({})
+    assert decision.answer == 3 and decision.source == "deterministic"
+    # the model's answer is capped by the same ROE bound
+    policy.red["budget"]["extra_pressure_max"] = 2
+    ctx2, _, decider2 = decider_for(tmp_path / "cap", StubClef(answers={
+        "pressure_count": {"type": "score", "score": 3.0,
+                           "probabilities": {"3": 0.9}}}))
+    policy2 = decider2.policy
+    policy2.red["budget"]["extra_pressure_max"] = 2
+    assert decider2.pressure_count({}).answer == 2

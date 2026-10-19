@@ -373,28 +373,31 @@ class World:
 
     FAILURE_WINDOW_MIN = 30
 
-    def tally_failure(self, effect, ip):
+    def tally_failure(self, effect, ip, scope=None):
         """Record WHEN a failure happened, not just how many ever happened.
 
         A bare counter bans an (effect, box) pair for the rest of the event: live
         2026-10-18, web01's takedowns were still refused hours after the condition
         that caused them was gone ("already failed twice — switch target"). The
-        timestamps let the guard age out.
+        timestamps let the guard age out. `scope` keys a service-specific effect to
+        the service it targeted, so one broken unit does not ban its siblings.
         """
         if not ip:
             return
+        key = f"{effect}:{scope}" if scope else effect
         fails = self.target(ip).setdefault("fails", {})
-        cur = fails.get(effect)
+        cur = fails.get(key)
         if isinstance(cur, int):                       # legacy counter
             cur = [now_iso()] * min(cur, 16)
         cur = list(cur or [])
         cur.append(now_iso())
-        fails[effect] = cur[-16:]
+        fails[key] = cur[-16:]
         self.save()
 
-    def failure_count(self, effect, ip, within_min=None):
+    def failure_count(self, effect, ip, scope=None, within_min=None):
         """Failures in the last `within_min` minutes (default FAILURE_WINDOW_MIN)."""
-        rec = (self._d["targets"].get(ip, {}).get("fails", {}) or {}).get(effect)
+        key = f"{effect}:{scope}" if scope else effect
+        rec = (self._d["targets"].get(ip, {}).get("fails", {}) or {}).get(key)
         if isinstance(rec, int):                      # legacy counter
             return rec
         if not rec:

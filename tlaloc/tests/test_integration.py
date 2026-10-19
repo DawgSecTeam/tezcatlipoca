@@ -15,7 +15,7 @@ from tests.helpers import DEFAULT_COMP, FakeC2, FakeSSH, base_cfg, make_ctx
 from tlaloc import report as report_mod
 from tlaloc import seed as seed_mod
 from tlaloc.decide import Decider, StubClef
-from tlaloc.effects import REGISTRY, Effect, Result
+from tlaloc.effects import REGISTRY, Effect, Result, execute
 from tlaloc.errors import GuardrailError, TlalocError
 from tlaloc.policy import Policy
 from tlaloc.run import Loop
@@ -318,6 +318,44 @@ def test_the_pressure_budget_offers_more_than_one_candidate_per_count(tmp_path):
                 if c["effect"] in ("takedown", "block_port")]
     holder = Decision("next_effect", None, source="deterministic", chosen=None)
     out = loop._extra_pressure(1, candidates, holder)
-    assert len(out) == min(len(eligible), 1 + PRESSURE_FALLTHROUGH)
-    if len(eligible) > 1:
-        assert len(out) > 1
+    # The preflight drops the refused ssh candidate, so the list is the legal
+    # fallbacks (bounded), not the raw candidate count.
+    assert out, "a legal pressure target must remain"
+    assert all("ssh" not in (c.chosen or {}).get("id", "") for c in out)
+    assert len(out) <= min(len(eligible), 1 + PRESSURE_FALLTHROUGH)
+
+
+def test_artifact_health_logs_a_dead_artifact_without_crashing(tmp_path):
+    ssh = FakeSSH().on("is-active", out="inactive")
+    ctx, policy, decider = live_ctx(tmp_path, ssh=ssh)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    ctx.world.add_artifact("192.168.1.10", "persist-cron", "cron (/etc/cron.d/x)",
+                           check_cmd="systemctl is-active x")
+    loop = Loop(ctx, policy=policy, decider=decider, sensors=ctx.sensors,
+                sleeper=lambda _s: None)
+    loop.verify_artifacts()
+    assert any(e["kind"] == "artifact_dead" for e in ctx.log.read())
+
+
+def test_a_policy_refusal_does_not_count_as_an_effect_failure(tmp_path):
+    """A protected target is not a broken mechanism; retry budgets must not eat it."""
+    ctx, policy, decider = live_ctx(tmp_path)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    result = execute("takedown", {"ip": "192.168.1.10", "service": "ssh"}, ctx)
+    assert result.ok is False
+    assert ctx.world.failure_count("takedown", "192.168.1.10", "ssh") == 0
+
+
+def test_two_failures_on_one_service_do_not_block_its_siblings(tmp_path):
+    """A hardened unit exhausts only its own retry budget, not the box's."""
+    ctx, policy, decider = live_ctx(tmp_path, ssh=scripted_takedown_ssh())
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    ctx.world.tally_failure("takedown", "192.168.1.10", "mysql")
+    ctx.world.tally_failure("takedown", "192.168.1.10", "mysql")
+    result = execute("takedown", {"ip": "192.168.1.10", "service": "nginx",
+                                  "mode": "stop"}, ctx)
+    assert result.ok, result.detail
+    assert result.impact["service"] == "nginx"

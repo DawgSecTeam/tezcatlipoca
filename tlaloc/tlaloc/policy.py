@@ -23,6 +23,7 @@ choose among what `candidates()` produced and `validate()` accepts.
 """
 
 import random
+import re
 import time
 
 from .effects.base import can_root
@@ -97,6 +98,23 @@ def make_candidate(effect, params, score, reason, cost="low", tag=None,
                      reason=reason, cost=cost, tag=tag or cid,
                      high_stakes=bool(high_stakes))
     return cand
+
+
+# Scored services are named `<box>-<short>` by the engine; intel carries package
+# names (`ADDS`, `Enable WinRM`, `nginx`). Without one key both sides agree on,
+# a service taken DOWN reads as up and the loop re-takes the same one forever.
+_SERVICE_ALIASES = {"ldap": "adds", "http": "nginx", "https": "nginx",
+                    "smtp": "postfix", "imap": "dovecot", "sql": "mysql",
+                    "ftp": "iisftp", "winrm": "enablewinrm"}
+
+
+def _service_key(name):
+    key = re.sub(r"[^a-z0-9]", "", str(name).lower().removesuffix(".service"))
+    return _SERVICE_ALIASES.get(key, key)
+
+
+def _scored_key(name):
+    return _service_key(str(name).rsplit("-", 1)[-1])
 
 
 class Policy:
@@ -462,8 +480,14 @@ class Policy:
                 age = self.world.callback_age(self._box_id_for_ip(ip))
                 why = ("no C2 callback recorded for this box" if age is None
                        else f"last callback {int(age)}s ago (stale)")
+                fails = self.world.failure_count("implant_channel", ip)
+                if fails:
+                    why += f" ({fails} failed attempt(s))"
+                # A dead C2 must not outscore pressure forever: the 2026-10-18
+                # scrim-one run retried the implant 52 times and never pressed.
                 out.append(make_candidate("implant_channel", {"ip": ip},
-                                          BASE_SCORE["implant_channel"] + score_bonus,
+                                          BASE_SCORE["implant_channel"]
+                                          - 10 * fails + score_bonus,
                                           why, cost="med", tag=f"implant {ip}"))
             else:
                 out.append(make_candidate("task_channel", {"ip": ip},
@@ -497,6 +521,8 @@ class Policy:
             strongest = self.strongest_impact_mode()
             if ok and modes and not dead:
                 for service in self._pressure_targets(ctx, ip, up):
+                    if service.get("down") or not service.get("scored"):
+                        continue      # already down, or not a scored service
                     mode = strongest or "stop"
                     rot, why, skip = self.pressure_rotation(ip, service["name"],
                                                             service.get("down"))
@@ -559,14 +585,18 @@ class Policy:
             # on web01-ssh with nothing to show).
             if slug.lower().removesuffix(".service").strip() in ("ssh", "sshd"):
                 continue
+            key = _service_key(slug)
             state = None
             for scored_name, is_up in team_status.items():
-                if scored_name.lower() in slug.lower() or slug.lower() in scored_name.lower():
+                if _scored_key(scored_name) == key:
                     state = is_up
                     break
             out.append({"name": slug,
                         "down": state is False,
-                        "up": state is True})
+                        "up": state is True,
+                        # with a scoreboard available, only a name it scores is a
+                        # takedown target; the rest are misconfig slugs
+                        "scored": state is not None or not team_status})
         return out
 
     def _candidates_global(self, ctx, existing):
@@ -721,9 +751,9 @@ class Policy:
             for team_name, services in (self.sensors.team_service_map() or {}).items():
                 if team_name.lower() == (self.intel.team_of(ip) or "").lower():
                     status = services
+        key = _service_key(service_name)
         for scored_name, is_up in status.items():
-            if (scored_name.lower() in str(service_name).lower()
-                    or str(service_name).lower() in scored_name.lower()):
+            if _scored_key(scored_name) == key:
                 return not is_up
         return False
 

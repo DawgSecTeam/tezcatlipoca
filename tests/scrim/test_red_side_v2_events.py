@@ -34,6 +34,17 @@ class V2SchemaTest(unittest.TestCase):
         self.assertEqual(m["actions_failed"], 1)
         self.assertEqual(m["timeline"][0][2:], ("nginx", "stop"))
 
+    def test_block_port_is_not_a_takedown(self):
+        # It is firewall tamper, not a service stop: counting it inflates the
+        # takedown total and the one-target spread with unknown-service rows.
+        events = [
+            _v2_action("takedown", ip="192.168.120.4", service="nginx", mode="stop"),
+            _v2_action("block_port", ip="192.168.120.4", port=21),
+        ]
+        m = red_metrics(events, T0, world={"footholds": {}})
+        self.assertEqual(m["takedowns"], 1)
+        self.assertEqual(m["timeline"][0][2], "nginx")
+
     def test_a_v2_blue_restores_batch_counts_every_restore(self):
         events = [
             _v2_action("takedown", ip="192.168.120.2", service="ADDS", mode="stop"),

@@ -10,6 +10,20 @@ from scrim_report import red_side
 from scrim_report import timefmt
 
 
+def injects_due(final, t0, duration_min):
+    opens = []
+    for inj in (final or {}).get("injects") or []:
+        try:
+            opens.append(timefmt.parse_ts(inj.get("OpenTime") or ""))
+        except ValueError:            # a capture without the window cannot be judged
+            continue
+    opens.sort()
+    if not opens:
+        return None
+    end = (t0 if t0 is not None else opens[0]) + duration_min * 60
+    return sum(1 for o in opens if o <= end)
+
+
 def build_report(run_dir):
     events, t0 = loaders.load_red_events(run_dir)
     world = loaders.load_world(run_dir)
@@ -37,16 +51,29 @@ def build_report(run_dir):
              + bm["injects"] + bm["eradication"])
     # Per-run gate calibration:
     # - max_simultaneous_down judges against red's own max_concurrent_down_end pacing
-    #   cap (run.json pacing) — a gate that demanded 4 failed red while
-    #   the harness paced red at 2 for obeying orders.
+    #   cap (run.json pacing), further capped at the scored services the comp lets
+    #   red take down: SSH is red's access path, so a 5-service comp with two SSH
+    #   pins can never reach a hardcoded 4 (live run-0637d642: 3 of 3 downable).
     # - the injects gate drops out (n/a, comp shape) when the capture proves the comp
     #   published none, and caps at the published count otherwise — a comp that
     #   shipped no injects/ dir made blue fail a gate it could never pass.
     pacing = loaders.load_pacing(run_dir)
     max_sim_threshold = int(pacing.get("max_concurrent_down_end") or 4)
     final = loaders.load_final_scoreboard(run_dir)
+    downable = [sum(1 for r in rows if not red_side.is_access_service(r.get("service")))
+                for rows in ((final or {}).get("services") or {}).values() if rows]
+    if downable:
+        max_sim_threshold = min(max_sim_threshold, max(downable))
     injects_published = len((final or {}).get("injects") or [])
     injects_threshold = min(2, injects_published) if injects_published else None
+    # An inject cannot be answered before it opens, so a run that offered one and
+    # demanded two failed blue for a structural impossibility (live run-0637d642:
+    # 4 published, 1 opened inside the 20-minute window, gate asked for 2).
+    duration_min = float(loaders.load_run(run_dir).get("duration_min") or 0)
+    if injects_threshold is not None and duration_min:
+        due = injects_due(final, t0, duration_min)
+        if due is not None:
+            injects_threshold = min(injects_threshold, due) if due else None
     gate_rows = {"red": gate_table.GATES["red"],
                  "blue": [k for k in gate_table.GATES["blue"]
                           if k[0] != "injects" or injects_threshold is not None]}

@@ -369,6 +369,18 @@ def stage_red01(ssh_key, red_ip, comp_dir, *, runner=None, timeout=600):
                       input=source.read_bytes(), text=False, timeout=timeout)
         if proc.returncode != 0:
             raise RuntimeError(f"pushing {name} failed: {_tail(proc)}")
+    # The Compfile's red_yaml target is an input the seed re-reads from the intel
+    # dir; staging the Compfile without it fails the seed on red01.
+    red_yaml = compfile_value(comp_dir, "red_yaml")
+    if red_yaml:
+        source = comp_dir / red_yaml
+        if not source.is_file():
+            raise RuntimeError(f"Compfile red_yaml {red_yaml!r} is missing from {comp_dir}")
+        proc = runner(ssh_argv(ssh_key, red_ip,
+                               f"sudo -n tee {INTEL_DIR}/{red_yaml} >/dev/null"),
+                      input=source.read_bytes(), text=False, timeout=timeout)
+        if proc.returncode != 0:
+            raise RuntimeError(f"pushing {red_yaml} failed: {_tail(proc)}")
     # The FROZEN payloads travel too: the planter reads them from
     # <intel>/red/payloads/manifest.json, and a channel with no local payload cannot
     # plant anything (live: every implant failed with "no manifest entry").

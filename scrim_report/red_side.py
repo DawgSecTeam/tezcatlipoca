@@ -11,8 +11,17 @@ HEALTH_CHECK = "health_check"
 # "params":{"ip":…,"service":…,"mode":…}}. Reading only the v1 shape reports a
 # fully working red team as "takedowns 0, distinct tactics 1, targets none" —
 # live run-8240b93c: 16 real takedowns, one gate table reading zero.
-V2_IMPACT_EFFECTS = ("takedown", "block_port")
+V2_TAKEDOWN_EFFECTS = ("takedown",)
 V2_INITIAL_ACCESS_EFFECTS = ("spray_access", "reestablish")
+
+
+# SSH is red's own access path, never a takedown target (effects.allow_ssh_takedown
+# stays off), so a comp that exposes it has one fewer service red may take down.
+ACCESS_SERVICE_PINS = ("ssh", "sshd")
+
+
+def is_access_service(name):
+    return str(name or "").rsplit("-", 1)[-1] in ACCESS_SERVICE_PINS
 
 
 def action_effect(ev):
@@ -97,7 +106,7 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
                 m["initial_access"].add((tactic, ip))
             ok_stamps.append(tp)
         if ok and (tactic in ("impact_service", "impact_firewall")
-                   or ev.get("effect") in V2_IMPACT_EFFECTS):
+                   or ev.get("effect") in V2_TAKEDOWN_EFFECTS):
             dip, svc, mode = takedown_fields(ev)
             dip = dip or ip
             m["takedowns"] += 1

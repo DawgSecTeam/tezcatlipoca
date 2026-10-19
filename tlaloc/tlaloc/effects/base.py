@@ -21,6 +21,7 @@ tactic-id sets, a policy elif-chain, the fallback ladder):
   ``service=`` parameter (the earlier agent's honor-system audited defect, twice).
 """
 
+import shlex
 from dataclasses import dataclass, field
 
 from ..errors import EffectParamError
@@ -56,6 +57,8 @@ class Effect:
     # declarative preconditions read by check() default: any foothold / root
     # path / c2 availability / os ("linux"|"windows"|"any")
     needs = {"foothold": None, "root": False, "c2": False, "os": "any"}
+    # param name that scopes the retry budget; None is per box
+    failure_scope = None
 
     def check(self, ctx, params):
         """Default declarative preconditions; override and call super()."""
@@ -96,9 +99,13 @@ def root_cmd(cmd, fh):
     """Wrap a command for the foothold's escalation label. Escape wrappers
     break on arbitrary quoting — free-form commands must not ride them (the
     improvise effect runs free-form unprivileged or via sudo, per label)."""
-    esc = fh.get("escalation") or ""
     if fh.get("windows"):
         return cmd  # SYSTEM label is not routable; admin rides the session
+    # A multi-line shell script cannot ride a bare prefix (`sudo -n if ...` is a
+    # syntax error, not a script): give it one root shell and one quoted argument.
+    if "\n" in cmd:
+        cmd = f"sh -c {shlex.quote(cmd)}"
+    esc = fh.get("escalation") or ""
     if esc == "sudo":
         return f"sudo -n {cmd}"
     if esc == "sudo_pw":

@@ -171,7 +171,13 @@ def stage_deploy(args, comp):
     for line in (r.stdout or "").splitlines()[-15:]:
         print("   ", line)
     if r.returncode != 0:
-        raise RuntimeError(f"deploy failed rc={r.returncode} (log above); fix and resume with --skip-deploy/--from-phase")
+        log_path = (Path(args.run_dir) / "deploy.log") if args.run_dir else None
+        tail = (r.stderr or "").strip()[-1200:]
+        raise RuntimeError(
+            f"deploy failed rc={r.returncode}"
+            + (f"; stderr tail: {tail}" if tail else "")
+            + (f"; full log: {log_path}" if log_path else "")
+            + "; fix and resume with --skip-deploy/--from-phase")
     # The pipeline's final phase number is the source of truth — hardcoded 7s went
     # stale when firewalls became phase 5 and seed became phase 8 (live-found
     # caught live: a completed deploy was rejected as "did not reach phase 7").
