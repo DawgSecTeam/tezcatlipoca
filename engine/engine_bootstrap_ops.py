@@ -2,6 +2,7 @@
 
 import base64
 import re
+import time
 
 from engine.engine_cmd_ops import _run_engine_cmd
 from engine.engine_health_ops import install_range_healthcheck
@@ -127,9 +128,22 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
                     timeout=1800, step="compose build")
 
     print("  Starting Quotient Docker containers...")
-    # 600s: the fresh volume's Postgres initdb is a cold start on every build.
-    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600,
-                    step="compose up")
+    # 600s: the fresh volume's Postgres initdb is a cold start on every build, and
+    # on a loaded node it still misses docker compose's health window; the containers
+    # keep starting, so retry instead of failing the deploy (live: run-3d569d1f).
+    last = None
+    for attempt in range(3):
+        try:
+            _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600,
+                            step="compose up")
+            last = None
+            break
+        except Exception as e:  # noqa: BLE001 - the DB health window is a race
+            last = e
+            print(f"    compose up attempt {attempt + 1} failed ({e}); retrying")
+            time.sleep(15)
+    if last is not None:
+        raise last
 
     _install_firewall_and_healthcheck(ctx)
     return {"quotient_head": quotient_head, "quotient_ref": quotient_ref or ""}
