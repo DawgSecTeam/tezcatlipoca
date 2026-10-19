@@ -16,9 +16,8 @@ from infra.ownership import clone_marker, destroy_vm_if_exists
 RED_USER = "sysadmin"
 NAME = "tlaloc-red01"
 DEFAULT_TEMPLATE = "base-ubuntu24.04-fix"
-# python3-paramiko: tlaloc's SSH transport is paramiko (spray_access, the seed, the
-# implant); without it every box action fails with "No module named 'paramiko'" and the
-# day-0 seed plants nothing while exiting 0.
+# python3-paramiko is tlaloc's SSH transport; without it every box action fails
+# and the day-0 seed plants nothing while exiting 0.
 DEPS = "python3-yaml python3-paramiko cloud-guest-utils lvm2 nmap"
 ROUTE_NOTE = "192.168.0.0/16"
 
@@ -37,7 +36,6 @@ def red01_vmid_override(comp_dir):
 
 
 def red01_vmid_for(comp_dir, engine_vmid=None, placement=None):
-    """Override, recorded placement, else the stride — the placement wins once written."""
     override = red01_vmid_override(comp_dir)
     if override is not None:
         return override
@@ -50,12 +48,10 @@ def red01_vmid_for(comp_dir, engine_vmid=None, placement=None):
 
 
 def red01_ip_override(comp_dir):
-    """The operator's Compfile `red01_ip`, else ''."""
     return compfile_value(Path(comp_dir) / "Compfile", "red01_ip", "") or ""
 
 
 def red01_ip_for(comp_dir, placement=None):
-    """The operator's address, the placement's recorded one, else '' (select at deploy)."""
     return red01_ip_override(comp_dir) or \
         (((placement or {}).get("red01") or {}).get("ip") or "")
 
@@ -69,14 +65,12 @@ def red01_target(comp_dir, engine_vmid=None, placement=None):
 
 
 def identity(comp_dir, engine_vmid, node, placement=None):
-    """This run's red01 slot, before anything is created."""
     vmid, ip = red01_target(comp_dir, engine_vmid, placement)
     return {"vmid": vmid, "ip": ip, "node": node,
             "explicit_ip": red01_ip_is_explicit(comp_dir)}
 
 
 def select_red_ip(comp_dir, placement, engine_mgmt_ip="", comp_tags=None):
-    """Pick and record an address from the red band immediately before the clone."""
     from infra import collisions
     from multinode.placement_record import write_red01_ip
     claimed = {engine_mgmt_ip or "", config.active().engine.mgmt_gw or ""}
@@ -95,7 +89,6 @@ def select_red_ip(comp_dir, placement, engine_mgmt_ip="", comp_tags=None):
 
 
 def recorded_identity(comp_dir):
-    """What a previous deploy of this competition recorded: {vmid, ip, node} or {}."""
     from estate import state
     document = state.EstateState.load(comp_dir)
     recorded = document.section("red") or {}
@@ -106,11 +99,10 @@ def recorded_identity(comp_dir):
 
 
 def record_identity(comp_dir, placement, *, vmid, ip, node):
-    """Freeze the slot this run created into the state (and the placement, when there is one)."""
     from estate import state
     from multinode.placement_record import write_placement
-    # A single-node deploy has no placement document; the state's own `red` section is what
-    # teardown reads, so it must be written either way.
+    # A single-node deploy has no placement document; the state's own `red`
+    # section is what teardown reads, so it is written either way.
     document = state.EstateState.load(comp_dir)
     document.section("red").update(vmid=int(vmid), ip=ip, node=node)
     document.save()
@@ -139,13 +131,13 @@ def _default_runner(cmd, **kwargs):
 
 
 def _config(node, vmid, data):
-    """PUT a clone's config; retry the brief post-clone publish window."""
+    """Retry the brief post-clone window where Proxmox refuses a config PUT."""
     import time
     for attempt in range(4):
         try:
             proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/config", data=data)
             return
-        except Exception as exc:                                # noqa: BLE001 - retried
+        except Exception as exc:                                # noqa: BLE001
             if attempt == 3:
                 raise RuntimeError(f"red01 config PUT failed on vmid {vmid}: {exc}") from exc
             time.sleep(2 * (attempt + 1))
@@ -164,8 +156,8 @@ def find_template(node, name):
 
 
 def _netplan(iface, ip, gw, red_iface):
-    # The pinned static config replaces cloud-init's (which carried the resolver), so DNS has
-    # to be named here or the box can reach 8.8.8.8 and still resolve nothing.
+    # This static config replaces cloud-init's, resolver included: name DNS here
+    # or the box reaches 8.8.8.8 and still resolves nothing.
     return (f"network:\n  version: 2\n  ethernets:\n"
             f"    {iface}:\n      dhcp4: no\n      addresses: ['{ip}/24']\n"
             f"      nameservers:\n        addresses: [8.8.8.8]\n"
@@ -195,11 +187,7 @@ def _exec(node, vmid, script, timeout=300):
 
 def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=None,
            engine_ip="", red_bridge=None, template=None, runner=None, dry_run=False):
-    """Clone/configure red01 on this run's reserved slot and return its identity.
-
-    Idempotent for a resume: a VM already carrying this run's tags is adopted and
-    reconfigured, never destroyed.
-    """
+    """Resume-safe: a VM already carrying this run's tags is adopted and reconfigured, never destroyed."""
     comp_dir = Path(comp_dir)
     node = node or config.active().proxmox.node
     vmid = red01_vmid_for(comp_dir, engine_vmid, placement)
@@ -223,9 +211,8 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     if dry_run:
         return {"ok": True, "vmid": vmid, "ip": ip, "node": node, "dry_run": True}
 
-    # Clone (or adopt a resume) and stamp ownership. The clone POST carries the competition's
-    # marker and the full tag set lands with the config PUT right after, so a crash between
-    # the two still leaves a VM this competition's teardown claims.
+    # The clone POST carries the comp marker and the full tag set lands on the next
+    # config PUT: a crash between them still leaves a VM this teardown can claim.
     existing = _live(node, vmid, ownership)
     if existing is None:
         tpl = find_template(node, template)
@@ -246,14 +233,14 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     if red_bridge:
         data["net1"] = f"virtio,bridge={red_bridge}"
     _config(node, vmid, data)
-    # Record before any guest work: a range that dies on the next step must still leave a red01
-    # the teardown can claim (the VM is this run's from the tag PUT onward).
+    # Record before any guest work: a range that dies on the next step must
+    # still leave a red01 the teardown can claim.
     record_identity(comp_dir, placement, vmid=vmid, ip=ip, node=node)
     start_vm(node, vmid)
     if not wait_for_guest_agent(node, vmid, timeout=420):
         raise RuntimeError(f"red01 vmid {vmid} started but its guest agent never answered")
-    # cloud-init can restart qemu-guest-agent while it installs upgrades, dropping the exec pid
-    # underneath this wait. The wait is idempotent, so re-attach and ask it again.
+    # cloud-init can restart qemu-guest-agent mid-upgrade, dropping the exec pid
+    # under this wait; the wait is idempotent, so re-attach and ask again.
     for attempt in range(3):
         try:
             _exec(node, vmid, "timeout 300 cloud-init status --wait >/dev/null 2>&1; true", 330)
@@ -263,10 +250,8 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
                 raise
             wait_for_guest_agent(node, vmid, timeout=300)
 
-    # Pin the network ourselves: cloud-init is disabled on this box because a kernel-upgrade
-    # reboot has come back with no IPv4 at all when it re-applied. net0 is the management NIC
-    # as PVE sees it, matched by MAC — picking the iface from the default route once chose a
-    # docker bridge and put the mgmt IP on br-<hex>.
+    # Pin the network ourselves: cloud-init re-applying lost IPv4 entirely on a
+    # kernel-upgrade reboot. Match the mgmt NIC by MAC — the default route can be a docker bridge's.
     cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
     mac = _mac_from_net(cfg.get("net0", ""))
     ifaces = _exec(node, vmid, "ls /sys/class/net/ | grep -v lo").split()
@@ -289,7 +274,7 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     _exec(node, vmid, "rm -f /etc/netplan/50-cloud-init.yaml && netplan apply && "
                       f"ip -4 -brief addr show | grep -qF '{ip}'", 90)
 
-    # The agent's apt dependencies (Mythic's are installed by Gaia).
+    # Mythic's own deps are installed by Gaia, not here.
     _exec(node, vmid, "export DEBIAN_FRONTEND=noninteractive; "
                       "apt-get -o DPkg::Lock::Timeout=600 update -qq && "
                       "apt-get -o DPkg::Lock::Timeout=600 install -y -qq " + DEPS, 900)
@@ -325,8 +310,6 @@ def _write(node, vmid, path, content, mode):
 
 
 def dnat_destinations(team_identifiers, callback_host=""):
-    """The addresses boxes dial for C2: their own gateway, plus the transit address when an
-    in-path firewall makes the engine reachable that way."""
     dsts = [f"192.168.{identifier}.1" for identifier in team_identifiers]
     if callback_host and callback_host not in dsts:
         dsts.append(callback_host)
@@ -335,12 +318,7 @@ def dnat_destinations(team_identifiers, callback_host=""):
 
 def firewall_script(*, team_identifiers, callback_port, callback_host="",
                     red_ip=RED_SEGMENT_IP, red_subnet=RED_SEGMENT_SUBNET):
-    """The re-assert script for the engine: red-segment forwarding plus the C2 DNAT.
-
-    Rule order is load-bearing: return traffic must be accepted before the
-    DROP-toward-red, and the DNAT must sit before the team-SNAT exemption, or the
-    agent sees every check-in as having come from the engine.
-    """
+    """Rule order is load-bearing: return-accept before the DROP-toward-red, DNAT before the team-SNAT exemption, else check-ins appear to come from the engine."""
     lines = [
         "#!/bin/bash",
         "# red segment: red keeps its source address end-to-end, blue can firewall it,",
@@ -358,10 +336,8 @@ def firewall_script(*, team_identifiers, callback_port, callback_host="",
         port = int(callback_port)
         for dst in dnat_destinations(team_identifiers, callback_host):
             for proto in ("tcp", "udp"):
-                # Docker publishes Quotient on 0.0.0.0:80 and inserts its own
-                # `-m addrtype --dst-type LOCAL -j DOCKER` jump at PREROUTING 1; an appended
-                # DNAT rule is shadowed and the team gateway:80 reaches the scoreboard, not
-                # red01. Keep ours at position 1 (re-insert after a Docker restart).
+                # Docker publishes Quotient on 0.0.0.0:80 and jumps its own chain at
+                # PREROUTING 1: an appended DNAT is shadowed; ours stays at position 1.
                 rule = (f"-d {dst}/32 -p {proto} -m {proto} --dport {port} "
                         f"-j DNAT --to-destination {red_ip}:{port}")
                 lines += [
@@ -390,7 +366,6 @@ _RED_TIMER = ("[Unit]\nDescription=Re-assert the red segment rules\n\n"
 
 def install_engine_rules(engine_ip, ssh_key, *, engine_user, team_identifiers,
                          callback_port, callback_host="", runner=None, timeout=180):
-    """Install the red rules + their timer on the scoring engine."""
     script = firewall_script(team_identifiers=team_identifiers,
                              callback_port=callback_port, callback_host=callback_host)
     units = {
@@ -418,8 +393,7 @@ def install_engine_rules(engine_ip, ssh_key, *, engine_user, team_identifiers,
 
 def remove_engine_rules(engine_ip, ssh_key, *, engine_user, runner=None, timeout=120,
                         team_identifiers=(), callback_port=None, callback_host=""):
-    """Best effort: stop the re-assert and remove the rules and unit — the engine survives a
-    teams-only teardown, so the red segment must not outlive its red01."""
+    """Best effort: the engine survives a teams-only teardown, so its red rules must not outlive red01."""
     dnat = ""
     if callback_port:
         for dst in dnat_destinations(team_identifiers, callback_host):
@@ -455,11 +429,7 @@ def _tail(proc, n=300):
 def destroy(comp_dir, *, ownership, node=None, vmid=None, engine_ip=None, ssh_key=None,
             engine_user=None, runner=None, team_identifiers=(), callback_port=None,
             callback_host=""):
-    """Remove this run's red01 and the engine rules it installed.
-
-    The VM is destroyed through the ownership guard, so a recycled vmid or another
-    run's red01 is refused rather than deleted.
-    """
+    """Destroyed through the ownership guard: a recycled vmid or another run's red01 is refused, not deleted."""
     recorded = recorded_identity(comp_dir)
     node = node or recorded.get("node") or config.active().proxmox.node
     vmid = vmid or recorded.get("vmid")

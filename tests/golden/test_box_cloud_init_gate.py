@@ -1,9 +1,4 @@
-"""A freshly cloned box is not settled until cloud-init is done: the settle waiter now
-gates on `cloud-init status` before any long apt/build session opens, bounded, and fails
-loudly (rather than racing sshd) when cloud-init is still running past the bound.
-
-Offline: the ssh entry point is injected, time is a fake clock.
-"""
+"""A freshly cloned box is not settled until cloud-init is done: bounded gate before long apt/build sessions, loud failure past the bound."""
 
 import sys
 import unittest
@@ -20,8 +15,6 @@ TARGET = {"ip": "192.168.1.5", "vmid": 1150}
 
 
 class FakeClock:
-# `time.time()`/`time.sleep()` that advance instead of waiting.
-
     def __init__(self, start=1000.0):
         self.now = start
         self.sleeps = []
@@ -45,15 +38,11 @@ class Verdict(unittest.TestCase):
         self.assertEqual(box_settle_ops._cloud_init_verdict(0, "status: error"), "error")
 
     def test_rc_two_does_not_outvote_a_named_text_state(self):
-        """cloud-init returns 2 for a boot that FINISHED with recorded errors, so on an
-        image that always has one rc 2 arrived with `status: done` on every box — read
-        rc-first, the gate recorded a tolerated failure for a finished boot (which
-        hard-fails verify's degradations gate) and skipped its own wait when the text
-        said `status: running` (caught live: the run that found it)."""
+        # cloud-init returns rc 2 for a boot that finished with recorded errors: the text
+        # state wins; rc only decides when the text names no state
         self.assertEqual(box_settle_ops._cloud_init_verdict(2, "status: done"), "done")
         self.assertEqual(box_settle_ops._cloud_init_verdict(2, "status: running"), "running")
         self.assertEqual(box_settle_ops._cloud_init_verdict(2, "status: disabled"), "done")
-        # ...and rc still decides when the text names no state at all
         self.assertEqual(box_settle_ops._cloud_init_verdict(2, ""), "error")
 
 
@@ -73,8 +62,7 @@ class WaitDecisions(unittest.TestCase):
 
         self.assertEqual(len(calls), 1)
         self.assertEqual(clock.sleeps, [])
-        # The probe guards a non-cloud-init box instead of letting `command not found`
-        # read as 'running' for the whole bound.
+        # without the `command -v` guard a non-cloud-init box reads as "running" for the whole bound
         self.assertIn("command -v cloud-init", calls[0][1])
 
 

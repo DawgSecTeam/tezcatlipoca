@@ -1,9 +1,4 @@
-"""The scrim package reads the competition's ONE state document, `estate-state.json`.
-
-Nothing in scrim/ may reach for a second state file: reading one directly is what broke
-blue staging on the first estate range (caught live: run-75347fca) and the scrim never
-reached T0.
-"""
+"""The scrim reads the competition's ONE state document, estate-state.json; nothing in scrim/ may reach for a second one."""
 
 import re
 import sys
@@ -43,9 +38,6 @@ class ReadState(unittest.TestCase):
 
 class RedIpResolution(unittest.TestCase):
     def test_the_scrim_carries_the_comps_red01_pin_into_the_rebuilt_config(self):
-        """The scrim rebuilds bad-auto's config from scratch; a red_ip of None made bad-auto
-        fall back to its own default and MOVED red01 off the address the deploy recorded
-        (caught live: recorded 10.0.0.196, VM re-pointed to 10.0.0.198)."""
         with tempfile.TemporaryDirectory() as td:
             comp = Path(td)
             (comp / "Compfile").write_text("name c\nred01_ip 10.0.0.196\n")
@@ -55,9 +47,6 @@ class RedIpResolution(unittest.TestCase):
 
 
     def test_the_red_stage_passes_the_placement_to_the_resolver(self):
-        """The red path called the resolver without its `placement` argument, so every
-        tlaloc scrim crashed after red staging and before T0 (live 2026-10-17,
-        run-b0395fba)."""
         from unittest import mock
         with tempfile.TemporaryDirectory() as td:
             comp = Path(td)
@@ -86,9 +75,7 @@ if __name__ == "__main__":
 
 class GeneratedHelpers(unittest.TestCase):
     def test_scrim_envs_credlist_is_a_valid_bash_array(self):
-        """`;`-separated entries inside `( )` are a bash syntax error, so `source scrim.env`
-        failed for every helper (caught live: run-ce88e7b6: blue's first cycle repaired
-        the harness by hand before it could defend)."""
+        # `;`-separated entries inside `( )` are a bash syntax error — scrim.env must source
         import os
         import subprocess as sp
         import tempfile

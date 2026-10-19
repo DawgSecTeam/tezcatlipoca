@@ -9,14 +9,8 @@ from deploy_lib.phases._estate import engine_context
 
 
 def connect_estate(ctx):
-# Read the engine's SSH coordinates into the context.
-#
-#     Deliberately between phase 2 and phase 3, and deliberately outside every
-#     phase's from_phase guard: a fresh run only has these after the engine exists,
-#     and a resume from phase 3+ never creates it. A failure here must be reported
-#     as the phase the operator asked to resume at, which is why the sequencer does
-#     not set current_phase for it.
-    # Phase 2 fills tf_ctx on a fresh run; only a --from-phase 3+ resume still needs the read.
+    # Between phases 2 and 3, outside every from_phase guard: a --from-phase 3+ resume never creates
+    # the engine. The sequencer leaves current_phase unset here so a failure reports the requested phase.
     if not ctx.tf_ctx:
         ctx.tf_ctx = engine_context(ctx)
     ctx.ssh_key = Path(ctx.tf_ctx["ssh_key_path"])
@@ -25,8 +19,6 @@ def connect_estate(ctx):
 
 
 def write_credentials_file(ctx):
-# credentials.txt: the operator/packet-facing credential file, 0600 at creation
-#     (the same rule as teams.json and the state document).
     cred_lines = [
         f"# Credentials for {ctx.name} — generated {time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"Scoreboard:  http://{ctx.scoring_ip}",
@@ -54,12 +46,12 @@ def write_credentials_file(ctx):
     for user, pw in (ctx.domain_creds or {}).items():
         cred_lines.append(f"box-credlist-domain-{user}  {pw}")
     cred_path = ctx.comp_dir / "credentials.txt"
-    # The operator/packet-facing credential file — same 0600-at-creation rule.
+    # operator/packet-facing file: 0600 at creation, same rule as teams.json and the state document
     write_text_atomic(cred_path, "\n".join(cred_lines) + "\n")
 
 
 def print_live_summary(ctx):
-# The "is live" report: the only place the generated secrets are printed.
+    # the only place the generated secrets are printed
     print(f"\n{'='*60}")
     print(f"  {ctx.name} is live")
     print(f"{'='*60}")
@@ -88,9 +80,7 @@ def print_live_summary(ctx):
 
 
 def finish_deploy(ctx):
-# Write credentials.txt, the timing summary, and the "is live" report.
-#
-#     The last thing deploy() does.
+    # the last thing deploy() does
     write_credentials_file(ctx)
     print_timing_summary(ctx.comp_dir)
     print_live_summary(ctx)

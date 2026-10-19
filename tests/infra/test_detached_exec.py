@@ -1,16 +1,4 @@
-"""Guest-agent exec: detached long-running path + diagnosable timeouts.
-
-Why this file exists (caught live..10-01):
-  * five exec logs die on `did not finish within 120s` — the agent exec channel is a
-    poll loop with a caller-set budget, so any plant that legitimately outlives the
-    budget dies mid-plant and leaves its partial effects on the box;
-  * the timeout error named only the vmid and the budget, so an operator had nothing
-    to act on even though the agent was holding partial output;
-  * `wait_for_guest_agent` returned a silent False, which is how one vmid escalated
-    600 -> 1200 -> 2700 -> 2900s without anyone noticing it was never coming back.
-
-Offline; the Proxmox API is faked.
-"""
+"""Guest-agent exec: detached long-running path + diagnosable timeouts. Offline; the Proxmox API is faked."""
 
 import sys
 import unittest
@@ -24,8 +12,6 @@ import infra.guest_exec  # noqa: F401  (facade must keep exporting the helpers)
 
 
 class _FakeApi:
-# Scripted proxmox_api: records calls, answers agent exec POST/GET and VM state.
-
     def __init__(self, statuses=None):
         self.calls = []
         self.statuses = list(statuses or [])
@@ -61,15 +47,13 @@ class ExecTimeoutDiagnosis(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertIn("pid=4242", msg)
         self.assertIn("within 120s", msg)
-        self.assertIn("installing nginx", msg)          # partial stdout is included
-        self.assertIn("lock held by apt", msg)          # partial stderr is included
-        self.assertIn("guest_agent_exec_detached()", msg)  # points at the right tool
-
+        self.assertIn("installing nginx", msg)
+        self.assertIn("lock held by apt", msg)
+        self.assertIn("guest_agent_exec_detached()", msg)
 
 
 class DetachedExec(unittest.TestCase):
     def _run(self, tails, rc_line=None):
-    # Run guest_agent_exec_detached with scripted log tails.
         api = _FakeApi()
         seen = {"tail_calls": 0}
 
@@ -108,7 +92,7 @@ class DetachedExec(unittest.TestCase):
         self.assertEqual(result.rc, 0)
         self.assertEqual(result.log_path, "/tmp/tz-detached-1234.log")
         self.assertIn("all done", result.log)
-        self.assertGreaterEqual(seen["tail_calls"], 3)   # polled, did not give up early
+        self.assertGreaterEqual(seen["tail_calls"], 3)
 
     def test_nonzero_rc_is_reported_not_swallowed(self):
         result, _, _ = self._run(["boom\n__TZ_DETACHED_RC=100\n"])
@@ -133,7 +117,6 @@ class DetachedExec(unittest.TestCase):
         self.assertEqual(result.rc, 0)
 
 
-
 class WaitForAgentDiagnosis(unittest.TestCase):
     def test_failed_wait_reports_vm_state_instead_of_being_silent(self):
         api = _FakeApi()
@@ -147,7 +130,7 @@ class WaitForAgentDiagnosis(unittest.TestCase):
         self.assertFalse(ok)
         joined = "\n".join(out)
         self.assertIn("vmid 147", joined)
-        self.assertIn("status=running", joined)      # the diagnosis, not just False
+        self.assertIn("status=running", joined)
         self.assertIn("name=golden-web01", joined)
 
     def test_diagnosis_never_raises_when_the_api_is_gone(self):

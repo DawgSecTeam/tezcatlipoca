@@ -1,15 +1,4 @@
-"""No agent wait may outlive the deadline that is waiting on it — found in a scale soak.
-
-The soak's phase-6 resume hung ~40 minutes in `wait_for_windows_sshd`. The cause was one
-level down: `_wait_for_windows_setup_complete` passed `wait_for_guest_agent` the ENTIRE
-remaining budget (`timeout=max(1, int(deadline - time.time()))` against a 900 s default),
-so a host whose agent never answered consumed the whole window in a single uninterruptible
-call and every enclosing timeout was decorative.
-
-Two invariants, both testable with a fake clock:
-  - each nested agent call is bounded by AGENT_POLL_CAP and by the remaining budget;
-  - a wedged agent still terminates at the helper's own deadline, and says so.
-"""
+"""No nested agent wait may consume the whole enclosing deadline in one uninterruptible call: every probe is bounded by AGENT_POLL_CAP and the remaining budget."""
 
 import sys
 import unittest
@@ -23,8 +12,6 @@ from common import windows_ops  # noqa: E402
 
 
 class FakeClock:
-# `time.time()`/`time.sleep()` that advance instead of waiting.
-
     def __init__(self, start=1000.0):
         self.now = start
         self.sleeps = []
@@ -45,7 +32,7 @@ class NestedWaitIsBounded(unittest.TestCase):
 
         def fake_agent(node, vmid, timeout=None):
             calls.append(timeout)
-            clock.now += timeout            # a wedged agent burns its whole timeout
+            clock.now += timeout
             return False
 
         with patch.object(windows_ops, "time", clock), \
@@ -56,7 +43,6 @@ class NestedWaitIsBounded(unittest.TestCase):
         self.assertTrue(calls, "the loop must keep probing, not give up after one call")
         self.assertLessEqual(max(calls), windows_ops.AGENT_POLL_CAP,
                              "one agent call consumed more than the poll cap")
-        # ...and it stopped at the deadline rather than running past it.
         self.assertLessEqual(clock.now, deadline + windows_ops.AGENT_POLL_CAP)
 
     def test_a_slow_but_answering_box_still_completes(self):
@@ -69,7 +55,7 @@ class NestedWaitIsBounded(unittest.TestCase):
             calls.append(timeout)
             clock.now += 30
             state["n"] += 1
-            return state["n"] >= 3          # answers on the third poll
+            return state["n"] >= 3
 
         def fake_exec(node, vmid, script, timeout=None):
             calls.append(timeout)
@@ -89,8 +75,6 @@ class NestedWaitIsBounded(unittest.TestCase):
             clock.now += timeout
             raise RuntimeError("agent wedged")
 
-        # 100 s of budget left: the first probe may ask for at most that, not 60 s blindly
-        # forever — the point is that no call can outlive the enclosing loop.
         with patch.object(windows_ops, "time", clock), \
                 patch.object(windows_ops, "guest_agent_exec_windows", side_effect=fake_exec):
             self.assertFalse(windows_ops.wait_for_windows_sshd("pve", 221, timeout=100))

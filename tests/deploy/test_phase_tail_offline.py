@@ -1,8 +1,4 @@
-"""Phases 1 (multi-node walk), 7 and the finish/connect steps, driven with fakes.
-
-These branches ran only on a live deploy (phase 7's final pass and beacon plant, phase 1's
-satellite bridge reclaim, connect_estate, the "is live" report), so a TypeError or a
-renamed attribute introduced by the module split would have surfaced mid-event."""
+"""Phases 1 (multi-node walk), 7 and the finish/connect steps driven with fakes — offline coverage for branches that previously ran only in a live deploy."""
 
 import contextlib
 import io
@@ -76,9 +72,8 @@ class Tail(unittest.TestCase):
 
 
     def test_phase7_plants_account_file_modes_after_the_seed(self):
-        # The last pass must be the phase's LAST nakon call: fix_services (phase 6) and the
-        # assume-breach seed both useradd, which recreates the account files at their
-        # default modes and discards a mode planted any earlier.
+        # the last pass must be the phase's LAST nakon call: fix_services (phase 6) and the
+        # assume-breach seed both useradd, resetting account files to default modes over any earlier plant
         ctx, m = self._p7([{"name": "web01-team101"}], late=[{"name": "web01-team101"}])
         self.assertEqual(m["nakon"].call_count, 2)
         self.assertEqual(m["cov"].call_count, 2)
@@ -87,19 +82,15 @@ class Tail(unittest.TestCase):
 
 
     def test_phase7_normal_path_prints_the_banner(self):
-        # The [N/8] banners are what operators and the dashboard's stage jump key on.
-        # Phase 7's banner lived only on the skip branch, so every real deploy ran
-        # [6/8] → [8/8] in the log.
+        # operators and the dashboard's stage jump key on the [N/8] banners
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             self._p7([])
         self.assertIn("[7/8] Configuring Windows AD domains", buf.getvalue())
 
     def test_phase7_publishes_the_red_intel_state(self):
-        # bad-auto's nakon intel reads the box account from <comp>/.deploy_state.json; the
-        # modern pipeline never wrote it, so every seed sprayed (user, None) and paramiko's
-        # "no authentication methods" was reported as "unreachable over SSH" on every box
-        # (caught live). It must exist before the assume-breach step reads the intel.
+        # bad-auto's nakon intel reads the box account from <comp>/.deploy_state.json, so it
+        # must exist (mode 0600) before the assume-breach step reads it
         self._p7([])
         path = self.comp / ".deploy_state.json"
         data = json.loads(path.read_text())

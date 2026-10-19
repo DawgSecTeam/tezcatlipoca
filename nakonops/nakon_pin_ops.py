@@ -13,8 +13,7 @@ def _config_name(c):
 
 
 def _pin_key(c):
-    # (config name, canonical vars): same-named pins with different vars are DIFFERENT plants
-    # (box_baseline.json emits 3+ same-named decoy accounts per box), and keying on name collapsed them.
+    # same-named pins with different vars are DIFFERENT plants (box_baseline emits 3+ same-named decoy accounts per box)
     return (_config_name(c),
             json.dumps(c.get("vars") or {}, sort_keys=True) if isinstance(c, dict) else "")
 
@@ -36,8 +35,7 @@ def _is_identity_kind(kind):
 
 
 def _identity_banned_configs():
-    # Config names whose REQUIRED_VARS carry any identity-dependent kind. The single source of
-    # truth for BOTH golden paths; a config writing an address bakes it into every linked clone.
+    # a config writing an address bakes it into every linked clone; single source of truth for both golden paths
     return {name for name, kinds in REQUIRED_VARS.items()
             if any(_is_identity_kind(kind) for kind in kinds.values())}
 
@@ -90,8 +88,7 @@ def _validate_windows_local_user_pins(configurations, where):
 
 
 def _validate_pin_vars(configurations, where):
-    # Reject bare-name (or var-incomplete) selections of configs that require vars: turns a mid-plant
-    # rc=2 into a generate-time error. Identity ("ip") vars are exempt — filled per machine at staging.
+    # turns a mid-plant rc=2 into a generate-time error; identity ("ip") vars are exempt — filled per machine at staging
     for c in configurations:
         name = _config_name(c)
         required = REQUIRED_VARS.get(name)
@@ -115,8 +112,7 @@ def _validate_pin_vars(configurations, where):
 
 
 def _validate_known_broken_pins(configurations, where, exempt=frozenset()):
-    # Reject a NEW pin of a catalog config with a live-confirmed defect. `exempt` lets a
-    # competition that already records the pin stay re-deployable (warning, not error).
+    # exempt: a competition already recording the pin stays re-deployable (warning, not error)
     for c in configurations:
         name = _config_name(c)
         reason = KNOWN_BROKEN_CONFIGS.get(name)
@@ -134,8 +130,7 @@ def _validate_known_broken_pins(configurations, where, exempt=frozenset()):
 
 
 def catalog_required_var_names(timeout=180):
-    # Config names the nakon catalog itself declares required_vars for (the curated table is an
-    # incomplete mirror). Cached per process; frozenset() (fail-open) when the catalog is unreachable.
+    # the curated REQUIRED_VARS table is an incomplete mirror of what the catalog declares
     global _CATALOG_VAR_NAMES
     if _CATALOG_VAR_NAMES is None:
         try:
@@ -170,8 +165,7 @@ def _drop_catalog_var_bare(names, where, banned):
 
 
 def _bare_unplantable_reason(name):
-    # Why a freshly randomized bare-name pin cannot be planted, or None: known-broken, or a
-    # config whose REQUIRED_VARS include a literal (randomize returns bare names with no vars).
+    # randomize returns bare names with no vars, so a config needing literals cannot be planted bare
     if name in KNOWN_BROKEN_CONFIGS:
         return "known-broken"
     required = REQUIRED_VARS.get(name)
@@ -181,8 +175,7 @@ def _bare_unplantable_reason(name):
 
 
 def _drop_unplantable_bare(names, where):
-    # nakon's randomize (>= d5a443a) already skips configs whose vars it cannot satisfy, but a
-    # vendored copy may predate it and knows nothing of the broken table, so filter here.
+    # nakon's randomize (>= d5a443a) already skips these; a vendored copy may predate it
     kept, dropped = [], []
     for c in names:
         name = _config_name(c)

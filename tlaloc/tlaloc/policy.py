@@ -24,7 +24,7 @@ MODE_RANK = {
 TAKEDOWN_MODES = ("stop", "stop_mask", "stop_rename", "stop_break_config",
                   "stop_rename_config")
 
-BASE_SCORE = {  # higher = better; small integers so a decision frame stays readable
+BASE_SCORE = {  # small integers so a decision frame stays readable
     "reestablish": 90,
     "implant_channel": 70,
     "escalate": 60,
@@ -71,9 +71,8 @@ def make_candidate(effect, params, score, reason, cost="low", tag=None,
     return cand
 
 
-# Scored services are named `<box>-<short>` by the engine; intel carries package
-# names (`ADDS`, `Enable WinRM`, `nginx`). Without one key both sides agree on,
-# a service taken DOWN reads as up and the loop re-takes the same one forever.
+# Scored services are named `<box>-<short>` by the engine, intel carries package
+# names; without one shared key a service taken DOWN reads as up and is re-taken forever.
 _SERVICE_ALIASES = {"ldap": "adds", "http": "nginx", "https": "nginx",
                     "smtp": "postfix", "imap": "dovecot", "sql": "mysql",
                     "ftp": "iisftp", "winrm": "enablewinrm"}
@@ -120,7 +119,6 @@ class Policy:
         return self.remaining_sec() <= 0
 
     def window_open(self, name):
-        """A configured final window (`red.windows.<name>`, minutes before end)."""
         minutes = (self.red.get("windows") or {}).get(name)
         if not minutes:
             return False
@@ -146,7 +144,6 @@ class Policy:
         return self.teardown_active() or self.remaining_sec() <= 5 * 60
 
     def recon_allowed(self):
-        """Read-only work pays until the last tenth of the event."""
         return self.remaining_sec() > self.duration_sec * 0.10
 
     def _restored_recently(self, minutes):
@@ -155,8 +152,7 @@ class Policy:
         return bool(self.world.restores_within(float(minutes)))
 
     def ladder(self):
-        """The tier in force now, or None when off. A restore pause shifts the
-        clock back rather than advancing — stateless across a restart."""
+        """The tier in force now, or None when off. A restore pause shifts the clock back rather than advancing."""
         ladder = self.red.get("ladder") or {}
         if not ladder.get("enabled", True):
             return None
@@ -190,7 +186,6 @@ class Policy:
         return None
 
     def allowed_modes(self):
-        """Every mechanism token the ROE allows right now."""
         tier = self.ladder()
         if tier is None:
             return list(MODE_RANK)
@@ -207,8 +202,7 @@ class Policy:
         return max(modes, key=lambda m: MODE_RANK[m]) if modes else None
 
     def impact_started(self):
-        """Opening grace: red is inside at T0 but takes nothing down until the
-        ladder (or `caps.grace_min` when off) says so."""
+        """Red is inside at T0 but takes nothing down until the opening grace is over."""
         if self.teardown_active():
             return True
         tier = self.ladder()
@@ -218,7 +212,6 @@ class Policy:
         return self.elapsed_min() >= float(self.red["caps"].get("grace_min", 10))
 
     def unrecoverable_unlocked(self):
-        """Recoverable pressure only until half-time unless the tier unlocks it."""
         if self.teardown_active():
             return True
         tier = self.ladder()
@@ -247,23 +240,16 @@ class Policy:
         self.counts = counts or {}
 
     def max_down_now(self):
-        """Concurrent services down per team; 0 means NO LIMIT.
-
-        The owner's directive (2026-10-18) is that red must be free to put as many
-        scored services down as it can reach — the old caps (base 5, widened by the
-        ladder tier) made a live event look one-sided: 16/16 takedowns on one
-        service because every extra target the ladder allowed went unused.
-        """
+        """Concurrent services down per team; 0 means NO LIMIT."""
         caps = self.red.get("caps") or {}
         return max(0, int(caps.get("max_down", 0)))
 
     def cap_label(self):
-        """Human wording for the takedown cap the digest and questions carry."""
         cap = self.max_down_now()
         return "no cap" if cap == 0 else str(cap)
 
     def can_impact(self, team):
-        """(ok, reason) — the per-team pressure check every impact candidate obeys."""
+        """The per-team pressure check every impact candidate obeys."""
         if self.teardown_active():
             return True, "final window — the board goes down"
         if not self.impact_started():
@@ -284,39 +270,18 @@ class Policy:
                            "— ease off")
         return True, "ok"
 
-    # -- pressure rotation + verification (owner directive 2026-10-18) --------
-
     def _service_matches(self, a, b):
-        """Loose match: the scoreboard says "dc01-ldap", the takedown said "ADDS"."""
         a, b = str(a or "").lower(), str(b or "").lower()
         return bool(a and b) and (a in b or b in a)
 
     def _kill_restore(self, ip, service):
-        """(last kill, last blue activity) epoch stamps for this service on this box.
-
-        Blue's restore is matched at BOX level on purpose: the scoreboard pin is
-        `dc01-ldap` while the service red stopped is `ADDS`, so a service-name match
-        misses every real restore. Any blue restore on the box after our kill is
-        the signal that they touched it.
-        """
+        """Blue restores match at box level: scoreboard names never equal the stopped service's name."""
         kills = [parse_ts(i["at"]) for i in self.world.impacts()
                  if i.get("ip") == ip and self._service_matches(i.get("service"), service)]
         restores = [parse_ts(e["at"]) for e in self.world.blue_events_for(ip=ip)]
         return (max(kills) if kills else None), (max(restores) if restores else None)
 
     def pressure_rotation(self, ip, service, down, now=None):
-        """(bonus, reason, skip) for a takedown candidate — the rotation policy.
-
-        Three rules, in order:
-          1. A service we already took down is SKIPPED while our damage stands (no
-             blue activity on that box since the kill): re-hitting it scores nothing
-             and spends the cycle blue does not have to answer.
-          2. Once blue acts on that box, the same attack is re-launched — the test
-             is whether they fixed the cause or just restarted the service.
-          3. Everything else rotates: a box already hit in the last `rotate_min`
-             is penalised so one box cannot absorb a whole cycle, and a service
-             never hit this event is preferred.
-        """
         now = now or time.time()
         kill, restore = self._kill_restore(ip, service)
         rotate_min = float((self.red.get("caps") or {}).get("rotate_min", 20))
@@ -332,11 +297,8 @@ class Policy:
         penalty = -min(24.0, 6.0 * len(recent))
         return 6.0 + penalty, "not hit yet this event — rotate pressure here", False
 
-    # -- pacing helpers ------------------------------------------------------
-
     def focus_team(self, rotation_min=None):
-        """Focus team, rotated on a clock. A shuffle bag, not a re-pick: uniform
-        random can starve a team of pressure for a whole event."""
+        """A shuffle bag, not a re-pick: uniform random starves a team of pressure."""
         teams = [t["team"] for t in self.intel.teams()]
         if not teams:
             raise PolicyError("no teams in intel — nothing to red team")
@@ -358,8 +320,7 @@ class Policy:
         return current
 
     def candidates(self, ctx):
-        """Every legal option this cycle; `id` is stable across cycles (the clef
-        criteria key and the decision-log key)."""
+        """`id` is stable across cycles — the clef criteria key and the decision-log key."""
         out = []
         focus = self.focus_team()
         counts = self.counts or {}
@@ -367,14 +328,13 @@ class Policy:
             ip, team, windows = box["ip"], box["team"], box["windows"]
             self._candidates_for_box(ctx, out, box, focus, counts)
         out.extend(self._candidates_global(ctx, out))
-        # An effect that failed to import must not become a candidate; catalogue
-        # completeness is a test-time invariant (effects.MISSING_MODULES).
+        # an effect that failed to import must not become a candidate (effects.MISSING_MODULES)
         from . import effects as effects_mod
         registered = set(effects_mod.REGISTRY)
         out = [c for c in out if c["effect"] in registered]
         for cand in out:
             cand["score"] = round(cand["score"], 2)
-            # one rule, one place: the gate reads this flag, not its own copy
+            # the gate reads this flag, not its own copy
             cand["high_stakes"] = bool(cand["high_stakes"]
                                        or cand["effect"] in self._high_stakes())
         out.sort(key=lambda c: (-c["score"], c["effect"],
@@ -421,8 +381,7 @@ class Policy:
                 fails = self.world.failure_count("implant_channel", ip)
                 if fails:
                     why += f" ({fails} failed attempt(s))"
-                # A dead C2 must not outscore pressure forever: the 2026-10-18
-                # scrim-one run retried the implant 52 times and never pressed.
+                # decay retries so a dead C2 cannot outscore pressure forever
                 out.append(make_candidate("implant_channel", {"ip": ip},
                                           BASE_SCORE["implant_channel"]
                                           - 10 * fails + score_bonus,
@@ -458,7 +417,7 @@ class Policy:
             if ok and modes and not dead:
                 for service in self._pressure_targets(ctx, ip, up):
                     if service.get("down") or not service.get("scored"):
-                        continue      # already down, or not a scored service
+                        continue
                     mode = strongest or "stop"
                     rot, why, skip = self.pressure_rotation(ip, service["name"],
                                                             service.get("down"))
@@ -515,8 +474,7 @@ class Policy:
         for name in services:
             slug = str(name)
             # ssh/sshd is red's own access path: the effect refuses it, so offering
-            # it burns a cycle on a guaranteed failure (live 2026-10-18: two cycles
-            # on web01-ssh with nothing to show).
+            # it burns a cycle on a guaranteed failure.
             if slug.lower().removesuffix(".service").strip() in ("ssh", "sshd"):
                 continue
             key = _service_key(slug)
@@ -528,13 +486,11 @@ class Policy:
             out.append({"name": slug,
                         "down": state is False,
                         "up": state is True,
-                        # with a scoreboard available, only a name it scores is a
-                        # takedown target; the rest are misconfig slugs
+                        # with a scoreboard, only names it scores are takedown targets
                         "scored": state is not None or not team_status})
         return out
 
     def _candidates_global(self, ctx, existing):
-        """Options not tied to one target: improvisation is the escape hatch."""
         out = []
         if not existing and ctx.cfg["llm"]["enabled"]:
             out.append(make_candidate(
@@ -549,12 +505,7 @@ class Policy:
         return box["ip"] if box else None
 
     def _box_id_for_ip(self, ip):
-        """The manifest/C2 key for a box: `<name>-<team>` (e.g. web01-120).
-
-        The world's `c2` map is keyed by that id, so asking it for an IP always
-        answered "no callback" — every box looked channelless and the loop kept
-        re-implanting a live agent (live 2026-10-18: 52 wasted implants).
-        """
+        """World keys its c2 map by `<name>-<identifier>`, not IP; an IP lookup reads as "no callback"."""
         box = self.intel.box_by_ip(ip)
         if not box:
             return ip
@@ -581,8 +532,7 @@ class Policy:
         return artifact.get("family") or (artifact.get("kind") or "").removeprefix("persist-")
 
     def validate(self, candidate, ctx):
-        """The ROE check before execute(); raises PolicyError. Effects re-check
-        their own preconditions too — the seed path calls effects directly."""
+        """Effects re-check their own preconditions: the seed path calls effects without this."""
         if not isinstance(candidate, dict) or "effect" not in candidate:
             raise PolicyError("candidate must be a dict with an 'effect'")
         effect = candidate["effect"]
@@ -611,7 +561,7 @@ class Policy:
         return candidate
 
     def frame(self, ctx, candidates, recent=None, budget_tokens=8192):
-        """The digest input: what the model is allowed to see (typed, ordered)."""
+        """What the model is allowed to see — the digest input."""
         boxes = []
         untouched = 0
         for box in self.intel.boxes():
@@ -702,7 +652,7 @@ class Policy:
     def question_bundle(self, digest, candidates, ctx, *, max_options=8,
                         cycle=0, include_escalation=True, include_blue_check=False,
                         compact=False, include_pressure=True):
-        """Typed questions for clef; nothing invents an option candidates() omitted."""
+        """Nothing invents an option candidates() omitted."""
         top = list(candidates)[:max_options]
         limit = 32 if compact else 160
         criteria = {}

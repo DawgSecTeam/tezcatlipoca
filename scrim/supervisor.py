@@ -4,32 +4,26 @@ from scrim import core
 from scrim.core import log
 
 
-# a worker dying on its own must not let the harness exit clean: a dead feed leaves a team
-# unattended, a dead monitor leaves the post-hoc report without its evidence (a harness audit finding)
+# a dead feed leaves a team unattended and a dead monitor strips the report's evidence:
+# the harness must not exit clean with a worker down
 class WorkerDiedError(RuntimeError):
     pass
 
 
-# A worker may be parked inside a full opencode cycle when the window closes; 10s used to
-# abandon it, and stage_capture/stage_teardown then wrote into (and destroyed infra under)
-# a live cycle. One CYCLE_TIMEOUT plus slack is the honest bound (the retry is skipped
-# once stop is set, so a single attempt is the worst case).
+# a worker may be parked in a full opencode cycle when the window closes; joining less abandons
+# it and capture/teardown race the live cycle. Worst case: one CYCLE_TIMEOUT (no retry once stop is set)
 WORKER_JOIN_BUDGET = core.CYCLE_TIMEOUT + 120
 
-# ...but that bound is a whole cycle, so joining by it lets a 25-minute event reach capture at
-# minute 50 (caught live: the join waited out a cycle started at T+5). Past
-# the deadline the join is capped by what is left of the window plus this grace, which is all
-# a cycle that is already wrapping up needs.
+# but joining by a whole-cycle bound let a 25-min event reach capture at minute 50 (caught live:
+# the join waited a cycle started at T+5); past the deadline only this grace is needed
 EVENT_END_GRACE = 120
 
 
-# polled rather than assumed: nothing else observed these threads, so a worker killed by
-# an exception escaping its own handler otherwise goes unnoticed to run completion
+# nothing else observes these threads: without polling, a dead worker goes unnoticed
 def dead_workers(threads, reported):
     return [t for t in threads if not t.is_alive() and t not in reported]
 
 
-# budget resolved at call time so tests (and an operator override) can shorten it
 def join_workers(threads, budget=None):
     budget = WORKER_JOIN_BUDGET if budget is None else budget
     deadline = time.time() + budget
@@ -42,8 +36,7 @@ def supervise_workers(threads, deadline, stop, poll=60, t0=None):
     reported = []
     try:
         while time.time() < deadline:
-            # never sleep past the deadline: at a 60s poll the loop used to overrun it by
-            # up to a minute, which is event time the clock-bounded deliverables lost
+            # never sleep past the deadline: overrun is event time the clock-bounded deliverables lose
             time.sleep(min(poll, max(0.0, deadline - time.time())))
             for t in dead_workers(threads, reported):
                 when = f" at T+{int((time.time() - t0) // 60)}min" if t0 else ""

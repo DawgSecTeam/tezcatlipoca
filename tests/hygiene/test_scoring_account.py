@@ -1,16 +1,4 @@
-"""The dedicated `scoring` automation account.
-
-Why a second admin account exists: automation that authenticates on its own schedule
-(the round-loop watchdog, an unattended verify) should use its own identity — least
-privilege and a separate audit trail. The old one-session-per-account rationale was
-not reproduced on the 2026-10-18 live engine (a second same-account login left the
-first cookie valid).
-
-`event.conf` seeds accounts as explicit per-role lists, and `inject` was already a
-second account of a different role — the model supports this. The password is minted
-per competition like every other secret (never a fixed literal) and lands in
-credentials.txt.
-"""
+"""The `scoring` automation account is seeded alongside admin — two independent identities, each with its own minted password."""
 
 import sys
 import unittest
@@ -42,13 +30,10 @@ class AdminAccounts(unittest.TestCase):
         self.assertEqual(accounts[1]["pw"], "scoringpw")
 
     def test_a_caller_without_the_key_still_gets_the_single_admin(self):
-    # Older callers and the pin/compile tests build a dict ctx without it.
         accounts = _admin_accounts(_ctx())
         self.assertEqual([a["name"] for a in accounts], ["admin"])
 
     def test_the_scoring_password_is_not_the_admin_password(self):
-    # If they were ever the same, the separation would be a no-op — and the whole
-    #         point is that these are two independent accounts.
         accounts = _admin_accounts(_ctx(quotient_scoring_password="scoringpw"))
         by_name = {a["name"]: a["pw"] for a in accounts}
         self.assertNotEqual(by_name["admin"], by_name["scoring"])

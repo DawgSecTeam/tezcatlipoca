@@ -13,18 +13,14 @@ from scrim.core import log
 # A canonical document smaller than this is a stub (the collector writes one when it finds
 # nothing), never a narrative.
 STUB_MAX_BYTES = 1024
-# Bounded grace for red's OWN report, which it writes seconds after the harness stops its
-# clock: the pre-teardown pull used to race that gap and record a present red as "unreachable".
+# Red writes its report seconds after the harness stops its clock; pulling without
+# this grace races that gap and records a present red as "unreachable".
 RED_REPORT_GRACE_SEC = 90
 RED_REPORT_POLL_SEC = 10
 
 
 def _red_ssh_spec(args):
-    """`(ssh spec, common scp/ssh args)` for red01 — the one place its address is resolved.
-
-    The two callers must not disagree (a collector aimed elsewhere fails silently as
-    `unreachable`), so the address is this run's own record, never a sibling checkout's config.
-    """
+    """red01's one address resolution. Never a sibling checkout's config: a wrong target fails silently as `unreachable`."""
     from red import red01_ops
     comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
     red_ip = (getattr(args, "red_ip", None)
@@ -45,16 +41,12 @@ def _red_ssh_spec(args):
 
 
 def _red_ssh_ctx(args):
-    """(target, common ssh/scp args, engine jump ProxyCommand or None) for red01."""
     spec, common = _red_ssh_spec(args)
     return f"{spec['user']}@{spec['host']}", common, spec["jump"]
 
 
 def _pull_red_files(args, files, tag=None):
-    """Best-effort scp of red01 files — direct first, then via the engine jump; never raises.
-
-    A flaky scp must not take down an otherwise fine run.
-    """
+    """Best-effort scp of red01 files — a flaky scp must not take down a fine run."""
     ev = Path(args.run_dir) / "evidence" / "red"
     ev.mkdir(parents=True, exist_ok=True)
     target, common, jump = _red_ssh_ctx(args)
@@ -88,13 +80,11 @@ def red_unit(args):
 
 
 def red_artifact_names(args):
-    """The root-owned artifacts to stage + pull from red01's state dir."""
     return ["world.json", "events.jsonl", "report-secrets.md", "report.md",
             "restore-table.json"]
 
 
 def _red_report_names(args, base=None):
-    """Basenames of red's `report-*.md` on red01, newest last; best effort, never raises."""
     base = base or red_state_dir(args)
     glob = "report*.md"
     target, common, jump = _red_ssh_ctx(args)
@@ -113,7 +103,6 @@ def _red_report_names(args, base=None):
 
 
 def pull_red_snapshot(args, tag=None):
-    """Best-effort in-run pull of red's events and its own report; never raises."""
     files = [(f"{red_state_dir(args)}/events.jsonl", "events.jsonl")]
     for name in _red_report_names(args)[-1:]:      # newest only: the final narrative
         files.append((f"{red_state_dir(args)}/{name}", name))
@@ -129,10 +118,6 @@ def pull_red_snapshot(args, tag=None):
 
 
 def await_red_report(args, grace=RED_REPORT_GRACE_SEC, interval=RED_REPORT_POLL_SEC):
-    """Wait, bounded, for red's after-action report on red01; never raises, never a gate.
-
-    Red writes the report when IT sees the event end, after the harness stops its clock.
-    """
     deadline = time.time() + max(0, grace)
     while True:
         if _red_report_names(args):
@@ -145,11 +130,7 @@ def await_red_report(args, grace=RED_REPORT_GRACE_SEC, interval=RED_REPORT_POLL_
 
 
 def _land_canonical_red_report(args, got):
-    """File the newest pulled report as the test folder's canonical RED-TEAM.md.
-
-    The collector only lands it if its own scp-jump route succeeds; this cannot lose a report
-    the harness already holds, and never overwrites a substantive narrative.
-    """
+    """Fallback filing when the collector's own scp-jump route missed the report; replaces stubs, never a substantive narrative."""
     test_dir = getattr(args, "test_dir", None)
     if not test_dir:
         return None
@@ -173,7 +154,6 @@ def _land_canonical_red_report(args, got):
 
 
 def _staged_report_names(args):
-    """Basenames of the report-*.md copies already staged under /tmp/ba (best effort)."""
     target, common, jump = _red_ssh_ctx(args)
     cmd = "ls -1 /tmp/ba 2>/dev/null | grep '^report' || true"
     for extra in ([], (["-o", jump] if jump else [])):
@@ -190,12 +170,7 @@ def _staged_report_names(args):
 
 
 def pull_red_state(args):
-    """Final pull of what red actually planted, BEFORE red01 is destroyed.
-
-    world.json is the only record of the artifact set, and the collector treats red01 as ONE
-    target — one scp failure on the root-owned report-secrets.md marks every later file
-    "skipped: target unreachable". Stage everything readable first.
-    """
+    """Stage world-readable copies under /tmp/ba first: the collector treats red01 as ONE target and one scp failure marks every later file "skipped"."""
     target, common, jump = _red_ssh_ctx(args)
     await_red_report(args)
     stage = ("sudo -n mkdir -p /tmp/ba && sudo -n chmod 755 /tmp/ba; " +
@@ -224,16 +199,11 @@ def pull_red_state(args):
 
 
 def start_red_director(args):
-    """Start red's director AFTER the day-0 seed has landed.
-
-    Booting it first makes it load an EMPTY world.json and save over the seed's artifact
-    record (meta.seed_done gone, beacon_score single digits).
-    """
+    """Ordering hazard: booted before the day-0 seed lands, it loads an empty world.json and saves over the seed's artifact record."""
     target, common, jump = _red_ssh_ctx(args)
     unit = red_unit(args)
     # RESTART, not start: a re-stage pushes new code onto red01, and `systemctl
-    # start` on an already-running unit is a no-op — three re-arms in a row on
-    # 2026-10-18 kept the pre-fix loop alive and every "fix" looked ineffective.
+    # start` on a running unit is a no-op that keeps the old loop alive.
     cmd = (f"sudo -n systemctl restart {unit}; sleep 3; "
            f"systemctl is-active {unit}")
     for extra in ([], (["-o", jump] if jump else [])):
@@ -254,11 +224,7 @@ def start_red_director(args):
 
 
 def red_box_power_state(args):
-    """red01's power state from the hypervisor — liveness needing no guest networking.
-
-    Every other red01 signal travels the route that may itself be down, so a dead guest and a
-    dead route to it look identical.
-    """
+    """Liveness from the hypervisor: every other red01 signal rides the route that may itself be down."""
     vmid = getattr(args, "red_vmid", None)
     if not vmid:
         return None
@@ -280,7 +246,6 @@ def red_box_power_state(args):
 
 
 def red_liveness(args):
-    """The out-of-band answer to "is red01 alive?", naming the signal that answered."""
     return red_box_power_state(args) or "no red vmid recorded — no out-of-band signal"
 
 
@@ -309,10 +274,6 @@ def check_red_llm(args, base_url):
 
 
 def red_llm_url(args):
-    """The LLM base URL as red01 dials it (tunnel-local when a tunnel is up).
-
-    args.red_tunnel holds the CLI string until stage_red overwrites it with the live tunnel
-    object: a truthy string must not be mistaken for a tunnel.
-    """
+    """args.red_tunnel holds the CLI string until stage_red overwrites it with the live tunnel object — a truthy string is not a tunnel."""
     tunnel = getattr(args, "red_tunnel", None)
     return tunnel.red_base_url() if hasattr(tunnel, "red_base_url") else args.llm_base_url

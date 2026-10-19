@@ -7,25 +7,18 @@ from common.comp_paths import comps_root
 REPO = Path(__file__).resolve().parent.parent
 
 
-# the fixed HOST_BY_OCTET table hardcoded one lineup, so every red timeline entry and
-# target label was WRONG on any other competition even though the report already knew the
-# competition directory through the run dir's name. Returns {} when it
-# cannot resolve one, so host_label degrades to the raw dotted octet instead of inventing
-# a name from the wrong lineup.
+# {} when unresolvable: the raw octet beats inventing a name from another lineup
 def box_labels(run_dir):
     name = Path(run_dir).resolve().name
     comps = comps_root()
     cands = [comps / name / "boxes.json"]
-    # Run dirs live INSIDE their competition now (competitions/<comp>/.automated-tests/
-    # <run-id>/): the competition's own boxes.json is three levels up. Miss this and a
-    # fully-labeled comp degrades to raw addresses.
+    # run dirs live inside the comp (competitions/<comp>/.automated-tests/<run-id>/): that comp's boxes.json is 3 up
     p = Path(run_dir).resolve()
     if ".automated-tests" in p.parts:
         i = p.parts.index(".automated-tests")
         cands.append(Path(*p.parts[:i]) / "boxes.json")
     if comps.is_dir():
-        # run dirs are often suffixed ("comp-run2"): take the longest competition
-        # name that prefixes the run dir.
+        # run dirs are often suffixed ("comp-run2"): longest matching comp name wins
         prefixes = sorted((p for p in comps.iterdir()
                            if p.is_dir() and name.startswith(p.name)),
                           key=lambda p: len(p.name), reverse=True)
@@ -42,11 +35,7 @@ def box_labels(run_dir):
     return {}
 
 
-# the windows_footholds fallback used to hardcode octets 2/3 (one lineup's
-# dc01/win01 slots); a competition whose only Windows box sits elsewhere counted red's
-# two real win01 cred_spray
-# footholds as 0 and the gate failed red for footholds it held. Unresolvable -> no
-# Windows octets (the gate counts none rather than guessing).
+# unresolvable -> no Windows octets: the foothold gate counts none rather than guessing slots
 def windows_octets(run_dir):
     p = Path(run_dir).resolve()
     cands = []
