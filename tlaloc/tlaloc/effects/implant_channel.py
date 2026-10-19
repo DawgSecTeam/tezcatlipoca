@@ -34,6 +34,9 @@ class ImplantChannel(Effect):
                    "are built at comp-prep and frozen — never built mid-event.")
     params = {
         "ip": {"type": "str", "required": True, "desc": "target box"},
+        "force": {"type": "str",
+                  "desc": "'true' to re-try after two failures (a deliberate "
+                          "re-plant, e.g. the day-0 seed or an operator fix)"},
         "box_id": {"type": "str", "desc": "manifest key (default <box>-<team>)"},
         "transport": {"type": "enum", "choices": ["http", "webhook"],
                       "desc": "callback transport (default: the manifest's)"},
@@ -55,9 +58,11 @@ class ImplantChannel(Effect):
         # profile) must not eat every cycle: the loop starved on dc01 for ten
         # cycles in a row on the 2026-10-18 range. Two failures and the box yields
         # to the rest of the board until the cause is gone.
-        if ctx.world.failure_count(self.id, ip) >= 2:
+        if (ctx.world.failure_count(self.id, ip) >= 2
+                and str(params.get("force", "")).lower() != "true"):
             raise PolicyError(f"implant_channel already failed twice on {ip} — switch "
-                              f"target (the box is refusing the payload)")
+                              f"target (the box is refusing the payload); "
+                              f"force=true re-tries deliberately")
 
     def run(self, ctx, params):
         ip = params["ip"]

@@ -146,7 +146,10 @@ def _run_stage(ctx, ip, stage, mode, dry_run=False):
         if mode == "light" and not ctx.world.foothold(ip):
             return {"stage": stage, "effect": "implant_channel", "ok": False,
                     "detail": "light mode needs a foothold to plant the channel"}
-        result = execute("implant_channel", {"ip": ip}, ctx, source="seed")
+        # force: the seed is a deliberate re-plant, so it re-tries a box whose
+        # earlier attempts already counted two failures.
+        result = execute("implant_channel", {"ip": ip, "force": "true"}, ctx,
+                         source="seed")
         return {"stage": stage, "effect": "implant_channel", "ok": result.ok,
                 "detail": result.detail}
     if stage == "persist":
