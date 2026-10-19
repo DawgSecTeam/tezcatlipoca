@@ -23,7 +23,8 @@ def _capture_bootstrap_calls(features=()):
 
     with patch.object(windows_ops, "_wait_for_windows_setup_complete", return_value=True), \
          patch.object(windows_ops, "guest_agent_exec_windows", side_effect=fake_exec), \
-         patch.object(windows_ops, "wait_for_guest_agent", return_value=True) as wait:
+         patch.object(windows_ops, "wait_for_guest_agent", return_value=True) as wait, \
+         patch.object(windows_ops.time, "sleep"):
         windows_ops.bootstrap_windows_box("n", 1, "192.168.125.3", "192.168.125.1",
                                           "192.168.125.2", "pw", features=features)
     return calls, wait

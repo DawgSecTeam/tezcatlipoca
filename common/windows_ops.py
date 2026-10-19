@@ -139,6 +139,10 @@ Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMod
             guest_agent_exec_windows(node, vmid, "Restart-Computer -Force", timeout=60)
         except Exception:  # the agent drops the channel as the box goes down
             pass
+        # The agent still answers for a moment before the OS goes down; without
+        # the gap the poll returns on the pre-restart agent and the plan connects
+        # into the shutdown (live: win02-golden reset by peer, run-a74f7bb6).
+        time.sleep(20)
         wait_for_guest_agent(node, vmid, timeout=600)
 
 
