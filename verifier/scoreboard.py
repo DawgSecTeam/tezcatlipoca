@@ -142,7 +142,10 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
     detail = f"{'UP' if all_up else 'some DOWN/unscored'} " \
              f"({'query ok' if query_ok else 'query failed'})"
     out = [bool_gate(name, all_up, detail, gating=strict, label="services")]
-    pins = _pins_status(pins_ok, f"{len(expected_names)} pinned checks")
+    # A failing pin gate must name what never registered: "12 pinned checks" reads as a count,
+    # not a verdict (live: scrim-one pre-T0 verify, where only the console named the services).
+    pins = _pins_status(pins_ok, f"{len(expected_names)} pinned checks" if pins_ok
+                        else f"missing: {', '.join(missing)}")
     if pins:
         out.append(pins)
     return out
