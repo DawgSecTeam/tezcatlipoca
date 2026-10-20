@@ -9,7 +9,7 @@ import tarfile
 from pathlib import Path
 
 from common.constants import red_bridge_name
-from common.utils import local_python
+from common.utils import competition_name, local_python
 
 REPO = Path(__file__).resolve().parents[1]
 TLALOC_REPO = REPO / "tlaloc"
@@ -151,7 +151,7 @@ def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
     block = block if block is not None else red_block(comp_dir)
     comp_dir = Path(comp_dir).resolve()
     cfg = {
-        "run": {"comp": comp_id or comp_dir.name,
+        "run": {"comp": comp_id or competition_name(comp_dir),
                 "comp_dir": INTEL_DIR,
                 "state_dir": STATE_DIR,
                 "kill_file": f"{STATE_DIR}/KILL",
@@ -473,6 +473,11 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     from infra.ownership import Ownership
     from red import gaia_ops, red01_ops
     comp_dir = Path(getattr(ctx, "comp_dir"))
+    # The workspace directory is not an identity: a dashboard run's comp dir is "comp" while the
+    # competition is "scrim-one", so the same range named its state two ways and a seeded
+    # .tlaloc-state from a manual run refused the deploy as cross-event state (live: scrim-one,
+    # run-5882173c). tlaloc state is keyed by the competition's own name everywhere.
+    comp_id = getattr(ctx, "comp_id", None) or competition_name(comp_dir)
     block = red_block(comp_dir)
     problems = validate_red_block(block)
     if problems:
@@ -499,7 +504,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
             "TEZ_CLEF_URL in the run host's environment (red01 must be able to "
             "reach it, or every decision silently falls back)")
     write_config(comp_dir, cfg_path,
-                 comp_id=getattr(ctx, "comp_id", None) or comp_dir.name,
+                 comp_id=comp_id,
                  engine_ip=getattr(ctx, "scoring_ip", None) or getattr(ctx, "engine_ip", None),
                  clef_url=clef_url,
                  c2_url=block.get("c2_url"),
@@ -531,8 +536,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     if mythic is None:
         mythic = gaia_ops.mythic_enabled(comp_dir)
     if mythic:
-        plan = gaia_ops.c2_plan(comp_dir, red_ip=red_ip,
-                                comp_id=getattr(ctx, "comp_id", None))
+        plan = gaia_ops.c2_plan(comp_dir, red_ip=red_ip, comp_id=comp_id)
         callback_port, callback_host = plan["callback_port"], plan["callback_host"]
         if not callback_port:
             raise RuntimeError(

@@ -146,6 +146,15 @@ class ConfigAndCommandTests(unittest.TestCase):
         self.assertEqual(cfg["sensors"]["quotient_url"], "http://10.0.0.92")
         self.assertEqual(cfg["clef"]["base_url"], "http://10.0.0.5:8080")
 
+    def test_the_state_is_keyed_by_the_competition_not_the_workspace_dir(self):
+        # A dashboard workspace is <run>/comp, so a dir-derived name would call this range
+        # "comp" while a manual run of the same comp calls it "scrim-one" — the same range under
+        # two identities, which is what refused a seeded .tlaloc-state as cross-event state.
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = compfile(tmp)
+            cfg = to.tlaloc_config(comp)
+        self.assertEqual(cfg["run"]["comp"], "demo")
+
     def test_the_seed_and_run_are_given_the_intel_comp_dir(self):
         seed, run, report = (to.seed_command(), to.plant_command(), to.report_command())
         for cmd in (seed, run, report):

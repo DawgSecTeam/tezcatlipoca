@@ -96,7 +96,7 @@ class _PipelineCtx:
     def __init__(self, comp, args, ssh_key):
         from estate import config as estate_config
         self.comp_dir = Path(comp)
-        self.comp_id = getattr(args, "comp_id", None) or self.comp_dir.name
+        self.comp_id = getattr(args, "comp_id", None) or competition_name(self.comp_dir)
         self.ssh_key = str(ssh_key)
         self.ssh_key_abs = str(ssh_key)
         flat = core.read_state(self.comp_dir) or {}
