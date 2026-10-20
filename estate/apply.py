@@ -119,7 +119,11 @@ def create_bridge(state, node, name, comment=""):
                 data={"iface": name, "type": "bridge", "autostart": 1,
                       "comments": comment or name})
     # POST stages the change; PUT applies it, and a VM cannot attach to a staged bridge.
-    proxmox_api("PUT", f"/nodes/{node}/network")
+    # The apply is an async task: starting the engine before it finishes failed
+    # qmstart with "bridge does not exist" (live: run-119f3058).
+    upid = proxmox_api("PUT", f"/nodes/{node}/network")["data"]
+    if upid:
+        wait_for_proxmox_task(node, upid)
     state.record("bridge", node, name)
     state.save()
     return True
