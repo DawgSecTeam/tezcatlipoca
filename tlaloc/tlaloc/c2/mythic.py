@@ -9,10 +9,14 @@ from ..errors import C2Error
 
 DEFAULT_TRANSPORTS = ("http", "webhook")
 AGENT_BY_OS = {"linux": "poseidon", "windows": "apollo"}
-# createTask names a COMMAND, not a shell line: a script sent as `command` makes Mythic
-# look up a command that does not exist, so every live tasking failed. Each agent runs
-# a raw script through its own command, with the script in that command's `command` arg.
+# createTask names a COMMAND and carries its raw parameter string: a script sent as
+# `command` made Mythic look up a command that does not exist, and JSON-wrapping it handed
+# the agent a literal `{"command": ...}` line. Each agent runs a script through its own
+# command.
 SCRIPT_COMMAND = {"apollo": "powershell", "poseidon": "shell"}
+# An empty `commands` list ships only the bootstrap set for apollo (live: the DC callback
+# had no powershell/shell, so every Windows tasking failed); poseidon ignores it.
+AGENT_COMMANDS = {"apollo": ["powershell", "shell"]}
 # selected_os must match the payload type's capitalised supported_os; "linux" is rejected.
 OS_NAME = {"linux": "Linux", "windows": "Windows", "macos": "macOS"}
 
@@ -241,7 +245,7 @@ query Payload($uuid: String!) {
             self.CREATE_TASK,
             {"callback_id": int(callback_id),
              "command": SCRIPT_COMMAND.get(str(agent or "").lower(), "shell"),
-             "params": json.dumps({"command": command})}).get("createTask") or {})
+             "params": command}).get("createTask") or {})
         if created.get("error"):
             return {"ok": False, "detail": f"task creation: {created['error']}",
                     "output": "", "task_id": None}
@@ -280,7 +284,7 @@ query Payload($uuid: String!) {
         definition = {"selected_os": OS_NAME.get(os_name.lower(), os_name),
                       "filename": f"{box_id}-{transport}.bin",
                       "description": box_id, "payload_type": agent,
-                      "commands": [], "c2_profiles": [profile],
+                      "commands": AGENT_COMMANDS.get(agent, []), "c2_profiles": [profile],
                       "build_parameters": []}
         created = (self._graphql_call(
             self.CREATE_PAYLOAD, {"payload": json.dumps(definition)}).get("createPayload") or {})

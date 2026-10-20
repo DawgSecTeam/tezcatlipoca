@@ -399,6 +399,12 @@ the deploy contract is `tlaloc/docs/deploy.md`.
   callback port refuses before installing — the frozen payloads would dial nothing and the channel
   could never check in. `red.c2 off` skips the Mythic install and the payload freeze; the engine's
   segment rules are installed either way.
+- Tasking speaks Mythic's own contract: `createTask` takes a command NAME plus that command's raw
+  parameter string (a script sent as `command` is looked up as a command that does not exist, and
+  JSON-wrapping it hands the agent a literal `{"command": ...}` line). The agent picks the command
+  that runs a script — `powershell` for apollo, `shell` for poseidon. Apollo bakes only the
+  commands its payload definition lists, so the Windows build names `powershell`/`shell`
+  explicitly; an empty list leaves the callback without either and every Windows tasking fails.
 
 **Verdict and evidence**
 

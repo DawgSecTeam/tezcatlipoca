@@ -119,8 +119,7 @@ def test_tasking_creates_and_polls_a_task():
     assert outcome["ok"] is True and outcome["output"] == "nginx stopped"
     created = [c for c in graphql.calls if "createTask" in c["query"]][0]
     assert created["variables"] == {
-        "callback_id": 42, "command": "shell",
-        "params": json.dumps({"command": "systemctl stop nginx"})}
+        "callback_id": 42, "command": "shell", "params": "systemctl stop nginx"}
 
 
 def test_a_windows_agent_task_wraps_the_script_in_the_powershell_command():
@@ -136,8 +135,7 @@ def test_a_windows_agent_task_wraps_the_script_in_the_powershell_command():
     assert client.task("ad01-1", "(Get-Service 'NTDS').Status", poll_interval=0)["ok"] is True
     created = [c for c in graphql.calls if "createTask" in c["query"]][0]
     assert created["variables"]["command"] == "powershell"
-    assert json.loads(created["variables"]["params"]) == {
-        "command": "(Get-Service 'NTDS').Status"}
+    assert created["variables"]["params"] == "(Get-Service 'NTDS').Status"
 
 
 def test_tasking_reports_a_missing_callback_instead_of_guessing():
@@ -434,6 +432,8 @@ def test_build_payload_without_a_callback_keeps_the_profile_default():
     assert "c2_profile_parameters" not in profile
     assert definition["payload_type"] == "apollo"
     assert definition["selected_os"] == "Windows"
+    # apollo builds only what it is told to; an empty list ships no script command at all.
+    assert definition["commands"] == ["powershell", "shell"]
 
 
 def test_download_waits_for_the_build_and_writes_the_file(tmp_path):
