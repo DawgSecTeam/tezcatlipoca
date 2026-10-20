@@ -1,3 +1,4 @@
+import json
 import shlex
 import time
 from pathlib import Path
@@ -9,6 +10,44 @@ from scrim import core
 from scrim import procs
 from scrim import quotient_api
 from scrim.core import log
+
+
+def _red_restore(args, web_ip, unit, sudo_web01):
+    """A reused range's down unit is red's damage, and a plain start cannot undo a
+    rename/break mode: apply red's own recipe for it before falling back to start."""
+    from scrim import red_link
+    run_dir = Path(getattr(args, "run_dir", "") or "")
+    if not run_dir.is_dir():
+        return False
+    world = run_dir / "evidence" / "red" / "world.json"
+    if not world.is_file():
+        try:
+            red_link.pull_red_state(args)
+        except Exception:                       # evidence only; the plain start still runs
+            return False
+    try:
+        data = json.loads(world.read_text())
+    except (OSError, ValueError):
+        return False
+    wanted = unit.removesuffix(".service").lower()
+    for entry in data.get("restores") or []:
+        if entry.get("ip") != web_ip:
+            continue
+        if str(entry.get("service") or "").removesuffix(".service").lower() != wanted:
+            continue
+        recipe = entry.get("recipe") or []
+        steps = recipe if isinstance(recipe, list) else [recipe]
+        ran = 0
+        for step in steps:
+            step = str(step).strip()
+            if not step or step.startswith("#"):
+                continue
+            sudo_web01(step)
+            ran += 1
+        if ran:
+            log(f"fire test: applied red's restore recipe for {unit} ({ran} step(s))")
+            return True
+    return False
 
 
 def write_verify_log(args, label, r):
@@ -114,6 +153,8 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
     if state != "active":
         log(f"fire test: WARNING {unit} on {web_ip} is '{state}' — a previous aborted run "
             f"left it down; restoring before testing")
+        # red's own undo first: a rename/break mode cannot be healed by starting the unit
+        _red_restore(args, web_ip, unit, sudo_web01)
         sudo_web01(f"systemctl unmask {shlex.quote(unit)}; "
                    f"systemctl start {shlex.quote(unit)}")
         deadline = time.time() + 180

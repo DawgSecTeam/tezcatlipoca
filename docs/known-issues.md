@@ -23,23 +23,6 @@ full teardown failed.
 when `range.reclaimable_templates` is true (destroy only; verify/reset stay disabled) and
 update `Range.test.jsx`'s retired-range case.
 
-### A `--skip-deploy` recovery cannot start if red already damaged the fire-test service
-
-Recovery after a driver crash/reboot is `run-agent-scrim.py --skip-deploy` against the live
-workspace. It now quiets the still-running red unit before the pre-T0 fire test, but the damage
-red did before that is left in place: the fire test only does `systemctl unmask; start`, which
-cannot heal `stop_rename_config`/`stop_break_config` (live: nginx's binary was at
-`/usr/sbin/nginx.tlaloc-off` and its config at `.tlaloc-bak`, so the unit never came active and
-the recovery sat in the 180 s restore loop). The existing outage is not a defect in the scoring
-path, so the fire test's refusal is technically right — but the recovery then needs a box
-rebuild (`redeploy-competition.py --boxes web01 --mode rollback-ready`) or the range's own
-restore recipe. Live 2026-10-20: the clean fix was tearing the range down and redeploying,
-because a half-restored range would also have counted pre-damaged services as blue restores.
-**Next action**: in `scrim/fire_test.py`, when the unit is inactive, pull red's restore table
-(`red_link.pull_red_state`, the recipes are in the run's `evidence/red/world.json`) and apply the
-entry matching the unit's IP/service before the plain `start`; if that fails, refuse with the
-box-rebuild command as today.
-
 ### The template builders reach their scratch VM through node shell
 
 `tools/build-{pfsense,vyos}-provision-template.py` alias `192.168.1.2` on the node's bridge and `ssh -W` through `root@<node>` to drive the scratch VM's bootstrap LAN (`192.168.1.0/24`); their ISO fetch (`download-url`) and template rename (`PUT .../config`) are API-only, leaving this hop and template sync ([multi-node.md](multi-node.md#template-copies)) as the repo's only node-shell uses. The pfSense agent retrofit cannot simply switch to the agent channel instead: installing that agent is what the hop is for. **Next action**: on a host whose shell is closed, either alias `192.168.1.2` on the *operator's* NIC where the operator shares the scratch VM's bridge L2, or console-type an operator-routable bootstrap address (`/monitor sendkey`, which these tools already drive the console with).
