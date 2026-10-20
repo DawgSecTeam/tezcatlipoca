@@ -362,6 +362,29 @@ def test_timestomp_stamps_the_planted_files_and_records_the_originals(tmp_path,
     assert f"(Get-Item '{SCRIPT}').LastAccessTime = [datetime]::new({TICKS})" in recipe
 
 
+def test_the_timestomp_check_stays_under_the_command_cap(tmp_path, pinned_names):
+    """Enumerating every stamped path pushed the check past the gate's 200-char cap:
+    artifact health rejected it and the whole cycle died (live: 6 cycles lost)."""
+    long1 = ("C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\"
+             "DevmanSweep.cmd")
+    long2 = "C:\\ProgramData\\netshield\\NetshieldStore-run.cmd"
+    out = "".join(f"TS|{p}|{TICKS}|{TICKS}|{TICKS}\n" for p in (SCRIPT, long1, long2))
+    ctx = win_ctx(tmp_path, scripted(FakeSSH(), out=out), seeded=True)
+    ctx.world.add_artifact(WIN_IP, "persist-seed", "helper id=long1",
+                           check_cmd="if ($?) { exit 0 } else { exit 1 }",
+                           paths=[long1])
+    ctx.world.add_artifact(WIN_IP, "persist-seed", "helper id=long2",
+                           check_cmd="if ($?) { exit 0 } else { exit 1 }",
+                           paths=[long2])
+    result = execute("persist", {"ip": WIN_IP, "family": "timestomp"}, ctx)
+    assert result.ok, result.detail
+    mine = [a for a in ctx.world.artifacts(WIN_IP)
+            if a["kind"] == "persist-timestomp"]
+    assert len(mine) == 1
+    assert len(mine[0]["check_cmd"]) <= 200, mine[0]["check_cmd"]
+    assert_checkable(mine[0])
+
+
 def test_decoy_creates_the_bait_service(tmp_path, pinned_names):
     ssh = scripted(FakeSSH())
     ctx = win_ctx(tmp_path, ssh)

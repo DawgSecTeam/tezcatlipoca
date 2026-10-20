@@ -354,10 +354,11 @@ def timestomp(ctx, ip, fh, names):
     detail = (f"timestamps matched to the system reference on {len(stamped)} "
               f"planted file(s) id=timestomp-{names['stem']}")
     # the artifact is "no longer looks recently touched": the check is that, not bytes
-    check = ("if ("
-             + " -and ".join(f"(Get-Item '{p}').LastWriteTime -lt "
-                             "(Get-Date).AddDays(-7)" for p, _, _, _ in stamped)
-             + ") { exit 0 } else { exit 1 }")
+    # One anchor, not every path: enumerating them pushed the command past the gate's
+    # 200-char cap, so the check was rejected and red lost the cycle (live 6 times).
+    anchor = min((p for p, _, _, _ in stamped), key=len)
+    check = (f"if ((Get-Item '{anchor}' -ErrorAction SilentlyContinue).LastWriteTime "
+             f"-lt (Get-Date).AddDays(-7)) {{ exit 0 }} else {{ exit 1 }}")
     return _done(ctx, ip, "persist-timestomp", f"timestomp-{names['stem']}",
                  detail, check, [p for p, _, _, _ in stamped], recipe)
 
