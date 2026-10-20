@@ -3,7 +3,7 @@
 import os
 import time
 
-from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, MAX_BOXES_PER_TEAM
+from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, MAX_BOXES_PER_TEAM, comp_tag
 from multinode.nodes_config import (MAX_SATELLITES, NODES_CONFIG_PATH, PLACEMENT_VERSION,
                                     load_nodes_config)
 from multinode.placement_record import (anchor_identifier, check_team_blocks,
@@ -66,7 +66,7 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=
         tags = {t.strip() for t in str(vm.get("tags") or "").replace(";", ",").split(",") if t.strip()}
         if vm.get("template") == 1 and vm.get("status") == "stopped":
             return "tezcatlipoca" in tags
-        if any(t.startswith("comp-") and t != f"comp-{comp_name}" for t in tags):
+        if any(t.startswith("comp-") and t != comp_tag(comp_name) for t in tags):
             return False
         return True
 

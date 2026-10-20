@@ -4,6 +4,7 @@ red01 is a tezcatlipoca-owned VM: its ownership proof is the run's tag set, the
 same one every other VM this range creates carries.
 """
 
+from common.constants import comp_tag
 from infra.client import proxmox_api
 from infra.collisions import guest_ipv4s
 from infra.ownership import parse_vm_tags
@@ -45,7 +46,7 @@ def red01_vmid_gate(plan):
     if plan.resuming and set(plan.our_tags) <= set(tags):
         print(f"  Preflight: red01 {label} is this run's (resume)")
         return True
-    owner = ("another run of this competition" if f"comp-{plan.comp_name}" in tags
+    owner = ("another run of this competition" if comp_tag(plan.comp_name) in tags
              else "a foreign VM")
     raise SystemExit(
         f"  ERROR: red01 vmid {plan.red01_vmid} is already occupied by {label} — it "
@@ -119,7 +120,7 @@ def occupant_verdict(vmid, comp_name=None):
     tags = _vm_tags(vm)
     if not tags:
         return "unmarked"
-    if comp_name and f"comp-{comp_name}" not in tags:
+    if comp_name and comp_tag(comp_name) not in tags:
         return "foreign"
     return "ours"
 

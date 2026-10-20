@@ -4,6 +4,7 @@ import os
 
 import requests
 
+from common.constants import comp_tag
 from infra.client import destroy_bridge_if_exists, node_bridges, proxmox_api
 from infra.ownership import (Ownership, Refusal, bridge_owned_by, destroy_vm_if_exists,
                              parse_vm_tags)
@@ -85,7 +86,7 @@ def reclaim(comp, run_tag, *, node, allow_templates=False, log=print):
     destroyed, kept, notes = [], [], []
     for vm in sorted(vms, key=lambda v: v["vmid"]):
         tags = parse_vm_tags(vm.get("tags"))
-        if f"comp-{comp}" in tags and not ownership.tags <= tags:
+        if comp_tag(comp) in tags and not ownership.tags <= tags:
             others = sorted(t for t in tags if t.startswith("run-"))
             notes.append(f"vmid {vm['vmid']} ({vm.get('name')}) is comp-{comp} but carries "
                          f"{', '.join(others) or 'no run tag'}, not {run_tag} — not touched")

@@ -5,6 +5,7 @@ from typing import Callable, Optional
 
 from infra.client import proxmox_api
 from estate import config
+from common.constants import comp_tag
 
 
 @dataclass
@@ -58,7 +59,7 @@ class PreflightPlan:
     @property
     def our_tags(self):
         """This deploy's FULL ownership set; without a run tag a same-comp VM is another run's and must classify as a collision, not ours."""
-        tags = {"tezcatlipoca", f"comp-{self.comp_name}"}
+        tags = {"tezcatlipoca", comp_tag(self.comp_name)}
         if self.our_run_tag:
             tags.add(self.our_run_tag)
         return tags

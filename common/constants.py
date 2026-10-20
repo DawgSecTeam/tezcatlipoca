@@ -131,13 +131,16 @@ def red_bridge_name(run_id):
     hex_id = "".join(c for c in (run_id or "").lower() if c in "0123456789abcdef")[:8]
     return f"vmbrR{hex_id}"
 
+def comp_tag(comp_name):
+    """The slugged comp tag ownership_tags writes. Comparing a raw f-string against stored
+    tags missed every competition whose name carries a space or case ("CDE 2026")."""
+    slug = re.sub(r"[^a-z0-9-]+", "-", str(comp_name).lower()).strip("-")
+    return f"comp-{slug}"
+
 def ownership_tags(comp_name, run_id=None, *extra):
     # Every destruction guard requires this full set; the comp tag is shared by concurrent
     # runs of one competition, so a missing run tag means another run's VM — refuse.
-    # Proxmox tags cannot carry a space: "CDE 2026" was written as two tags and the
-    # teardown then refused its own engine (live: cde-2026, 2026-10-19).
-    slug = re.sub(r"[^a-z0-9-]+", "-", str(comp_name).lower()).strip("-")
-    tags = {"tezcatlipoca", f"comp-{slug}"}
+    tags = {"tezcatlipoca", comp_tag(comp_name)}
     if run_id:
         tags.add(run_id)
     return tags | set(extra)

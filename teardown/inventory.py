@@ -1,5 +1,6 @@
 """Inventory: the ONE classified view of the estate a teardown plans against."""
 
+from common.constants import comp_tag
 from infra.ownership import ownership_verdict, parse_vm_tags
 
 
@@ -61,7 +62,7 @@ class Inventory:
 
     # regardless of run tag — the accounting view: ours / different-run / no run tag
     def comp_tagged(self, comp_name):
-        tag = f"comp-{comp_name}"
+        tag = comp_tag(comp_name)
         out = []
         for nv in self.views():
             if nv.error:

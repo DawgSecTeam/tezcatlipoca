@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 
 from infra.client import proxmox_api
-from common.constants import DEFAULT_ENGINE_MGMT_IP, ENGINE_MGMT_BAND, ownership_tags
+from common.constants import DEFAULT_ENGINE_MGMT_IP, ENGINE_MGMT_BAND, comp_tag
 from common.targets import vm_id_for
 from infra.ownership import MARKER, ownership_verdict, parse_vm_tags
 from estate import config
@@ -95,13 +95,6 @@ def expected_bridges(share, boxes):
     return bridges
 
 
-def comp_tag_for(comp_name):
-    """The VMs' comp tag is the slugged one ownership_tags writes; a raw f-string
-    compared "comp-CDE-2026" against the stored "comp-cde-2026" and refused the
-    competition's own kept templates (live: cde-2026 reuse)."""
-    return next(t for t in ownership_tags(comp_name) if t.startswith("comp-"))
-
-
 def check_collisions(share, plan, vms):
     """Raise SystemExit on anything a fresh deploy must not create over.
 
@@ -109,7 +102,7 @@ def check_collisions(share, plan, vms):
     remedy; this competition's own templates and an untagged VM carrying its clone marker are not
     leftovers."""
     node, comp_name = share.node, plan.comp_name
-    comp_tag = comp_tag_for(comp_name)
+    own_tag = comp_tag(comp_name)
     existing = {vm.get("vmid") for vm in vms}
     vm_by_vmid = {vm.get("vmid"): vm for vm in vms}
 
@@ -122,7 +115,7 @@ def check_collisions(share, plan, vms):
         tags = parse_vm_tags(vm.get("tags"))
         verdict, _ = ownership_verdict(node, slot.vmid, vm.get("tags"), plan.our_tags)
         if (slot.persistent_template or slot.template_slot) and vm.get("template") \
-                and comp_tag in tags:
+                and own_tag in tags:
             print(f"  Preflight{share.label}: {slot.label} holds this competition's "
                   f"template — kept for reuse (rebuilt only on hash drift)")
             continue
@@ -132,13 +125,13 @@ def check_collisions(share, plan, vms):
             reclaim += 1
             continue
         if slot.template_slot and not vm.get("template") and not any(
-                t.startswith("comp-") and t != comp_tag for t in tags):
+                t.startswith("comp-") and t != own_tag for t in tags):
             # Own build slot holding an unconverted VM (clone failed before the tag PUT, so it
             # wears the base image's tags); phase 2 reclaims it.
             print(f"  Preflight{share.label}: {slot.label} holds an unconverted leftover of "
                   f"this competition's own build (vmid {slot.vmid}) — phase 2 reclaims it")
             continue
-        if comp_tag in tags:
+        if own_tag in tags:
             leftovers.append(slot.label)
         else:
             clashes.append(slot.label)
@@ -154,7 +147,7 @@ def check_collisions(share, plan, vms):
     if clashes or leftovers:
         run = plan.our_run_tag
         other_run = any(
-            comp_tag in parse_vm_tags(vm.get("tags"))
+            own_tag in parse_vm_tags(vm.get("tags"))
             and run and run not in parse_vm_tags(vm.get("tags"))
             for vm in vm_by_vmid.values())
         if share.multi:

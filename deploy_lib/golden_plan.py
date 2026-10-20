@@ -1,6 +1,6 @@
 """Golden-template planning: per-box hashes, and the phase-4 rebuild gate they drive."""
 
-from common.constants import GOLDEN_TAG, ownership_tags
+from common.constants import GOLDEN_TAG, comp_tag, ownership_tags
 from golden.golden_target_ops import _is_template
 from golden.golden_ops import build_golden_set
 from guests.apt_dns_ops import _APT_PREP_BODY, _apt_prep_script
@@ -62,7 +62,7 @@ def _is_own_golden_template(node, vmid, comp_name):
     if cfg.get("template") != 1:
         return False
     tags = {t.strip() for t in str(cfg.get("tags") or "").replace(";", ",").split(",") if t.strip()}
-    return f"comp-{comp_name}" in tags and GOLDEN_TAG in tags
+    return comp_tag(comp_name) in tags and GOLDEN_TAG in tags
 
 
 def golden_rebuild_gate(comp_dir, destroy_node, slot, boxes, engine_vmid, stored,

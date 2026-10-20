@@ -13,6 +13,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 
+from common.constants import comp_tag  # noqa: E402
 from infra import red01  # noqa: E402
 from infra.plan import NodeShare, PreflightPlan, single_node_plan  # noqa: E402
 
@@ -47,14 +48,14 @@ class VmidGate(unittest.TestCase):
     def test_our_full_tag_set_on_resume_is_allowed(self):
         with tempfile.TemporaryDirectory() as td:
             comp = _comp(td)
-            tags = {"tezcatlipoca", f"comp-{comp.name}", "run-test"}
+            tags = {"tezcatlipoca", comp_tag(comp.name), "run-test"}
             with patch.object(red01, "_vm_tags", return_value=tags):
                 red01.red01_vmid_gate(_plan(comp, vms=[_vm(1470)], resuming=True))
 
     def test_another_run_of_this_competition_is_refused_by_name(self):
         with tempfile.TemporaryDirectory() as td:
             comp = _comp(td)
-            tags = {"tezcatlipoca", f"comp-{comp.name}", "run-other"}
+            tags = {"tezcatlipoca", comp_tag(comp.name), "run-other"}
             with patch.object(red01, "_vm_tags", return_value=tags):
                 with self.assertRaises(SystemExit) as cm:
                     red01.red01_vmid_gate(_plan(comp, vms=[_vm(1470)]))
