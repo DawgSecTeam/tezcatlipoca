@@ -1,5 +1,7 @@
 """Engine-template build identity stamp, template cleaning, and re-prepare from template."""
 
+import time
+
 from engine.engine_cmd_ops import _run_engine_cmd
 from engine.engine_bootstrap_ops import push_quotient_env
 
@@ -81,8 +83,22 @@ def prepare_engine_from_template(ctx, postgres_password, redis_password):
     _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120,
                     step="grow engine root filesystem")
     push_quotient_env(ctx, postgres_password, redis_password)
-    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600,
-                    step="compose up")
+    # Same race as the build path (bootstrap_scoring_engine): a fresh volume's Postgres can
+    # miss compose's health window and the server exits 2 once, so one failure is not a dead
+    # engine (live: run-e5fe9b87 failed here; the same command succeeded a minute later).
+    last = None
+    for attempt in range(3):
+        try:
+            _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d",
+                            timeout=600, step="compose up")
+            last = None
+            break
+        except Exception as e:  # noqa: BLE001 - the DB health window is a race
+            last = e
+            print(f"    compose up attempt {attempt + 1} failed ({e}); retrying")
+            time.sleep(15)
+    if last is not None:
+        raise last
     _run_engine_cmd(ctx, (
         "ss -ltn | grep -q ':3142 ' && echo '  apt-cacher-ng listening on 3142' "
         "|| sudo systemctl enable --now apt-cacher-ng"
