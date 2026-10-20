@@ -207,6 +207,20 @@ def test_windows_locks_administrator_only_with_a_live_channel(tmp_path):
     assert ctx.world.restore_table()[0]["recipe"] == result.restore["recipe"]
 
 
+def test_windows_lockout_falls_back_to_the_channel_when_ssh_closed(tmp_path):
+    """The DC's Administrator can be disabled while the channel is live; the lock must
+    still land (live: scrim-one in-window lockout, SSH reset by peer)."""
+    ssh = FakeSSH().on("net user Administrator /active:no", rc="raise")
+    ctx = late_ctx(tmp_path, ssh, windows=True)
+    mythical = FakeMythic({"dc01-1": {"seen_at": ctx.now(), "agent": "apollo"}})
+    mythical.task_output = "L Administrator\n"
+    ctx.c2 = mythical
+    result = execute("lockout", {"ip": WIN_IP, "users": ["Administrator"]}, ctx)
+    assert result.ok, result.detail
+    assert mythical.tasks[0]["box"] == "dc01-1"
+    assert "net user Administrator /active:no" in mythical.tasks[0]["command"]
+
+
 def test_windows_refuses_to_disable_our_own_ssh_path_without_a_channel(tmp_path):
     ssh = FakeSSH()
     ctx = late_ctx(tmp_path, ssh, windows=True)
