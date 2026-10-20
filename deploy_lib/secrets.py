@@ -1,6 +1,7 @@
 """The competition's secrets: carried on a resume, minted on a fresh deploy."""
 
 import json
+import re
 from pathlib import Path
 
 from config.config_ops import collect_teams, random_password
@@ -52,9 +53,36 @@ def _fresh_identifier_defaults(comp_dir, previous_state):
     return defaults
 
 
-# box_password is a golden-hash INPUT: re-minting it rebuilds every golden — reuse prior state's, mint only for a new comp
-def carry_box_password(previous_state):
-    return (previous_state or {}).get("box_password") or random_password()
+# box_password is a golden-hash INPUT: re-minting it rebuilds every golden. The workspace
+# state is per-RUN (the dashboard seeds it empty), so a fresh run of a competition forgot it
+# and rebuilt every golden the templates were kept to avoid — hold it per COMPETITION on the
+# run host instead.
+COMP_SECRETS_DIR = Path.home() / ".tezcatlipoca" / "comp-secrets"
+
+
+def _comp_secret_path(comp_name):
+    slug = re.sub(r"[^a-z0-9-]+", "-", str(comp_name).lower()).strip("-")
+    return COMP_SECRETS_DIR / f"{slug}.json"
+
+
+def carry_box_password(previous_state, comp_name=None):
+    carried = (previous_state or {}).get("box_password")
+    if carried:
+        return carried
+    path = _comp_secret_path(comp_name) if comp_name else None
+    if path is not None:
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8")).get("box_password")
+        except (OSError, ValueError):
+            stored = None
+        if stored:
+            return stored
+    password = random_password()
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"box_password": password}) + "\n", encoding="utf-8")
+        path.chmod(0o600)
+    return password
 
 
 # the run id reuses prior state so resume, crash-loop re-run and redeploy reclaim the SAME
@@ -138,7 +166,7 @@ def mint_competition_secrets(ctx):
     # passwords.json outranks carried state: the packet's credentials ARE the competition, and
     # an operator edit to it is a deliberate re-key (goldens rebuild — correct)
     ctx.box_password = ((ctx.packet_pw or {}).get("box_password")
-                            or carry_box_password(ctx.previous_state))
+                            or carry_box_password(ctx.previous_state, ctx.comp_name))
     if ctx.packet_pw:
         print("  Box credentials come from passwords.json (packet profile) — "
               "not re-minted")
