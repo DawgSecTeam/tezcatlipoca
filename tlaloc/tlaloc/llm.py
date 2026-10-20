@@ -26,7 +26,7 @@ class LLM:
         return os.environ.get(self.api_key_env) or ""
 
     def chat(self, messages, *, max_tokens=None, temperature=0.2, json_mode=False,
-             timeout=None):
+             timeout=None, _retried=False):
         if not self.enabled:
             raise LLMError("llm disabled (llm.enabled / llm.base_url)")
         body = {"model": self.model or "llm", "messages": list(messages),
@@ -45,6 +45,15 @@ class LLM:
             # keep the trace for the decision path, but never hand it to prose
             if self.log is not None:
                 self.log.emit("llm_reasoning_only", chars=len(self.last_reasoning))
+            # A reasoning model spends the budget on reasoning_content FIRST: empty content
+            # with a full trace means the answer was never emitted, not that the model
+            # declined (live: the cde-2026 arbiter answered nothing at 256 tokens, so every
+            # cycle fell back to the deterministic pick). Re-ask once with room for it.
+            asked = int(max_tokens or self.max_tokens)
+            budget = min(asked * 4, 4096)
+            if not _retried and budget > asked:
+                return self.chat(messages, max_tokens=budget, temperature=temperature,
+                                 json_mode=json_mode, timeout=timeout, _retried=True)
         return content
 
     def _post(self, body, timeout):
