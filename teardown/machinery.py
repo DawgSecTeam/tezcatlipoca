@@ -200,7 +200,7 @@ def engine_vmid_from_state(deployed_state):
 
 # Templates are the clones' base disks: they can only go after every clone is destroyed.
 def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, full):
-    """blocking entries are this competition's templates owned by another run: never touched."""
+    """Reclaim this competition's templates by vmid math; a message means "not this run's"."""
     skipped = []
     engine_vmid = engine_vmid_from_state(deployed_state)
     node = config.active().proxmox.node
@@ -208,7 +208,7 @@ def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, fu
         print("  Teams-only teardown — templates kept for THIS competition's next run only.")
         print("  Goldens never carry across competitions; run a full teardown (no --teams-only) once the "
               "run's goal is met.")
-        return skipped, []
+        return skipped
     print(f"  Destroying golden templates (engine vmid {engine_vmid} + 150 + i)...")
     skipped += destroy_golden_set(node, engine_vmid, len(boxes), slot=0,
                                   expect_tags=ownership.with_role(GOLDEN_TAG).tags)
@@ -230,6 +230,7 @@ def teardown_templates(comp_dir, deployed_state, ownership, boxes, placement, fu
     # A stale hash record makes the next deploy clone from a dead vmid.
     forget_template_hashes(comp_dir)
     print("  Template hash record removed from the state document.")
-    from golden.golden_ops import OTHER_RUN
-    blocking = [s for s in skipped if s.startswith(OTHER_RUN)]
-    return [s for s in skipped if s not in blocking], blocking
+    # The caller only reaches this fallback when the document records no template of its own,
+    # so a kept template at the slot belongs to another run: it is that range's to reclaim, and
+    # failing here stranded a range whose deploy died before adopting the cache (live: cde-2026).
+    return skipped

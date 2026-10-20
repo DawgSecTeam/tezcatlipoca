@@ -1,7 +1,8 @@
 """Phases 2 and 3: the engine template + the engine and its bridges, then per-deploy engine prep."""
 
 
-from common.constants import DEFAULT_ENGINE_MGMT_GW, ENGINE_TEMPLATE_NAME
+from common.constants import (DEFAULT_ENGINE_MGMT_GW, ENGINE_TEMPLATE_NAME,
+                              ownership_tags)
 from engine.engine_bootstrap_ops import bootstrap_scoring_engine
 from engine.engine_event_ops import push_event_conf
 from engine.engine_health_ops import ensure_nat_forwarding
@@ -64,9 +65,11 @@ def ensure_engine_template(ctx):
             # the build VM needs the planned mgmt IP and on a phase-2 resume the old engine
             # still holds it (phase 1 leaves a run's VMs alone); apply #1 recreates it as a clone
             destroy_vm_if_exists(ctx.node, ctx.engine_vmid, expect_tags=ctx.reclaim_tags)
+            # The kept template carries the run that BUILT it, not the one replacing it, so a
+            # rebuild reclaims this competition's template rather than refusing its own cache.
             left = destroy_engine_template(
                 ctx.node, ctx.engine_vmid,
-                expect_tags=ctx.reclaim_tags | {"engine-template"})
+                expect_tags=ownership_tags(ctx.comp_name, None, "engine-template"))
             if left:
                 from infra.ownership import Refusal
                 raise Refusal(

@@ -1,6 +1,6 @@
 """Owner-requested operational fixes.
 
-- Another run's templates are never destroyed and never read as a clean teardown.
+- Another run's kept templates are never destroyed, and they never block this run's teardown.
 - Golden plant checkpoints are run-scoped, and --replant-goldens clears them.
 - Box logs are captured (guest agent) before anything destructive runs.
 - The Windows trail wipe always clears the event logs.
@@ -18,7 +18,7 @@ sys.path.insert(0, str(_REPO))
 
 
 class TemplateOwnership(unittest.TestCase):
-    def test_another_runs_template_is_blocking_and_untouched(self):
+    def test_another_runs_template_is_a_note_and_untouched(self):
         from golden.golden_ops import OTHER_RUN
         from teardown import machinery
         with mock.patch.object(
@@ -27,14 +27,13 @@ class TemplateOwnership(unittest.TestCase):
         ), mock.patch.object(machinery, "destroy_engine_template", return_value=[]), \
                 mock.patch.object(machinery, "config"), \
                 tempfile.TemporaryDirectory() as tmp:
-            skipped, blocking = machinery.teardown_templates(
+            skipped = machinery.teardown_templates(
                 Path(tmp), {"scoring_vm_id": 1300},
                 mock.Mock(tags={"tezcatlipoca", "comp-c", "run-mine"},
                           with_role=lambda *a: mock.Mock(tags={"tezcatlipoca"})),
                 [], None, full=True)
-        self.assertEqual(skipped, [])
-        self.assertEqual(len(blocking), 1)
-        self.assertIn("run-other", blocking[0])
+        self.assertEqual(len(skipped), 1)
+        self.assertIn("run-other", skipped[0])
 
     def test_a_foreign_template_stays_a_note(self):
         from teardown import machinery
@@ -43,11 +42,10 @@ class TemplateOwnership(unittest.TestCase):
                 mock.patch.object(machinery, "destroy_engine_template", return_value=[]), \
                 mock.patch.object(machinery, "config"), \
                 tempfile.TemporaryDirectory() as tmp:
-            skipped, blocking = machinery.teardown_templates(
+            skipped = machinery.teardown_templates(
                 Path(tmp), {"scoring_vm_id": 1300},
                 mock.Mock(tags={"tezcatlipoca"}, with_role=lambda *a: mock.Mock(tags={"x"})),
                 [], None, full=True)
-        self.assertEqual(blocking, [])
         self.assertEqual(len(skipped), 1)
 
 

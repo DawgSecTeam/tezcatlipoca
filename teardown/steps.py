@@ -226,14 +226,13 @@ class EstateStep(Step):
         # inventory; the run-id-scoped sweep is the net for it.
         sweep_tagged_leftovers(ctx.nodes, ctx.ownership, keep_templates=not ctx.full)
         # A range deployed before the inventory existed has no template records, so its
-        # goldens and engine template die by vmid math instead.
+        # goldens and engine template die by vmid math instead. A kept template another run
+        # owns is reported and left for that range, never made this teardown's failure.
         if ctx.full and not (document.resources("golden")
                              or document.resources("engine_template")):
-            skipped, blocking = teardown_templates(
+            skipped = teardown_templates(
                 ctx.comp_dir, ctx.deployed_state, ctx.ownership, ctx.boxes,
                 ctx.placement, full=True)
-            if blocking:
-                return StepResult(self.name, "failed", "; ".join(blocking))
             if skipped:
                 return StepResult(self.name, "warned", "; ".join(skipped))
         if ctx.full:

@@ -383,7 +383,8 @@ class Phase2EngineTemplate(unittest.TestCase):
            "TEZ_ENGINE_MGMT_GW": "10.0.0.1"}
 
     def _run(self, ctx, stored_node_hash):
-        record = types.SimpleNamespace(destroyed=[], built=0, tf=[], retagged=[])
+        record = types.SimpleNamespace(destroyed=[], built=0, tf=[], retagged=[],
+                                       destroy_expect=[])
         # ExitStack, not one giant with: a 20th statically nested with-item is a SyntaxError.
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.dict(os.environ, self.ENV))
@@ -411,7 +412,9 @@ class Phase2EngineTemplate(unittest.TestCase):
             stack.enter_context(dpatch("destroy_vm_if_exists",
                 side_effect=lambda *a, **k: record.destroyed.append(a[1])))
             stack.enter_context(dpatch("destroy_engine_template",
-                side_effect=lambda *a, **k: record.destroyed.append(a[1])))
+                side_effect=lambda *a, **k: (record.destroyed.append(a[1])
+                                             or record.destroy_expect.append(
+                                                 k.get("expect_tags")))))
             stack.enter_context(dpatch("retag_ownership",
                 side_effect=lambda *a, **k: record.retagged.append(a[1])))
             stack.enter_context(dpatch("build_engine_template",
@@ -444,6 +447,11 @@ class Phase2EngineTemplate(unittest.TestCase):
             record, out = self._run(ctx, stored_node_hash="DIFFERENT")
         self.assertIn("hash differs — rebuilding", out)
         self.assertEqual(record.destroyed, [1000, 1000])   # engine clone, then its template
+        # The kept template carries the run that built it; the rebuild reclaims it by
+        # competition, not by this run's id.
+        from common.constants import ownership_tags
+        self.assertEqual(record.destroy_expect,
+                         [ownership_tags(ctx.comp_name, None, "engine-template")])
         self.assertEqual(record.built, 1)
         self.assertEqual(ctx.state["engine_template_vmid"], 901)
         self.assertEqual(ctx.state["engine_build_info"], {"built": True})

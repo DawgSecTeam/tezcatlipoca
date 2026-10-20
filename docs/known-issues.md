@@ -12,15 +12,16 @@ them and only a full destroy reclaims the vmids. Either re-tag such templates on
 `--teams-only` retires the range and keeps this competition's golden + engine templates for
 its next run, which is the documented practice-run loop. But the retired range then blocks
 the only path that can destroy them: `_range_workspace` answers a follow-up destroy with
-`the range in <run> was torn down by <destroy run> — nothing to destroy`, and a full teardown
-run resolves to that retired workspace and dies. Caught live: a teams-only teardown left the
+`the range in <run> was torn down by <destroy run> — nothing to destroy`, and the range page
+disables its action menu (`blocked = retired || …`), so a full teardown cannot reach the
+recorded kept-template inventory. Caught live: a teams-only teardown left the
 engine template and its goldens in place, the follow-up full teardown failed, and the
 templates were only reclaimed by deploying the competition again (which correctly adopted all
 four) and then tearing *that* range down fully.
 The templates are the whole point of teams-only, so this is the normal path, not an edge case.
-**Next action**: let a full teardown act on a retired range's recorded template inventory when
-that range has no live VMs left, or have the teams-only path record the kept templates
-somewhere a later full teardown can find without a deploy.
+**Next action**: in the dashboard, resolve a `destroy` on a retired range whose document records
+only kept templates and no live VMs (backend), and enable the teardown action for exactly that
+case (web); the engine's ownership guard still scopes what is destroyed.
 
 ### The template builders reach their scratch VM through node shell
 

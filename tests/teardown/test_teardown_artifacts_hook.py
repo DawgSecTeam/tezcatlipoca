@@ -111,7 +111,7 @@ class TeardownArtifactsHook(unittest.TestCase):
             patch.object(tm, "pre_stop_windows_boxes",
                          side_effect=lambda *a, **k: calls.append("pre_stop_windows_boxes")),
             patch.object(tm, "sweep_tagged_leftovers"),
-            patch.object(tm, "teardown_templates", return_value=([], [])),
+            patch.object(tm, "teardown_templates", return_value=[]),
             patch("estate.destroy.destroy_estate", side_effect=estate),
             patch.object(ao, "collect_for_teardown", side_effect=collect),
             patch.object(tlaloc_ops, "destroy_tlaloc_red", side_effect=red),
@@ -246,7 +246,7 @@ class CrashedHarnessRecovery(unittest.TestCase):
             patch.object(tm, "pre_stop_windows_boxes",
                          side_effect=lambda *a, **k: calls.append("pre_stop_windows_boxes")),
             patch.object(tm, "sweep_tagged_leftovers"),
-            patch.object(tm, "teardown_templates", return_value=([], [])),
+            patch.object(tm, "teardown_templates", return_value=[]),
             patch("estate.destroy.destroy_estate",
                   side_effect=lambda *a, **k: calls.append("estate_destroy") or
                   {"destroyed": [], "skipped": [], "refused": []}),

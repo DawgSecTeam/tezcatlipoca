@@ -39,10 +39,11 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
     vmid = engine_template_vmid(engine_vmid)
     vm_name = ENGINE_TEMPLATE_NAME
-    # Kept engine templates carry an earlier run's id; the hash-drift rebuild reclaims
-    # this competition's template, not another competition's.
-    expect_tags = ownership_tags(competition_name(comp_dir), None, "engine-template")
-    tags = ",".join(sorted(expect_tags))
+    comp_name = competition_name(comp_dir)
+    # Reclaiming a kept template is competition-scoped (it carries an earlier run's id), but the
+    # template this build produces must carry THIS run's id or its own teardown refuses it.
+    reclaim_tags = ownership_tags(comp_name, None, "engine-template")
+    tags = ",".join(sorted(ownership_tags(comp_name, run_id, "engine-template")))
 
     # A dead build leaves an unconverted VM on the reserved slot wearing the base image's
     # inherited tags; the reserved NAME proves it is our attempt, not a foreign VM.
@@ -56,7 +57,7 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
             print(f"    vmid {vmid}: unconverted '{ENGINE_TEMPLATE_NAME}' leftover from a "
                   f"dead template build — adopting and rebuilding")
             destroy_vm_if_exists(node, vmid, expect_tags=None)
-    destroy_vm_if_exists(node, vmid, expect_tags=expect_tags)
+    destroy_vm_if_exists(node, vmid, expect_tags=reclaim_tags)
 
     # PVE reports `can't lock file ... got timeout` to losers of concurrent full clones;
     # the backoff must outlast the contention window, hence growing 40/80/120s waits.

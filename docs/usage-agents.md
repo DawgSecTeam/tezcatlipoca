@@ -143,7 +143,7 @@ Full teardown removes team boxes, engine, bridges, golden and engine templates (
 
 Reuse keys on the `tezcatlipoca-m4 hash=` description on the template itself, so the next deploy adopts kept templates even from a **fresh worktree or dashboard workspace** — where the state document does not exist, because the dashboard's workspace seeder deliberately strips it. So `--teams-only` (or the harness's `--keep-templates`) followed by a deploy of the same competition gives the event the exact templates the practice run tested, provided the hash inputs are unchanged; a config change rebuilds, and a frozen competition still refuses config drift. The `--teams-only` teardown must run from the worktree that holds the deploy's state, but the reuse it enables does not.
 
-Requires a `run_id` in the state document (`estate-state.json`) plus `teams.json` and `boxes.json`; it activates the recorded placement/host first so every node-scoped call addresses the right PVE.
+Requires a `run_id` in the state document (`estate-state.json`); it activates the recorded placement/host first so every node-scoped call addresses the right PVE. `teams.json` and `boxes.json` are optional: a run that died before generating them (a preflight failure) is still reclaimed by its recorded resources and ownership tags, and the missing files are named in the output.
 
 Before the first destructive call it captures the engine's final scoreboard when the harness never did (the scoring DB does not survive the estate step) and collects the run's artifacts into `competitions/<id>/.automated-tests/<run-id>/` (red report from red01, blue logs, engine capture, harness evidence, `REPORT.md`). Collection warns and proceeds, bounded per file by `--artifacts-timeout` (default 45 s); a `failed` transfer gets one retry, and whatever is still lost is printed as a note under the verification section rather than failing the destroy. There is no skip flag; on resume the journal skips it. See [automated-test-artifacts.md](automated-test-artifacts.md).
 
@@ -151,7 +151,7 @@ Before the first destructive call it captures the engine's final scoreboard when
 
 Each deploy mints a `run-<hex>` id (in `estate-state.json`) and tags everything it creates. Teardown requires the full set (`tezcatlipoca` + `comp-<id>` + `run-<id>`):
 
-- Same comp, different run id → refused with a warning everywhere (preflight, pre-stop, leftover sweep, template destroys).
+- Same comp, different run id → refused with a warning everywhere (preflight, pre-stop, leftover sweep); a template destroy reports it as a kept template and leaves it for the run that owns it (only the vmid-math fallback can meet one, and then it is never this run's).
 - Untagged VM on a computed vmid → refused, unless it carries this competition's clone marker.
 - State without a run id → refused before anything is collected; remove by hand.
 - A deploy whose preflight finds comp-tagged VMs lacking its run tag refuses; coordinate with the other session.

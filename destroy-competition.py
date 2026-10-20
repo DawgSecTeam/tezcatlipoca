@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from teardown import Refusal
 from engine.template_freeze import frozen_state
+from estate import state as estate_state
 from common.comp_paths import comps_root, resolve_comp_dir
 from common.utils import competition_name, load_compfile, pick_competition
 
@@ -164,15 +165,24 @@ def main():
         comp_dir = resolve_comp_dir(competition)
     name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
     missing = [f for f in ("teams.json", "boxes.json") if not (comp_dir / f).exists()]
-    if missing:
+    if missing and not estate_state.load_flat(comp_dir).get("run_id"):
         refusal = Refusal(
             saw=f"{comp_dir} has no {', '.join(missing)}",
             expected="the teams.json + boxes.json a deploy generates once its range is built",
             remedy="destroy the workspace that owns the range; this one never held one")
         print(f"\n  REFUSED — {refusal}")
         sys.exit(1)
-    teams = json.loads((comp_dir / "teams.json").read_text())
-    boxes = json.loads((comp_dir / "boxes.json").read_text())
+    # A run with a state document but no generated config is a range that died before it was
+    # built: its recorded resources and ownership tags are still the truth, and refusing it
+    # leaves the range unretireable forever (live: two scrim-one preflight failures).
+    teams = json.loads((comp_dir / "teams.json").read_text()) \
+        if (comp_dir / "teams.json").exists() else {}
+    boxes = json.loads((comp_dir / "boxes.json").read_text()) \
+        if (comp_dir / "boxes.json").exists() else []
+    if missing:
+        print(f"  NOTE: {comp_dir} has no {', '.join(missing)} — this workspace never "
+              f"finished generating its range; tearing down by recorded resources and "
+              f"ownership tags.")
     frozen = frozen_state(comp_dir)
 
     if args.team:

@@ -277,7 +277,7 @@ class VerifyClean(unittest.TestCase):
                               ownership=OURS, placement=None, nodes=["n"], default_node="n",
                               inventory=None, full=False)
         with patch("teardown.machinery.sweep_tagged_leftovers"), \
-                patch("teardown.machinery.teardown_templates", return_value=([], [])) as destroy:
+                patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
             result = EstateStep().run(ctx)
         destroy.assert_not_called()
         self.assertEqual(result.status, "ok")
@@ -291,10 +291,24 @@ class VerifyClean(unittest.TestCase):
                               ownership=OURS, placement=None, nodes=["n"], default_node="n",
                               inventory=None, full=True)
         with patch("teardown.machinery.sweep_tagged_leftovers"), \
-                patch("teardown.machinery.teardown_templates", return_value=([], [])) as destroy:
+                patch("teardown.machinery.teardown_templates", return_value=[]) as destroy:
             result = EstateStep().run(ctx)
         self.assertTrue(destroy.call_args.kwargs["full"])
         self.assertEqual(result.status, "ok")
+
+    def test_another_runs_kept_template_warns_instead_of_failing_the_estate(self):
+        # This fallback only runs when the document records no template of its own, so the
+        # kept template belongs to another range: failing on it stranded a range whose
+        # deploy died before adopting the cache (live: cde-2026 run-438f7c08).
+        ctx = TeardownContext(comp_dir=self.comp, env={}, teams={}, boxes=[], deployed_state={},
+                              ownership=OURS, placement=None, nodes=["n"], default_node="n",
+                              inventory=None, full=True)
+        with patch("teardown.machinery.sweep_tagged_leftovers"), \
+                patch("teardown.machinery.teardown_templates",
+                      return_value=["another run of this competition holds vmid 1151"]):
+            result = EstateStep().run(ctx)
+        self.assertEqual(result.status, "warned")
+        self.assertIn("another run", result.detail)
 
     def test_lost_evidence_is_a_note_never_a_problem(self):
         # A teardown that lost evidence still exits clean — a wedged box never holds a destroy

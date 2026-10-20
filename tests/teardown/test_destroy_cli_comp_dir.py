@@ -99,6 +99,41 @@ class ConfigLessWorkspace(unittest.TestCase):
                 self.assertEqual(calls, [], "no teardown may be planned or run")
                 self.assertIn(name, out.getvalue())
 
+    def test_a_run_id_workspace_is_torn_down_by_its_recorded_resources(self):
+        # A deploy that died before generating teams.json still owns a run id, and its range
+        # must stay reclaimable: refusing it left the dashboard range unretireable forever.
+        import contextlib
+        import io
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            comp = make_workspace(tmp_path)
+            (comp / "teams.json").unlink()
+            (comp / "estate-state.json").write_text(json.dumps({
+                "schema_version": 1,
+                "identity": {"comp_name": "scrim-one", "run_id": "run-abc12345"},
+                "resources": [],
+            }))
+            module = load_destroy_cli(tmp_path)
+            seen, out = {}, io.StringIO()
+
+            def fake_teardown(comp_dir, teams, boxes, name, **kw):
+                seen.update(teams=teams, boxes=boxes)
+                return SimpleNamespace(clean=True, render=lambda: "clean")
+
+            with mock.patch.object(sys, "argv",
+                                   ["destroy-competition.py", "--comp-dir", str(comp),
+                                    "--yes"]), \
+                    mock.patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": IDENTITY}), \
+                    mock.patch("teardown.runner.run_terminal_teardown",
+                               side_effect=fake_teardown), \
+                    contextlib.redirect_stdout(out):
+                module.main()
+        self.assertEqual(seen["teams"], {})
+        self.assertEqual(seen["boxes"], [{"name": "web01", "template": "t",
+                                          "last_octet": 4}])
+        self.assertIn("never finished generating", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
