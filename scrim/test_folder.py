@@ -42,6 +42,30 @@ def resolve_run_dir(comp, args):
     return run_dir, test_path
 
 
+def adopt_run_key(args, comp):
+    """A fresh run mints `untagged-<stamp>` before the deploy has a run id, and the folder kept
+    that name through the report — the seal command and teardown then disagreed about which
+    folder is the run's (live: run-9128c13a, reported under untagged-20261020-091614)."""
+    run_id = artifacts_ops.run_id_from_state(Path(comp))
+    current = Path(getattr(args, "test_dir", "") or "")
+    if not run_id or not current.is_dir() or not current.name.startswith("untagged"):
+        return None
+    target = current.parent / run_id
+    if target.exists():
+        return None
+    current.rename(target)
+    manifest = artifacts_ops.load_manifest(target)
+    manifest["key"] = run_id
+    manifest["run_id"] = manifest.get("run_id") or run_id
+    if (manifest.get("paths") or {}).get("run_dir") in (str(current),
+                                                         str(current.resolve())):
+        manifest["paths"]["run_dir"] = str(target)
+    artifacts_ops.save_manifest(target, manifest)
+    args.test_dir = str(target)
+    log(f"test folder follows the run: {target.name}")
+    return target
+
+
 def record_agent(args, side, **fields):
     """Merged, never replaced: two stages record into one map and a resume must not erase the other side."""
     test_dir = getattr(args, "test_dir", None)

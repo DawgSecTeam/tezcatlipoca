@@ -176,3 +176,5 @@ def stage_deploy(args, comp):
         state = estate_state.load_flat(comp)
         if state.get("last_phase") != final_phase:
             raise RuntimeError(f"deploy did not reach phase {final_phase}")
+    from scrim import test_folder
+    test_folder.adopt_run_key(args, comp)
