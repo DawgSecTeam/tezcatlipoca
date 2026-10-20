@@ -7,21 +7,21 @@ refuses the slot ("collides with VMs ... golden vmid"), so a later deploy cannot
 them and only a full destroy reclaims the vmids. Either re-tag such templates once
 (`comp-<slug>`) or destroy them; the reuse path itself is correct for post-fix templates.
 
-### A retired range's kept templates cannot be reclaimed until the competition deploys again
+### The dashboard's range page still hides teardown on a retired range with kept templates
 
 `--teams-only` retires the range and keeps this competition's golden + engine templates for
-its next run, which is the documented practice-run loop. But the retired range then blocks
-the only path that can destroy them: `_range_workspace` answers a follow-up destroy with
-`the range in <run> was torn down by <destroy run> — nothing to destroy`, and the range page
-disables its action menu (`blocked = retired || …`), so a full teardown cannot reach the
-recorded kept-template inventory. Caught live: a teams-only teardown left the
-engine template and its goldens in place, the follow-up full teardown failed, and the
-templates were only reclaimed by deploying the competition again (which correctly adopted all
-four) and then tearing *that* range down fully.
-The templates are the whole point of teams-only, so this is the normal path, not an edge case.
-**Next action**: in the dashboard, resolve a `destroy` on a retired range whose document records
-only kept templates and no live VMs (backend), and enable the teardown action for exactly that
-case (web); the engine's ownership guard still scopes what is destroyed.
+its next run, which is the documented practice-run loop. The dashboard now resolves a `destroy`
+on a retired range whose document records only kept templates and no live VMs
+(`dashboard/ranges.py:reclaimable_templates`, wired into `runner.py`), and the engine's
+ownership guard still scopes what is destroyed — so the API and
+`destroy-competition.py --teams-only`/full paths can reclaim them. What remains is the web:
+`Range.jsx` computes `blocked = retired || …`, so the page offers no action menu and an
+operator cannot reach that resolver from the range view. Caught live before the backend fix:
+a teams-only teardown left the engine template and its goldens in place and the follow-up
+full teardown failed.
+**Next action**: in `tezcatlipoca-dashboard`'s `web/src/pages/Range.jsx`, show the action menu
+when `range.reclaimable_templates` is true (destroy only; verify/reset stay disabled) and
+update `Range.test.jsx`'s retired-range case.
 
 ### The template builders reach their scratch VM through node shell
 
