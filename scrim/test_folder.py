@@ -50,6 +50,7 @@ def adopt_run_key(args, comp):
     current = Path(getattr(args, "test_dir", "") or "")
     if not run_id or not current.is_dir() or not current.name.startswith("untagged"):
         return None
+    before = {str(current), str(current.resolve())}
     target = current.parent / run_id
     if target.exists():
         return None
@@ -57,11 +58,15 @@ def adopt_run_key(args, comp):
     manifest = artifacts_ops.load_manifest(target)
     manifest["key"] = run_id
     manifest["run_id"] = manifest.get("run_id") or run_id
-    if (manifest.get("paths") or {}).get("run_dir") in (str(current),
-                                                         str(current.resolve())):
+    if (manifest.get("paths") or {}).get("run_dir") in before:
         manifest["paths"]["run_dir"] = str(target)
     artifacts_ops.save_manifest(target, manifest)
     args.test_dir = str(target)
+    # A scrim's run_dir IS its test folder (resolve_run_dir returns one path for both):
+    # leaving it on the renamed-away name made the next manifest write fail ENOENT and
+    # killed the scrim right after a successful deploy (live: run-bee1532a).
+    if str(getattr(args, "run_dir", "") or "") in before:
+        args.run_dir = str(target)
     log(f"test folder follows the run: {target.name}")
     return target
 

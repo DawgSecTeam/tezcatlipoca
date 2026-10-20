@@ -29,7 +29,8 @@ def _run(tmp_path, run_id):
 
 def test_the_folder_takes_the_runs_name(tmp_path):
     comp, folder = _run(tmp_path, "run-9128c13a")
-    args = SimpleNamespace(test_dir=str(folder))
+    # a scrim's run_dir and test_dir are the same path
+    args = SimpleNamespace(test_dir=str(folder), run_dir=str(folder))
     target = test_folder.adopt_run_key(args, comp)
     assert target == folder.parent / "run-9128c13a"
     assert target.is_dir() and not folder.exists()
@@ -37,6 +38,7 @@ def test_the_folder_takes_the_runs_name(tmp_path):
     assert manifest["key"] == "run-9128c13a" and manifest["run_id"] == "run-9128c13a"
     assert manifest["paths"]["run_dir"] == str(target)
     assert args.test_dir == str(target)
+    assert args.run_dir == str(target), "a stale run_dir breaks the next manifest write"
 
 
 def test_without_a_run_id_it_stays_untagged(tmp_path):
