@@ -361,15 +361,19 @@ class MultinodePreflightRunAware(unittest.TestCase):
                 Path("competitions/example"), boxes, self.TEAMS, 1000, self.PLACEMENT,
                 engine_mgmt_ip=None, check_free=True, our_run_tag=RUN))
 
+    # The tag is the slug of the competition's NAME (Compfile "Example Competition"),
+    # not the directory id: the dir-name fixture predates the slug fix (b5e977e).
+    OUR_TAG = "comp-example-competition"
+
     def test_same_comp_tag_without_run_tag_is_a_collision(self):
         with self.assertRaises(SystemExit) as ctx:
-            self._run("tezcatlipoca,comp-example")
+            self._run(f"tezcatlipoca,{self.OUR_TAG}")
         self.assertIn("ANOTHER worktree", str(ctx.exception))
 
     def test_full_ownership_match_is_still_a_leftover(self):
         # A fresh deploy never tears down a prior full-ownership run: resume it or destroy-competition.py.
         with self.assertRaises(SystemExit) as ctx:
-            self._run(f"tezcatlipoca,comp-example,{RUN}")
+            self._run(f"tezcatlipoca,{self.OUR_TAG},{RUN}")
         self.assertIn("destroy-competition.py", str(ctx.exception))
 
 
