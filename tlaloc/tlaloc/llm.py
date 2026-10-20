@@ -26,7 +26,7 @@ class LLM:
         return os.environ.get(self.api_key_env) or ""
 
     def chat(self, messages, *, max_tokens=None, temperature=0.2, json_mode=False,
-             timeout=None, _retried=False):
+             timeout=None):
         if not self.enabled:
             raise LLMError("llm disabled (llm.enabled / llm.base_url)")
         body = {"model": self.model or "llm", "messages": list(messages),
@@ -49,11 +49,13 @@ class LLM:
             # with a full trace means the answer was never emitted, not that the model
             # declined (live: the cde-2026 arbiter answered nothing at 256 tokens, so every
             # cycle fell back to the deterministic pick). Re-ask once with room for it.
+            # Escalate a step at a time (256 -> 1024 -> 4096): one retry is not enough when
+            # the candidate list is long, and the growth itself terminates at the cap.
             asked = int(max_tokens or self.max_tokens)
             budget = min(asked * 4, 4096)
-            if not _retried and budget > asked:
+            if budget > asked:
                 return self.chat(messages, max_tokens=budget, temperature=temperature,
-                                 json_mode=json_mode, timeout=timeout, _retried=True)
+                                 json_mode=json_mode, timeout=timeout)
         return content
 
     def _post(self, body, timeout):

@@ -34,9 +34,16 @@ def test_an_answer_cut_off_by_reasoning_is_asked_again_with_room():
     assert calls == [256, 1024]
 
 
-def test_the_retry_is_once():
+def test_the_escalation_terminates_at_the_cap():
     def poster(url, body, timeout):
         return _reply("", "still reasoning")
 
-    llm = LLM(_cfg(), poster)
+    calls = []
+
+    def still_reasoning(url, body, timeout):
+        calls.append(body["max_tokens"])
+        return _reply("", "still reasoning")
+
+    llm = LLM(_cfg(), still_reasoning)
     assert llm.chat([{"role": "user", "content": "x"}], max_tokens=64) == ""
+    assert calls == [64, 256, 1024, 4096]
