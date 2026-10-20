@@ -167,6 +167,26 @@ def test_candidates_prefer_evicted_boxes_and_replants(tmp_path):
     assert candidates and "re-plant" in candidates[0]["reason"]
 
 
+def test_a_failed_takedown_is_demoted_then_dropped(tmp_path):
+    """One broken mechanism must not eat the window: the deterministic pick is
+    candidates[0], so a target that keeps failing has to sink below fresh ones —
+    and disappear once the effect's own guard would refuse it."""
+    ctx, policy = policy_for(tmp_path, hours=0.25)
+    ip = "192.168.1.10"
+    ctx.world.add_foothold(ip, "ubuntu", "boxpw-1", "root", escalation="sudo")
+    fresh = {c["params"]["service"]: c for c in policy.candidates(ctx)
+             if c["effect"] == "takedown"}
+    assert "nginx" in fresh
+    ctx.world.tally_failure("takedown", ip, "nginx")
+    once = {c["params"]["service"]: c for c in policy.candidates(ctx)
+            if c["effect"] == "takedown"}
+    assert once["nginx"]["score"] < fresh["nginx"]["score"]
+    ctx.world.tally_failure("takedown", ip, "nginx")
+    twice = {c["params"]["service"] for c in policy.candidates(ctx)
+             if c["effect"] == "takedown"}
+    assert "nginx" not in twice
+
+
 def test_validate_rejects_out_of_scope_and_unlocked_mechanisms(tmp_path):
     ctx, policy = policy_for(tmp_path)
     with pytest.raises(PolicyError):

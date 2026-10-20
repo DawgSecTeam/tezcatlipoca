@@ -423,12 +423,20 @@ class Policy:
                                                             service.get("down"))
                     if skip:
                         continue
+                    # One broken mechanism must not eat the window: the effect refuses
+                    # after two failures, so offering it again only spends the pick.
+                    # A first failure demotes it below a fresh target (live: four
+                    # takedowns on the DC while web01 was never touched).
+                    fails = self.world.failure_count("takedown", ip, service["name"])
+                    if fails >= 2:
+                        continue
                     out.append(make_candidate(
                         "takedown",
                         {"ip": ip, "service": service["name"], "mode": mode},
-                        BASE_SCORE["takedown"] + rot + score_bonus,
+                        BASE_SCORE["takedown"] + rot + score_bonus - 20 * fails,
                         f"{service['name']} is a scored service on {ip}; {why}; "
-                        f"mechanism {mode}",
+                        f"mechanism {mode}"
+                        + (f"; {fails} failed attempt(s) — rotate" if fails else ""),
                         cost="low", tag=f"{mode} {service['name']}@{ip}", high_stakes=True))
             elif modes and dead:
                 pass          # re-plant first: a dead box cannot be pressured
@@ -436,13 +444,19 @@ class Policy:
                 for pin in self.intel.port_checks_for(ip):
                     if not pin.get("port"):
                         continue
+                    # same failure-aware rule as takedown: a port whose block already
+                    # failed twice is refused by the effect, so stop offering it
+                    fails = self.world.failure_count("block_port", ip, int(pin["port"]))
+                    if fails >= 2:
+                        continue
                     out.append(make_candidate(
                         "block_port",
                         {"ip": ip, "port": int(pin["port"]),
                          "display": pin.get("display") or str(pin["port"])},
-                        BASE_SCORE["block_port"] + score_bonus,
+                        BASE_SCORE["block_port"] + score_bonus - 10 * fails,
                         f"{pin.get('display')} is a scored port check on {ip} — block it "
-                        f"(CCDC-authentic failure mode)",
+                        f"(CCDC-authentic failure mode)"
+                        + (f"; {fails} failed attempt(s) — rotate" if fails else ""),
                         cost="low", high_stakes=True))
                 out.append(make_candidate(
                     "rotate_credlist", {"ip": ip},
