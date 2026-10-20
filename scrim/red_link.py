@@ -231,6 +231,25 @@ def start_red_director(args):
         f"(minutes) or check `journalctl -u {red_unit(args)}` for the real failure.")
 
 
+def stop_red_director(args):
+    """Quiet a reused range before the pre-T0 fire test, which a live loop races (its
+    restore and red's next takedown flap the service the test needs to see down)."""
+    target, common, jump = _red_ssh_ctx(args)
+    cmd = f"sudo -n systemctl stop {red_unit(args)}"
+    for extra in ([], (["-o", jump] if jump else [])):
+        try:
+            r = procs.run_tree(["ssh"] + common + extra +
+                               ["-o", "ConnectTimeout=10", target, cmd],
+                               timeout=60, check=False)
+        except subprocess.TimeoutExpired:
+            continue
+        if r.returncode == 0:
+            log("red director stopped for the pre-T0 fire test (restarted after the seed)")
+            return True
+    log("WARNING: could not stop the red director for the pre-T0 fire test")
+    return False
+
+
 def red_box_power_state(args):
     """Liveness from the hypervisor: every other red01 signal rides the route that may itself be down."""
     vmid = getattr(args, "red_vmid", None)

@@ -37,5 +37,25 @@ class Reset(unittest.TestCase):
         self.assertNotIn("event_start", self._run(True))
 
 
+class StopForPreT0(unittest.TestCase):
+    def test_the_skip_deploy_path_stops_the_live_loop(self):
+        """A reused range's red loop races the pre-T0 fire test (restore vs next
+        takedown); --skip-deploy must quiet it, and stage_red restarts it."""
+        seen = []
+
+        def fake_run_tree(argv, **kw):
+            seen.append(argv[-1])
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        args = SimpleNamespace(resume_event=False, red_ip="10.0.0.246",
+                               red_vmid=1660, competition="scrim-one",
+                               run_dir="/tmp", ssh_key="/tmp/k", red_tunnel=None)
+        with patch.object(red_link, "_red_ssh_ctx", return_value=("t", [], None)), \
+             patch.object(red_link, "red_unit", return_value="tlaloc.service"), \
+             patch.object(red_link.procs, "run_tree", side_effect=fake_run_tree):
+            self.assertTrue(red_link.stop_red_director(args))
+        self.assertIn("systemctl stop tlaloc.service", seen[0])
+
+
 if __name__ == "__main__":
     unittest.main()
