@@ -166,6 +166,11 @@ def main():
     if not args.skip_deploy:
         run_manifest.record_phase(run_dir, args, "deploy")
         staging.stage_deploy(args, comp)
+        # stage_deploy renames the report folder to the deploy's run id; the LOCAL path
+        # must follow it or the next manifest write lands in the renamed-away dir
+        # (live twice: run-bee1532a and run-114a22e2 died right after a clean deploy).
+        run_dir = Path(args.run_dir)
+        test_dir = Path(args.test_dir or args.run_dir)
     creds = staging.creds_from_files(comp)
     staging.warn_co_tenancy(args, comp)
     creds["RUN_DIR"] = args.run_dir
