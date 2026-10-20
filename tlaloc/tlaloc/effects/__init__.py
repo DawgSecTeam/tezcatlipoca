@@ -55,10 +55,12 @@ def execute(effect_id, params, ctx, *, source="deterministic", cycle=None):
     mutated = bool(result.ok or result.installed)
     if mutated and not ctx.dry_run:
         if result.ok and result.impact:
-            ctx.world.add_impact(result.impact.get("ip") or ip or "",
+            impact_ip = result.impact.get("ip") or ip or ""
+            ctx.world.add_impact(impact_ip,
                                  result.impact.get("service", "?"),
                                  result.impact.get("mode", effect_id),
-                                 result.impact.get("detail"))
+                                 result.impact.get("detail"),
+                                 team=ctx.intel.team_of(impact_ip))
         for artifact in result.artifacts:
             ctx.world.add_artifact(**artifact)
         if result.restore is not None and (result.ok or result.installed):

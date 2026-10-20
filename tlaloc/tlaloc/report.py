@@ -45,8 +45,8 @@ def _artifact_key(artifact):
 def _by_team(world, impacts):
     out = {}
     for impact in impacts:
-        team = world.target_record(impact.get("ip") or "") or {}
-        key = team.get("team") or "?"
+        record = world.target_record(impact.get("ip") or "") or {}
+        key = impact.get("team") or record.get("team") or "?"
         out[key] = out.get(key, 0) + 1
     return out
 

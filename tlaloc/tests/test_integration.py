@@ -387,3 +387,16 @@ def test_two_failures_on_one_service_do_not_block_its_siblings(tmp_path):
                                   "mode": "stop"}, ctx)
     assert result.ok, result.detail
     assert result.impact["service"] == "nginx"
+
+
+def test_an_impact_carries_the_team_the_report_groups_by(tmp_path):
+    """The report groups impacts by team; reading only the target record left it "?"."""
+    ctx, policy, decider = live_ctx(tmp_path, ssh=scripted_takedown_ssh())
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    result = execute("takedown", {"ip": "192.168.1.10", "service": "nginx",
+                                  "mode": "stop"}, ctx)
+    assert result.ok, result.detail
+    impact = ctx.world.impacts()[-1]
+    assert impact["team"] == ctx.intel.team_of("192.168.1.10")
+    assert impact["team"]
