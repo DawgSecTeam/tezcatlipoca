@@ -217,6 +217,8 @@ class EstateStep(Step):
         from teardown.machinery import sweep_tagged_leftovers, teardown_templates
         print("\nDestroying this deploy's recorded estate...")
         document = estate_state.EstateState.load(ctx.comp_dir)
+        recorded_templates = bool(document.resources("golden")
+                                  or document.resources("engine_template"))
         summary = estate_destroy.destroy_estate(document, full=ctx.full, nodes=ctx.nodes)
         if summary["refused"]:
             return StepResult(self.name, "failed", "; ".join(
@@ -228,15 +230,16 @@ class EstateStep(Step):
         # A range deployed before the inventory existed has no template records, so its
         # goldens and engine template die by vmid math instead. A kept template another run
         # owns is reported and left for that range, never made this teardown's failure.
-        if ctx.full and not (document.resources("golden")
-                             or document.resources("engine_template")):
-            skipped = teardown_templates(
+        kept = [f"{e['kind']} {e['name']} (vmid {e['vmid']}) kept: {e['reason']}"
+                for e in summary["kept"]]
+        if ctx.full and not recorded_templates:
+            kept += teardown_templates(
                 ctx.comp_dir, ctx.deployed_state, ctx.ownership, ctx.boxes,
                 ctx.placement, full=True)
-            if skipped:
-                return StepResult(self.name, "warned", "; ".join(skipped))
         if ctx.full:
             forget_template_hashes(ctx.comp_dir)
+        if kept:
+            return StepResult(self.name, "warned", "; ".join(kept))
         return StepResult(self.name, "ok", f"destroyed {len(summary['destroyed'])}")
 
 

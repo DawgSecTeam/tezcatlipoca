@@ -113,7 +113,7 @@ def vm_occupancy(node, vmid, expect_tags):
     except Exception:                                   # noqa: BLE001 - reported by the caller
         return "unknown", set(), None
     tags = parse_vm_tags(cfg.get("tags"))
-    verdict, _missing = ownership_verdict(node, vmid, tags, expect_tags)
+    verdict, _missing = ownership_verdict(node, vmid, cfg.get("tags"), expect_tags)
     return verdict, tags, vm
 
 

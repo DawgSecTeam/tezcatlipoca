@@ -206,7 +206,7 @@ class MainSequence(unittest.TestCase):
                       subprocess.CompletedProcess(["x"], 0, "", ""))
         estate = estate if estate is not None else (
             lambda *a, **k: calls.append("estate_destroy") or
-            {"destroyed": [], "skipped": [], "refused": []})
+            {"destroyed": [], "skipped": [], "refused": [], "kept": []})
         argv = ["destroy-competition.py", "--competition", "demo"] + argv
         patches = [
             patch.object(destroy, "load_destroyable_competitions", return_value=["demo"]),

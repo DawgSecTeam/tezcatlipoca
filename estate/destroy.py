@@ -1,9 +1,9 @@
 """Estate teardown in the one order linked clones survive."""
 
-from common.constants import GOLDEN_TAG
+from common.constants import GOLDEN_TAG, comp_tag
 from infra.client import destroy_bridge_if_exists, node_bridges
-from infra.ownership import (Ownership, Refusal, bridge_owned_by, destroy_vm_if_exists,
-                             ownership_identity)
+from infra.ownership import (MARKER, OWNED, Ownership, Refusal, bridge_owned_by,
+                             destroy_vm_if_exists, ownership_identity, vm_occupancy)
 
 TIERS = (("team_box", "jump"), ("golden",), ("engine",), ("engine_template",), ("bridge",))
 
@@ -26,12 +26,30 @@ def _entry(row):
             "vmid": row["vmid"], "bridge": row["bridge"]}
 
 
+# A template is the competition's cache, not the recording run's property: every later deploy
+# of the same competition re-stamps it, so the record's owner is not a destruction proof.
+def _template_disposition(node, row, expect, comp_name, role):
+    """(tags this VM may be destroyed under, reason to leave it) for a recorded template."""
+    verdict, tags, vm = vm_occupancy(node, row["vmid"], expect)
+    if verdict in (OWNED, MARKER) or verdict == "absent":
+        return None, None
+    if comp_tag(comp_name) not in tags or role not in tags:
+        return None, None                 # foreign: let the strict guard refuse it
+    owners = sorted(t for t in tags if t.startswith("run-"))
+    if owners:
+        return None, (f"{vm.get('name')} (vmid {row['vmid']}) carries {', '.join(owners)} — "
+                      f"another run of this competition owns it")
+    # A kept template with no run tag belongs to the competition alone; a full teardown is
+    # the documented path that reclaims it, and its own run's identity is unprovable anyway.
+    return Ownership(comp_name).with_role(role).tags, None
+
+
 def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
     """Destroy every recorded resource of one kind; `only` narrows to a set of vmids or bridge names."""
     identity = state.data.get("identity") or {}
     comp_name = ownership_identity(state.comp_dir, identity.get("comp_name"))
     ownership = Ownership(comp_name, identity.get("run_id") or "")
-    destroyed, refused, skipped = [], [], []
+    destroyed, refused, skipped, kept = [], [], [], []
     for row in state.resources(kind):
         if nodes is not None and row["node"] not in nodes:
             skipped.append(_entry(row))
@@ -44,6 +62,19 @@ def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
         try:
             if row["vmid"] is not None:
                 expect = ownership.with_role(*_ROLE.get(kind, ())).tags
+                if kind in _ROLE:
+                    reclaim, owner = _template_disposition(
+                        row["node"], row, expect, comp_name, _ROLE[kind][0])
+                    if owner:
+                        kept.append({**_entry(row), "reason": owner})
+                        state.forget(kind, name=row["name"], vmid=row["vmid"],
+                                     bridge=row["bridge"])
+                        log(f"  kept {kind} {row['name']}: {owner}")
+                        continue
+                    if reclaim is not None:
+                        log(f"  reclaiming {kind} {row['name']}: vmid {row['vmid']} "
+                            f"carries no run tag")
+                        expect = reclaim
                 destroy_vm_if_exists(row["node"], row["vmid"], expect_tags=expect)
             else:
                 # row["bridge"] is only set by the per-team paths, so reading it alone passed None and the delete silently no-opped.
@@ -71,14 +102,14 @@ def destroy_tier(state, kind, *, nodes=None, only=None, log=print):
         state.forget(kind, name=row["name"], vmid=row["vmid"], bridge=row["bridge"])
         destroyed.append(_entry(row))
         log(f"  destroyed {kind} {row['name']}")
-    return destroyed, refused, skipped
+    return destroyed, refused, skipped, kept
 
 
 def destroy_estate(state, *, full=True, nodes=None, log=print):
     identity = state.data.get("identity") or {}
     comp_name = ownership_identity(state.comp_dir, identity.get("comp_name"))
     run_id = identity.get("run_id") or ""
-    refused, skipped, killed = [], [], []
+    refused, skipped, killed, kept = [], [], [], []
     for tier in TIERS:
         for kind in tier:
             if not full and kind in _KEPT_WHEN_TEAMS_ONLY:
@@ -93,10 +124,12 @@ def destroy_estate(state, *, full=True, nodes=None, log=print):
                 log(f"  skipped {kind} — a linked clone is still recorded "
                     f"({', '.join(sorted(_CLONE_KINDS[kind]))})")
                 continue
-            destroyed, tier_refused, tier_skipped = destroy_tier(state, kind, nodes=nodes, log=log)
+            destroyed, tier_refused, tier_skipped, tier_kept = destroy_tier(
+                state, kind, nodes=nodes, log=log)
             killed += destroyed
             refused += tier_refused
             skipped += tier_skipped
+            kept += tier_kept
     # A bridge created but never recorded (the state write failed) is still ours if its comment proves it.
     for node in (nodes or []) if run_id and state.resources() else []:
         for iface, comment in node_bridges(node).items():
@@ -111,4 +144,4 @@ def destroy_estate(state, *, full=True, nodes=None, log=print):
                 killed.append({"kind": "bridge", "node": node, "name": iface, "vmid": None,
                                "bridge": iface})
     state.save()
-    return {"destroyed": killed, "skipped": skipped, "refused": refused}
+    return {"destroyed": killed, "skipped": skipped, "refused": refused, "kept": kept}

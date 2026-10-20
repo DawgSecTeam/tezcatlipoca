@@ -310,6 +310,28 @@ class VerifyClean(unittest.TestCase):
         self.assertEqual(result.status, "warned")
         self.assertIn("another run", result.detail)
 
+    def test_a_recorded_template_another_run_owns_warns_instead_of_failing(self):
+        # The same situation through the recorded path: the document names the template, a
+        # later deploy adopted it, and the run-scoped guard refuses it. It is a kept template,
+        # not an incomplete teardown (live: cov-full-b/c engine templates).
+        document = estate_state.EstateState.load(self.comp)
+        document.data["identity"] = {"comp_name": COMP, "run_id": RUN}
+        document.record("golden", "n", "golden-web01", vmid=1151)
+        document.save()
+        kept = [{"kind": "golden", "node": "n", "name": "golden-web01", "vmid": 1151,
+                 "bridge": None, "reason": "another run of this competition owns it"}]
+        ctx = TeardownContext(comp_dir=self.comp, env={}, teams={}, boxes=[], deployed_state={},
+                              ownership=OURS, placement=None, nodes=["n"], default_node="n",
+                              inventory=None, full=True)
+        with patch("estate.destroy.destroy_estate",
+                   return_value={"destroyed": [], "skipped": [], "refused": [], "kept": kept}), \
+                patch("teardown.machinery.sweep_tagged_leftovers"), \
+                patch("teardown.machinery.teardown_templates") as fallback:
+            result = EstateStep().run(ctx)
+        fallback.assert_not_called()
+        self.assertEqual(result.status, "warned")
+        self.assertIn("another run", result.detail)
+
     def test_lost_evidence_is_a_note_never_a_problem(self):
         # A teardown that lost evidence still exits clean — a wedged box never holds a destroy
         # hostage — but it must not read like a clean one at the point the operator reads it.

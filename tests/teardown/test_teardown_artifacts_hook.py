@@ -103,7 +103,7 @@ class TeardownArtifactsHook(unittest.TestCase):
                       __import__("subprocess").CompletedProcess(["x"], 0, "", ""))
         estate = estate if estate is not None else (
             lambda *a, **k: calls.append("estate_destroy") or
-            {"destroyed": [], "skipped": [], "refused": []})
+            {"destroyed": [], "skipped": [], "refused": [], "kept": []})
         argv = ["destroy-competition.py", "--competition", "demo"] + argv
         patches = [
             patch.object(destroy, "load_destroyable_competitions", return_value=["demo"]),
@@ -249,7 +249,7 @@ class CrashedHarnessRecovery(unittest.TestCase):
             patch.object(tm, "teardown_templates", return_value=[]),
             patch("estate.destroy.destroy_estate",
                   side_effect=lambda *a, **k: calls.append("estate_destroy") or
-                  {"destroyed": [], "skipped": [], "refused": []}),
+                  {"destroyed": [], "skipped": [], "refused": [], "kept": []}),
             patch.object(ao, "default_transport", side_effect=lambda: transport),
             # stage_red_artifacts shells out to ssh OUTSIDE the transport dict; a test must not dial
             # the manifest's IP (it blackholes for the full 75s subprocess timeout).

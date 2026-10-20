@@ -226,7 +226,7 @@ sweep; `run-agent-scrim.py` skips it), `.nakon-domain-<team>-*.json` (AD chain p
 
 - `common.targets.vm_id_for` is the sole vmid derivation; the deploy freezes it into the document's `roster` section, and a reordered `boxes.json` refuses.
 - A resume reuses the original per-run secrets; `infra.gates` refuses to resume without the state document.
-- Teardown destroys the document's recorded inventory (`estate/destroy.py`); a full teardown that finds no recorded `golden`/`engine_template` resources still reclaims them by vmid math (`teardown_templates`). A kept template that carries another run's id is not this range's to destroy: the fallback reports it and leaves it, so the range can retire instead of stranding.
+- Teardown destroys the document's recorded inventory (`estate/destroy.py`); a full teardown that finds no recorded `golden`/`engine_template` resources still reclaims them by vmid math (`teardown_templates`). Templates are a per-competition cache that a later deploy re-stamps with its own run id, so a recorded template carrying another run's id is not this range's to destroy: both paths report it as kept and leave it, dropping the stale record so the range can retire instead of stranding. A recorded template with no run id is reclaimed under the competition's tag set.
 - `config_ops.collect_teams` builds the roster keys `team1`..`teamN`, and `enumerate_targets` special-cases `team1` (its boxes carry the golden-anchor `team1-<box>` names); the pipeline assumes a team literally named `team1`.
 - `event.conf` reaches the engine before nakon runs. Phase 8 sub-steps are flag-gated because `unpause_engine` is not idempotent.
 - On fresh clones the NOPASSWD sudoers grant lands before the DNS fix.

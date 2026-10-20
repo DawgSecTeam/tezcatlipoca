@@ -146,10 +146,10 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
 
     from estate import destroy as estate_destroy
     problems = []
-    _, refused, _ = estate_destroy.destroy_tier(document, "team_box", only=vmids, log=log)
+    _, refused, _, _ = estate_destroy.destroy_tier(document, "team_box", only=vmids, log=log)
     problems += [f"{r['entry']['name']}: {r['reason']}" for r in refused]
     if not problems and bridges:
-        _, refused, _ = estate_destroy.destroy_tier(document, "bridge", only=bridges, log=log)
+        _, refused, _, _ = estate_destroy.destroy_tier(document, "bridge", only=bridges, log=log)
         problems += [f"{r['entry']['name']}: {r['reason']}" for r in refused]
     document.save()
 

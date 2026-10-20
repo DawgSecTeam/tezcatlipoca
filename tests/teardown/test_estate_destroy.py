@@ -201,6 +201,43 @@ class TeamsOnly(FakeAPI):
         self.assertEqual(summary["refused"], [])
 
 
+class RecordedTemplatesAreACompetitionCache(FakeAPI):
+    """A later deploy of the same competition re-stamps its kept templates; the earlier run's
+    record must not turn that adoption into a permanent failed teardown."""
+
+    def test_a_template_a_later_run_owns_is_kept_and_its_record_dropped(self):
+        other = {"tezcatlipoca", f"comp-{COMP}", "run-99999999", "tezcatlipoca-golden"}
+        state = full_state(self.comp, tags_by_vmid={1151: other})
+        fake = self.patch_api(state, tags_by_vmid={1151: other})
+        summary = destroy.destroy_estate(state, log=lambda *a: None)
+        self.assertEqual([vmid for _, vmid in fake.deleted], [2001, 2002, 1000, 1140])
+        self.assertEqual(summary["refused"], [])
+        self.assertEqual([(e["kind"], e["vmid"]) for e in summary["kept"]], [("golden", 1151)])
+        self.assertIn("run-99999999", summary["kept"][0]["reason"])
+        self.assertEqual(state.resources("golden"), [])
+
+    def test_a_kept_template_with_no_run_tag_is_reclaimed_by_the_competition(self):
+        # Pre-run-id builds tagged templates with the competition set only; no run can claim
+        # them, and a full teardown is the documented path that reclaims them.
+        no_run = {"tezcatlipoca", f"comp-{COMP}", "engine-template"}
+        state = full_state(self.comp, tags_by_vmid={1140: no_run})
+        fake = self.patch_api(state, tags_by_vmid={1140: no_run})
+        summary = destroy.destroy_estate(state, log=lambda *a: None)
+        self.assertIn(("pve", 1140), fake.deleted)
+        self.assertEqual(summary["kept"], [])
+        self.assertEqual(summary["refused"], [])
+        self.assertEqual(state.resources("engine_template"), [])
+
+    def test_a_foreign_competitions_template_is_refused_and_stays_recorded(self):
+        foreign = {"tezcatlipoca", "comp-other", RUN, "tezcatlipoca-golden"}
+        state = full_state(self.comp, tags_by_vmid={1151: foreign})
+        fake = self.patch_api(state, tags_by_vmid={1151: foreign})
+        summary = destroy.destroy_estate(state, log=lambda *a: None)
+        self.assertNotIn(("pve", 1151), fake.deleted)
+        self.assertEqual([r["entry"]["vmid"] for r in summary["refused"]], [1151])
+        self.assertEqual([e["vmid"] for e in state.resources("golden")], [1151])
+
+
 class NodeFilter(FakeAPI):
     def test_an_entry_outside_the_placement_hosts_is_skipped_untouched(self):
         state = EstateState.load(self.comp)
