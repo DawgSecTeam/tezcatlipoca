@@ -180,6 +180,25 @@ class GateCalibration(unittest.TestCase):
         rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
         self.assertEqual(rows["max_simultaneous_down"][1], ">= 3")
 
+    def test_takedowns_is_capped_at_the_downable_services(self):
+        # A four-service comp cannot reach the static six without re-kills, which
+        # require blue to restore first: the gate must ask for what red can do.
+        services = [{"service": "web01-http", "up": True},
+                    {"service": "db01-sql", "up": True},
+                    {"service": "win02-ftp", "up": True},
+                    {"service": "mail01-smtp", "up": True}]
+        d = self._run_dir(services=services)
+        out = render.build_report(d)
+        rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
+        self.assertEqual(rows["takedowns"][1], ">= 4")
+
+    def test_takedowns_keeps_the_static_gate_on_a_big_lineup(self):
+        services = [{"service": f"box{i:02d}-http", "up": True} for i in range(9)]
+        d = self._run_dir(services=services)
+        out = render.build_report(d)
+        rows = dict((k, (v, t, verdict)) for k, v, t, verdict in self._gates(out))
+        self.assertEqual(rows["takedowns"][1], ">= 6")
+
     def test_injects_gate_is_capped_at_the_injects_offered(self):
         # 4 published, but a 20-minute window opens only the T0 one: the gate
         # must ask for 1, not 2.

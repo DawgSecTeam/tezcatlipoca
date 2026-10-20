@@ -1,8 +1,12 @@
 RESTORE_TTR_GATE_MIN = 15
+# A large comp still demands this much sustained pressure; a small lineup cannot
+# reach it without re-kills (which need blue to restore first), so render.py caps
+# the per-run threshold at what red alone can take down. See docs/rehearsal-gates.md.
+TAKEDOWNS_GATE = 6
 
 
 GATES = {
-    "red": [("takedowns", 6, ">="), ("restore_reactions", 3, ">="),
+    "red": [("takedowns", TAKEDOWNS_GATE, ">="), ("restore_reactions", 3, ">="),
             ("distinct_tactics", 4, ">="), ("windows_footholds", 1, ">="),
             ("max_simultaneous_down", 4, ">="), ("stalls", 0, "==")],
     # evictions is deliberately NOT a gate: red's health checks only see SSH-class

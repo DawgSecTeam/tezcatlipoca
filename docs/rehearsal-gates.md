@@ -21,13 +21,15 @@ actions change what red does next and vice versa.
 ## What each gate means
 
 **Red.** `takedowns` — sustained pressure across the window, not one sweep; service stops only,
-since `block_port` is firewall tamper and counts under `distinct_tactics`. `restore_reactions` —
-red punishing blue's restores, which is the tug-of-war itself. `distinct_tactics` — breadth:
-masking, firewall tamper, credential rotation, persistence. `windows_footholds` — the DC is the
-CCDC heart. `max_simultaneous_down` — depth, floored by the two-standing-services rule and capped
-at what red may legitimately take down: SSH is red's own access path and never a target, so a
-lineup that pins SSH caps below the raw service count. `stalls` — an idle gap of ten minutes or
-more, opening included: red attacks within minutes of T0.
+since `block_port` is firewall tamper and counts under `distinct_tactics`. Capped at one per scored
+service the lineup affords: a hardcoded count above that is passable only through re-kills, which
+need blue to restore first. `restore_reactions` — red punishing blue's restores, which is the
+tug-of-war itself. `distinct_tactics` — breadth: masking, firewall tamper, credential rotation,
+persistence. `windows_footholds` — the DC is the CCDC heart. `max_simultaneous_down` — depth,
+floored by the two-standing-services rule and capped at what red may legitimately take down: SSH
+is red's own access path and never a target, so a lineup that pins SSH caps below the raw service
+count. `stalls` — an idle gap of ten minutes or more, opening included: red attacks within minutes
+of T0.
 
 **Blue.** `cycles_rc0` — completed agent cycles per team, a cadence floor and not a target: a
 cycle carrying real incident work costs 20–30 min wall clock on the club's endpoint and the two

@@ -64,6 +64,12 @@ def build_report(run_dir):
                 for rows in ((final or {}).get("services") or {}).values() if rows]
     if downable:
         max_sim_threshold = min(max_sim_threshold, max(downable))
+    # One successful takedown per service red may legally stop is the ceiling a small
+    # lineup can reach; the old constant 6 was only passable through re-kills (which
+    # need blue to restore first). Cap at the static gate so a big comp still asks
+    # for the same sustained pressure.
+    takedowns_threshold = (min(gate_table.TAKEDOWNS_GATE, sum(downable))
+                           if downable else gate_table.TAKEDOWNS_GATE)
     injects_published = len((final or {}).get("injects") or [])
     injects_threshold = min(2, injects_published) if injects_published else None
     # An inject cannot be answered before it opens, so a run that offered one and
@@ -86,6 +92,7 @@ def build_report(run_dir):
          "injects": bm["injects"], "notebook_entries": bm["notebook_entries"],
          "timeouts": bm["timeouts"]},
         thresholds={"max_simultaneous_down": max_sim_threshold,
+                    "takedowns": takedowns_threshold,
                     **({"injects": injects_threshold} if injects_threshold else {})},
         gates=gate_rows)
     if injects_threshold is None:
