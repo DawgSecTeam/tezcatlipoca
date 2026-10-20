@@ -118,8 +118,26 @@ def test_tasking_creates_and_polls_a_task():
                           poll_interval=0)
     assert outcome["ok"] is True and outcome["output"] == "nginx stopped"
     created = [c for c in graphql.calls if "createTask" in c["query"]][0]
-    assert created["variables"] == {"callback_id": 42,
-                                    "command": "systemctl stop nginx"}
+    assert created["variables"] == {
+        "callback_id": 42, "command": "shell",
+        "params": json.dumps({"command": "systemctl stop nginx"})}
+
+
+def test_a_windows_agent_task_wraps_the_script_in_the_powershell_command():
+    graphql = StubGQL({
+        "callback(": {"callback": [
+            {"id": 7, "description": "ad01-1", "last_checkin": "2026-10-16T01:59:30Z",
+             "payload": {"payloadtype": {"name": "apollo"}}}]},
+        "createTask": {"createTask": {"status": "success", "error": "", "id": 9}},
+        "query Task": {"task": [{"id": 9, "status": "completed", "completed": True}],
+                       "response": [{"response_text": base64.b64encode(b"Stopped").decode()}]},
+    })
+    client = MythicClient(c2_cfg(), graphql=graphql, now=lambda: 1770000000.0)
+    assert client.task("ad01-1", "(Get-Service 'NTDS').Status", poll_interval=0)["ok"] is True
+    created = [c for c in graphql.calls if "createTask" in c["query"]][0]
+    assert created["variables"]["command"] == "powershell"
+    assert json.loads(created["variables"]["params"]) == {
+        "command": "(Get-Service 'NTDS').Status"}
 
 
 def test_tasking_reports_a_missing_callback_instead_of_guessing():

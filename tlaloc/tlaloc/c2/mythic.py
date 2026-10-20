@@ -9,6 +9,10 @@ from ..errors import C2Error
 
 DEFAULT_TRANSPORTS = ("http", "webhook")
 AGENT_BY_OS = {"linux": "poseidon", "windows": "apollo"}
+# createTask names a COMMAND, not a shell line: a script sent as `command` makes Mythic
+# look up a command that does not exist, so every live tasking failed. Each agent runs
+# a raw script through its own command, with the script in that command's `command` arg.
+SCRIPT_COMMAND = {"apollo": "powershell", "poseidon": "shell"}
 # selected_os must match the payload type's capitalised supported_os; "linux" is rejected.
 OS_NAME = {"linux": "Linux", "windows": "Windows", "macos": "macOS"}
 
@@ -128,8 +132,8 @@ query Callbacks($operation: String!) {
 """
 
     CREATE_TASK = """
-mutation CreateTask($callback_id: Int!, $command: String!) {
-  createTask(callback_id: $callback_id, command: $command, params: "") {
+mutation CreateTask($callback_id: Int!, $command: String!, $params: String!) {
+  createTask(callback_id: $callback_id, command: $command, params: $params) {
     status
     error
     id
@@ -223,19 +227,21 @@ query Payload($uuid: String!) {
     def callback_id_for(self, box_id):
         for row in self.callback_rows():
             if (row.get("description") or row.get("host") or "").strip() == box_id:
-                return row.get("id") or row.get("display_id")
-        return None
+                return row.get("id") or row.get("display_id"), row.get("agent")
+        return None, None
 
     def task(self, box_id, command, *, timeout=120, poll_interval=2.0):
         if not self.enabled:
             raise C2Error("c2 disabled (c2.enabled / c2.base_url)")
-        callback_id = self.callback_id_for(box_id)
+        callback_id, agent = self.callback_id_for(box_id)
         if callback_id is None:
             return {"ok": False, "detail": f"no callback for {box_id}",
                     "output": "", "task_id": None}
-        created = (self._graphql_call(self.CREATE_TASK,
-                                      {"callback_id": int(callback_id),
-                                       "command": command}).get("createTask") or {})
+        created = (self._graphql_call(
+            self.CREATE_TASK,
+            {"callback_id": int(callback_id),
+             "command": SCRIPT_COMMAND.get(str(agent or "").lower(), "shell"),
+             "params": json.dumps({"command": command})}).get("createTask") or {})
         if created.get("error"):
             return {"ok": False, "detail": f"task creation: {created['error']}",
                     "output": "", "task_id": None}
