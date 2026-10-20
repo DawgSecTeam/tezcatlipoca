@@ -431,7 +431,8 @@ class Finalize(TmpCase):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     def test_finalize_runs_last_on_the_keep_range_path(self):
-        # this scenario is a run that DID stage red (a red01 exists to destroy)
+        # --keep-range keeps red01 with the range: a later --resume-event re-enters a
+        # red that is still running, so the teardown must not destroy it.
         self.args.keep_range = True
         with mock.patch.object(event_run, "stage_run", lambda *a: self.calls.append("stage_run")), \
                 mock.patch.object(evidence, "stage_capture",
@@ -453,9 +454,8 @@ class Finalize(TmpCase):
             failure = event_run.run_event_and_finish(self.args, {"ENGINE_IP": "x"}, 0.0)
         self.assertIsNone(failure)
         self.assertEqual(self.calls[-1], "finalize")
-        self.assertIn("red destroy", self.calls)
+        self.assertNotIn("red destroy", self.calls)
         self.assertNotIn("destroy-competition", self.calls)
-        self.assertLess(self.calls.index("red destroy"), self.calls.index("finalize"))
 
 
 

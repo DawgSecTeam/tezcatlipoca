@@ -48,6 +48,22 @@ class TeardownOrdering(unittest.TestCase):
         self.assertEqual(order[:3], ["pull", "collect", "report"],
                          f"the final red pull must precede the report, got {order}")
 
+    def test_keep_range_keeps_red01_with_the_range(self):
+        args, order = self._args(), []
+        args.keep_range = True
+        with mock.patch.object(red_link, "pull_red_state",
+                               lambda *a, **k: order.append("pull")), \
+             mock.patch.object(test_folder, "collect_run_artifacts",
+                               lambda *a, **k: order.append("collect")), \
+             mock.patch.object(test_folder, "write_interaction_report",
+                               lambda *a, **k: order.append("report")), \
+             mock.patch.object(teardown_stage, "teardown_red",
+                               lambda *a, **k: order.append("teardown_red") or 999), \
+             mock.patch.object(teardown_stage, "run_range_teardown",
+                               lambda *a, **k: order.append("destroy-competition")):
+            teardown_stage.stage_teardown(args, creds={"user": "sysadmin"})
+        self.assertEqual(order, ["pull", "collect", "report"])
+
 
 
 if __name__ == "__main__":

@@ -118,10 +118,13 @@ def stage_teardown(args, creds=None):
         collected = test_folder.collect_run_artifacts(args)
         test_folder.write_interaction_report(args)
     log("teardown: red01 + NAT")
-    red_vmid = teardown_red(args, dict(os.environ))
+    # --keep-range means the RANGE stays up, red01 included: resume-event re-enters
+    # against a red01 that is still running. Destroying it here stranded the kept
+    # range with no red segment and no way to put one back without a full redeploy.
     if args.keep_range:
-        log("--keep-range: leaving the competition range up")
+        log("--keep-range: leaving the competition range up (red01 and its segment kept)")
         return
+    red_vmid = teardown_red(args, dict(os.environ))
     if getattr(args, "keep_templates", False):
         log("--keep-templates: templates kept for this competition's next run "
             "(team boxes, engine and bridges still torn down)")
