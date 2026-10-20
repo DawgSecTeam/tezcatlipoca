@@ -98,6 +98,20 @@ def test_lockout_window_only_near_the_end(tmp_path):
     assert policy.window_open("lockout") is True
 
 
+def test_a_locked_out_box_is_not_offered_a_second_lockout(tmp_path):
+    """The effect is done once its accounts are disabled; re-offering it spent a cycle
+    on an SSH call that red's own lock had already closed (live: reset by peer)."""
+    ctx, policy = policy_for(tmp_path)
+    duration = ctx.cfg["red"]["duration_min"]
+    ctx.world.meta["event_start"] = policy._now() - (duration - 1) * 60
+    ctx.world.save()
+    ip = "192.168.1.10"
+    ctx.world.add_foothold(ip, "ubuntu", "boxpw-1", "root", escalation="sudo")
+    assert any(c["effect"] == "lockout" for c in policy.candidates(ctx))
+    ctx.world.add_impact(ip, "logins", "lockout")
+    assert not any(c["effect"] == "lockout" for c in policy.candidates(ctx))
+
+
 def test_recon_cutoff(tmp_path):
     ctx, policy = policy_for(tmp_path)
     assert policy.recon_allowed() is True

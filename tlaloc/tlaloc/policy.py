@@ -463,7 +463,11 @@ class Policy:
                     BASE_SCORE["rotate_credlist"] + score_bonus,
                     "rotate a credlist account so blue's own credential list fails",
                     cost="low", high_stakes=True))
-            if self.window_open("lockout"):
+            # One successful lockout per box is the whole effect: re-offering it spent a
+            # cycle on an SSH call red's own lock had already closed (live: reset by peer).
+            locked = any(i.get("ip") == ip and i.get("service") == "logins"
+                         for i in self.world.impacts())
+            if self.window_open("lockout") and not locked:
                 out.append(make_candidate(
                     "lockout", {"ip": ip},
                     BASE_SCORE["lockout"] + 30 + score_bonus,
