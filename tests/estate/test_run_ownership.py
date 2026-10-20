@@ -334,6 +334,8 @@ class MultinodePreflightRunAware(unittest.TestCase):
     TEAMS = {"team1": {"identifier": "101"}}
 
     def _run(self, engine_tags):
+        # The comp dir is built here: a CWD-relative fixtures path made the tag depend on
+        # whether a `competitions/` checkout happened to sit beside the tree.
         boxes = [{"name": "web01", "template": "ubuntu-fix", "memory_mb": 512}]
         colliding = dict(vm(1000, "quotient-engine", engine_tags, status="running"),
                          node="n1")
@@ -357,9 +359,13 @@ class MultinodePreflightRunAware(unittest.TestCase):
                 patch("infra.resources.proxmox_api", return_value={"data": {"avail": 1 << 50}}), \
                 patch("infra.gates.remote_access_gate"), \
                 patch("infra.gates.catalog_gate"):
-            run_preflight(multinode_plan(
-                Path("competitions/example"), boxes, self.TEAMS, 1000, self.PLACEMENT,
-                engine_mgmt_ip=None, check_free=True, our_run_tag=RUN))
+            with tempfile.TemporaryDirectory() as td:
+                comp = Path(td) / "example"
+                comp.mkdir()
+                (comp / "Compfile").write_text("name Example Competition\n")
+                run_preflight(multinode_plan(
+                    comp, boxes, self.TEAMS, 1000, self.PLACEMENT,
+                    engine_mgmt_ip=None, check_free=True, our_run_tag=RUN))
 
     # The tag is the slug of the competition's NAME (Compfile "Example Competition"),
     # not the directory id: the dir-name fixture predates the slug fix (b5e977e).
