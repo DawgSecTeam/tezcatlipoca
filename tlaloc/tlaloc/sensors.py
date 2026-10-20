@@ -124,12 +124,24 @@ class Sensors:
         restores = diff_restores(self.last_map, mapping)
         for event in restores:
             if self.world is not None:
-                self.world.add_blue_event(event["team"], event["service"])
+                self.world.add_blue_event(event["team"], event["service"],
+                                          self._ip_for(event["team"], event["service"]))
         if self.log is not None and restores:
             self.log.emit("blue_restores", restores=restores, cycle_poll=self.polls)
         self.last_map = mapping
         self.last_poll_at = self.now()
         return mapping, self.counts(), restores
+
+    def _ip_for(self, team, service):
+        """Scoreboard names are `<box>-<label>` (web01-http), and a restore is only attributable
+        to a box by name: without the ip red cannot tell which box blue just saved, so every
+        restore-reaction check found no restore and red never re-hit a saved box (live:
+        scrim-one run-200fcb1d, restore_reactions 0 against 5 restores)."""
+        box_name = str(service or "").split("-", 1)[0]
+        for box in self.intel.boxes():
+            if box.get("team") == team and box.get("box") == box_name:
+                return box.get("ip")
+        return None
 
     def team_service_map(self):
         return dict(self.last_map)
