@@ -2,6 +2,7 @@
 
 import fcntl
 import contextlib
+import os
 import re
 
 from common.constants import SCORING_ENGINE_VMID
@@ -23,16 +24,27 @@ def acquire_engine_lock(engine_vmid=SCORING_ENGINE_VMID):
     if str(lock_path) in _ENGINE_LOCKS:
         return
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(lock_path, "w")
+    # "a+" never truncates a holder's pid: opening with "w" before the flock erased it,
+    # so a refusal could not name the process to wait for.
+    fh = open(lock_path, "a+")
     try:
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
+        with contextlib.suppress(OSError):
+            fh.seek(0)
+            holder = (fh.read() or "").strip()
         raise SystemExit(
             f"  ERROR: another deploy on this host already holds the scoring-engine lock "
-            f"({lock_path.name}) — a different competition is targeting the same engine, and "
-            "its nakon push would wipe this one's /opt/nakon staging dir. Wait for it (find it "
-            "with pgrep -f 'create-competition|redeploy-competition')."
+            f"({lock_path.name} held by pid {holder or 'unknown'}) — a different competition "
+            "is targeting the same engine, and its nakon push would wipe this one's "
+            "/opt/nakon staging dir. Wait for it (find it with pgrep -f "
+            "'create-competition|redeploy-competition')."
         )
+    with contextlib.suppress(OSError):
+        fh.seek(0)
+        fh.truncate()
+        fh.write(str(os.getpid()))
+        fh.flush()
     _ENGINE_LOCKS[str(lock_path)] = fh
 
 
