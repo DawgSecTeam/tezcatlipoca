@@ -43,12 +43,14 @@ def diagnose_unreachable_box(node, vmid):
 
 
 def _exec_status(node, vmid, pid):
-    # A guest-agent restart (it self-upgrades during first boot) 500s status with "does not exist".
+    # A guest-agent restart (it self-upgrades during first boot) 500s status with "does not
+    # exist"; a reboot 500s it with "guest agent is not running". Both mean the exec pid is
+    # gone, and the callers' re-attach retry keys on that, not on an HTTPError.
     try:
         return proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/agent/exec-status",
                            params={"pid": pid})["data"]
     except Exception as e:
-        if "does not exist" in str(e):
+        if "does not exist" in str(e) or "guest agent is not running" in str(e):
             raise RuntimeError(
                 f"guest agent on vmid {vmid} lost exec pid {pid} (the agent restarted "
                 f"mid-command) — the command's outcome is unknown") from e

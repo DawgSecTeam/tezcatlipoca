@@ -49,6 +49,17 @@ class ExecChannelLoss(unittest.TestCase):
                 guest_exec.guest_agent_exec_root("pve", 1, "true", timeout=5)
         self.assertIn("lost exec pid 9", str(cm.exception))
 
+    def test_a_rebooting_guest_is_the_same_lost_channel(self):
+        from requests import HTTPError
+        with patch.object(guest_exec, "proxmox_api") as api:
+            api.side_effect = [
+                {"data": {"pid": 9}},
+                HTTPError("500 Server Error: QEMU guest agent is not running"),
+            ]
+            with self.assertRaises(RuntimeError) as cm:
+                guest_exec.guest_agent_exec_root("pve", 1, "true", timeout=5)
+        self.assertIn("lost exec pid 9", str(cm.exception))
+
 
 class WriteToGuest(unittest.TestCase):
     def test_chunks_stay_under_the_documented_content_cap(self):
