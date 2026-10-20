@@ -85,8 +85,10 @@ class Loop:
             try:
                 self.ctx.gate.ensure_command(check, self.ctx.os_of(ip) or "linux")
             except GuardrailError as exc:
+                # `kind` is emit()'s own positional; a field of that name crashed the
+                # cycle instead of skipping the artifact (live: 6 cycles lost).
                 self.log.emit("artifact_check_rejected", ip=ip,
-                              kind=artifact.get("kind"), error=str(exc))
+                              artifact_kind=artifact.get("kind"), error=str(exc))
                 continue
             try:
                 rc, out, _ = self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",

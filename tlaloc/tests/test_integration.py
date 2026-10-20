@@ -366,6 +366,21 @@ def test_artifact_health_logs_a_dead_artifact_without_crashing(tmp_path):
     assert any(e["kind"] == "artifact_dead" for e in ctx.log.read())
 
 
+def test_an_over_long_artifact_check_is_skipped_not_fatal(tmp_path):
+    """The rejection path logged with `kind=`, which is emit()'s own argument — the
+    TypeError killed the whole cycle instead of skipping one artifact."""
+    ctx, policy, decider = live_ctx(tmp_path)
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    ctx.world.add_artifact("192.168.1.10", "persist-timestomp", "timestomp (x)",
+                           check_cmd="true " + "x" * 300)
+    loop = Loop(ctx, policy=policy, decider=decider, sensors=ctx.sensors,
+                sleeper=lambda _s: None)
+    loop.verify_artifacts()          # must not raise
+    rejected = [e for e in ctx.log.read() if e["kind"] == "artifact_check_rejected"]
+    assert rejected and "exceeds cap" in rejected[-1]["error"]
+
+
 def test_a_policy_refusal_does_not_count_as_an_effect_failure(tmp_path):
     """A protected target is not a broken mechanism; retry budgets must not eat it."""
     ctx, policy, decider = live_ctx(tmp_path)
