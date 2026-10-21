@@ -125,13 +125,17 @@ def is_legacy_account_name(name):
 def valid_comp_name(name):
     return bool(name) and ".." not in name and _COMP_NAME_RE.fullmatch(name) is not None
 
-# 8.8.8.8 alone broke every box on an uplink that filters it (live: run-fee03a45 could not
-# resolve download.docker.com while 1.1.1.1 answered); resolved fails over between the two.
+# A hardcoded public resolver broke every box on an uplink that filters it (live: run-fee03a45
+# could not resolve download.docker.com); TEZ_BOX_DNS lets a placement name its own resolver
+# first (the range gateway), with public ones as fallback.
+BOX_DNS = (os.environ.get("TEZ_BOX_DNS") or "1.1.1.1 8.8.8.8").strip()
+BOX_DNS_PRIMARY = BOX_DNS.split()[0]
+_DNS_RESOLV = "".join(f"nameserver {ns}\\n" for ns in BOX_DNS.split())
 DNS_FIX_CMD = (
-    'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf; '
-    'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf.head; '
+    f'printf "{_DNS_RESOLV}" | sudo tee /etc/resolv.conf; '
+    f'printf "{_DNS_RESOLV}" | sudo tee /etc/resolv.conf.head; '
     "sudo mkdir -p /etc/systemd/resolved.conf.d; "
-    'printf "[Resolve]\\nDNS=1.1.1.1 8.8.8.8\\n" | sudo tee /etc/systemd/resolved.conf.d/upstream.conf; '
+    f'printf "[Resolve]\\nDNS={BOX_DNS}\\n" | sudo tee /etc/systemd/resolved.conf.d/upstream.conf; '
     "sudo systemctl restart systemd-resolved 2>/dev/null || true"
 )
 

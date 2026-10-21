@@ -5,6 +5,7 @@ import time
 
 import requests
 
+from common.utils import BOX_DNS_PRIMARY
 from golden.golden_target_ops import _quote_sshkeys
 from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.lifecycle import start_vm
@@ -148,7 +149,7 @@ def create_engine(state, ownership, node, *, vmid, template_vmid, team_identifie
                 "ciuser": username,
                 "sshkeys": _quote_sshkeys(ssh_public_key),
                 "ipconfig0": f"ip={mgmt_ip}/24" + (f",gw={mgmt_gw}" if mgmt_gw else ""),
-                "nameserver": "1.1.1.1 8.8.8.8",
+                "nameserver": BOX_DNS_PRIMARY,
             })
         _configure(node, vmid, config)
         set_discard(node, vmid, ensure_disk_size(node, vmid, ENGINE_DISK_GB))
@@ -178,7 +179,7 @@ def create_team_box(state, ownership, target, *, source_vmid, box_username, box_
                 "sshkeys": _quote_sshkeys(ssh_public_key),
                 "ipconfig0": f"ip={target['ip']}/24,gw=192.168.{target['identifier']}.1",
                 # Never the team's own dns box: nakon installs bind9 over apt, which needs a working resolver.
-                "nameserver": "1.1.1.1 8.8.8.8",
+                "nameserver": BOX_DNS_PRIMARY,
             })
         _configure(node, vmid, config)
         set_discard(node, vmid, ensure_disk_size(node, vmid, box.get("disk_gb")))

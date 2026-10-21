@@ -6,7 +6,7 @@ from pathlib import Path
 
 from common.constants import (GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM, RED_SEGMENT_GW,
                               RED_SEGMENT_IP, RED_SEGMENT_SUBNET)
-from common.utils import compfile_value
+from common.utils import BOX_DNS, compfile_value
 from estate import config
 from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.guest_exec import guest_agent_exec_root, wait_for_guest_agent
@@ -160,7 +160,7 @@ def _netplan(iface, ip, gw, red_iface):
     # or the box reaches 8.8.8.8 and still resolves nothing.
     return (f"network:\n  version: 2\n  ethernets:\n"
             f"    {iface}:\n      dhcp4: no\n      addresses: ['{ip}/24']\n"
-            f"      nameservers:\n        addresses: [1.1.1.1, 8.8.8.8]\n"
+            f"      nameservers:\n        addresses: [{', '.join(BOX_DNS.split())}]\n"
             f"      routes:\n        - to: default\n          via: {gw}\n"
             f"    {red_iface}:\n      dhcp4: no\n      addresses: ['{RED_SEGMENT_IP}/24']\n"
             f"      routes:\n        - to: {ROUTE_NOTE}\n          via: {RED_SEGMENT_GW}\n")

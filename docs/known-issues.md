@@ -44,8 +44,11 @@ now time out from the host while the gateway resolver 10.0.0.1 answers, so a fre
 resolve `download.docker.com`/`security.ubuntu.com` and the deploy dies at
 `install docker compose v2 plugin` (`run-fee03a45`), and boxes lose the Ubuntu archive the same
 way. The pair `1.1.1.1 8.8.8.8` covers a single filtered resolver, not a filtered *public* path.
-**Next action**: make the box DNS a placement value (the range's own gateway/upstream resolver
-first, public resolvers only as fallback), then deploy cde-2026 to prove resolution end to end.
+`TEZ_BOX_DNS` now carries the placement value (space-separated, first entry is the box's
+cloud-init nameserver, all entries land in `resolv.conf`/`resolved.conf.d`); it is unset on this
+estate, which therefore still gets the public pair.
+**Next action**: set `TEZ_BOX_DNS` to the range gateway resolver for this uplink and deploy
+cde-2026 to prove resolution end to end before trusting it as the estate default.
 
 ### The template builders reach their scratch VM through node shell
 
