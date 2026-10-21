@@ -117,7 +117,10 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     ), timeout=30, step="start docker")
 
     print(f"  Cloning Quotient ({quotient_ref or 'default branch'})...")
-    _run_engine_cmd(ctx, _clone_quotient_cmd(quotient_ref), timeout=120,
+    # 120s was tight enough to fail a deploy while GitHub crawled (live: run-5286db18 timed
+    # out mid-clone); a shallow clone with submodules is still fast on a healthy link, so the
+    # budget only costs a slow uplink's patience, never a false success.
+    _run_engine_cmd(ctx, _clone_quotient_cmd(quotient_ref), timeout=600,
                     step="clone Quotient")
 
     _run_engine_cmd(ctx, _patch_quotient_injects_cmd(), timeout=30,

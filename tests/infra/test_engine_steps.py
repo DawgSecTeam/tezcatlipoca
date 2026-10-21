@@ -135,9 +135,11 @@ class QuotientInjectPatch(unittest.TestCase):
     def test_bootstrap_runs_the_patch_after_the_clone(self):
         import engine.engine_bootstrap_ops as bo
         steps = []
+        timeouts = {}
 
         def fake_run_cmd(ctx, cmd, step, **kwargs):
             steps.append(step)
+            timeouts[step] = kwargs.get("timeout")
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         with mock.patch.object(bo, "_run_engine_cmd", side_effect=fake_run_cmd), \
@@ -146,6 +148,8 @@ class QuotientInjectPatch(unittest.TestCase):
         self.assertIn("patch Quotient inject page", steps)
         self.assertLess(steps.index("clone Quotient"),
                         steps.index("patch Quotient inject page"))
+        # a slow link must not fail the clone at the old 120s cap (live: run-5286db18)
+        self.assertGreaterEqual(timeouts["clone Quotient"], 300)
 
 
 if __name__ == "__main__":
