@@ -331,7 +331,11 @@ def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
         entry["pivot"] = job["transport"] in PIVOT_TRANSPORTS
         # Pivots need a parent listener and beacons are the alternate control
         # path; both are built and shipped, not seeded blind.
-        entry["plant"] = not job["beacon"] and job["transport"] not in PIVOT_TRANSPORTS
+        # Windows' DNS client exits after the resolver gives up; the transport is
+        # built and shipped, and DNS is planted and proven on the Linux boxes.
+        unsupported = job["os"] == "windows" and job["transport"] == "dns"
+        entry["plant"] = (not job["beacon"] and not unsupported
+                          and job["transport"] not in PIVOT_TRANSPORTS)
         return entry
 
     # Sliver's Go importer is not re-entrant across concurrent Generate calls
