@@ -127,6 +127,12 @@ def _run_stage(ctx, ip, stage, mode, dry_run=False):
         return {"stage": stage, "effect": "implant_channel", "ok": result.ok,
                 "detail": result.detail}
     if stage == "persist":
+        # The seed runs twice (deploy phase 7, then the scrim's stage_red): a family already
+        # standing is the seed's goal met, not a failed action (live: cde-2026 counted 8).
+        from .effects.persist import auto_order, standing_families
+        if set(auto_order(ctx.is_windows(ip))) <= standing_families(ctx.world, ip):
+            return {"stage": stage, "effect": "persist", "ok": True,
+                    "detail": "every persistence family already standing"}
         result = execute("persist", {"ip": ip, "family": "auto"}, ctx, source="seed")
         return {"stage": stage, "effect": "persist", "ok": result.ok,
                 "detail": result.detail}
@@ -136,9 +142,14 @@ def _run_stage(ctx, ip, stage, mode, dry_run=False):
 
 def _run_evasion(ctx, ip, dry_run=False):
     available = _families_for(ctx, ip)
+    from .effects.persist import standing_families
+    standing = standing_families(ctx.world, ip)
     for family in EVASION_FAMILIES:
         if family not in available:
             continue
+        if family in standing:
+            return {"stage": "evasion", "effect": f"persist:{family}", "ok": True,
+                    "detail": f"{family} already standing"}
         result = execute("persist", {"ip": ip, "family": family}, ctx, source="seed")
         return {"stage": "evasion", "effect": f"persist:{family}", "ok": result.ok,
                 "detail": result.detail}
