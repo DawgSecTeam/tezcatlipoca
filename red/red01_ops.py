@@ -178,11 +178,10 @@ def _iface_mac(node, vmid, name):
 
 
 def _apt_prelude():
-    # A fresh clone's cloud-init (and unattended-upgrades) can hold apt's lists lock;
-    # DPkg::Lock::Timeout covers the dpkg lock, not the lists lock `update` takes
+    # cloud-init was already waited for above, but unattended-upgrades can still hold apt's
+    # lists lock; DPkg::Lock::Timeout covers the dpkg lock, not the lists lock `update` takes
     # (live: run-00488d45's cde deploy died at its last step on exactly that).
     return ("export DEBIAN_FRONTEND=noninteractive; "
-            "cloud-init status --wait >/dev/null 2>&1 || true; "
             "for i in $(seq 1 12); do "
             "apt-get -o DPkg::Lock::Timeout=600 update -qq && break; sleep 10; "
             "done; "
