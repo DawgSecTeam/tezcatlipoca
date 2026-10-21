@@ -3,6 +3,7 @@
 import time
 
 from engine.engine_cmd_ops import _run_engine_cmd
+from common.utils import DNS_FIX_CMD
 from engine.engine_bootstrap_ops import _install_firewall_and_healthcheck, push_quotient_env
 
 
@@ -82,6 +83,9 @@ def prepare_engine_from_template(ctx, postgres_password, redis_password):
     print("  Preparing engine from template (.env + fresh-volume compose up)...")
     _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120,
                     step="grow engine root filesystem")
+    # Same baked-in 8.8.8.8 as the build path: the clone inherits the image's resolved drop-in,
+    # so the placement list must be written before anything resolves a name.
+    _run_engine_cmd(ctx, DNS_FIX_CMD, timeout=60, step="fix engine DNS")
     push_quotient_env(ctx, postgres_password, redis_password)
     # Same race as the build path (bootstrap_scoring_engine): a fresh volume's Postgres can
     # miss compose's health window and the server exits 2 once, so one failure is not a dead

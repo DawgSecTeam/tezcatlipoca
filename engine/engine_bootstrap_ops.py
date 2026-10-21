@@ -61,8 +61,13 @@ def _patch_quotient_injects_cmd():
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
     # Grow the root to the disk we sized before the packages/Docker/Quotient build.
     from engine.engine_identity_ops import _GROW_ROOT_CMD
+    from common.utils import DNS_FIX_CMD
     _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120,
                     step="grow engine root filesystem")
+    # The engine image carries resolved.conf.d with 8.8.8.8 baked in (and a tailnet search
+    # domain); on a network that filters 8.8.8.8 every apt/git step fails while the gateway
+    # resolver answers (live: run-deba55da "Temporary failure resolving" on the engine).
+    _run_engine_cmd(ctx, DNS_FIX_CMD, timeout=60, step="fix engine DNS")
     _run_engine_cmd(ctx, (
         # unattended-upgrades holds the dpkg/archives locks past Lock::Timeout and re-fires
         # mid-upgrade; stopping the units alone let apt-daily-upgrade spawn apt-get between

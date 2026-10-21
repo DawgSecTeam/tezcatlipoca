@@ -149,6 +149,9 @@ class QuotientInjectPatch(unittest.TestCase):
                 mock.patch.object(bo, "install_range_healthcheck"):
             bootstrap_scoring_engine(_CTX, "pg", "redis", quotient_ref="abc")
         self.assertIn("patch Quotient inject page", steps)
+        # the image's baked 8.8.8.8 must be replaced before the first package install
+        self.assertIn("fix engine DNS", steps)
+        self.assertLess(steps.index("fix engine DNS"), steps.index("install engine packages"))
         self.assertLess(steps.index("clone Quotient"),
                         steps.index("patch Quotient inject page"))
         # a slow link must not fail the clone at the old 120s cap (live: run-5286db18)

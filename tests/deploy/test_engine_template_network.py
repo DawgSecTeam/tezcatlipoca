@@ -14,6 +14,20 @@ sys.path.insert(0, str(_REPO))
 from engine import engine_identity_ops
 
 
+def test_prepare_from_template_fixes_dns_before_compose_up():
+    steps = []
+
+    def fake(ctx, cmd, **kw):
+        steps.append(kw.get("step"))
+        return None
+
+    with mock.patch.object(engine_identity_ops, "_run_engine_cmd", side_effect=fake), \
+         mock.patch.object(engine_identity_ops, "push_quotient_env"), \
+         mock.patch.object(engine_identity_ops, "_install_firewall_and_healthcheck"):
+        engine_identity_ops.prepare_engine_from_template(SimpleNamespace(), "pg", "redis")
+    assert steps.index("fix engine DNS") < steps.index("compose up")
+
+
 def test_prepare_from_template_installs_the_range_firewall():
     with mock.patch.object(engine_identity_ops, "_run_engine_cmd"), \
          mock.patch.object(engine_identity_ops, "push_quotient_env"), \
