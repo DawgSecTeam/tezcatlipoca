@@ -545,13 +545,15 @@ class Planter:
             time.sleep(poll_interval)
 
     def _fresh(self, record):
-        seen = record.get("seen_at")
-        if not seen:
+        if not record:
             return False
         if str(record.get("agent") or "").lower() == "none":
             return False
         max_age = float(self.ctx.cfg["c2"].get("callback_max_age_sec", 120))
-        return (self._now() - float(seen)) <= max_age
+        if hasattr(self.ctx.c2, "record_fresh"):
+            return bool(self.ctx.c2.record_fresh(record, max_age))
+        seen = record.get("seen_at")
+        return bool(seen) and (self._now() - float(seen)) <= max_age
 
     def _iso(self, epoch):
         return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(float(epoch)))

@@ -166,7 +166,9 @@ class SliverClient:
                       "external_id": row.ID, "name": name, "box_id": _box_id(name),
                       "host": row.Hostname, "user": row.Username,
                       "process": row.Filename, "async": is_beacon,
-                      "os": row.OS, "transport": _transport_of(name)}
+                      "dead": bool(row.IsDead), "os": row.OS,
+                      "interval": float(getattr(row, "Interval", 0) or 0) / 1e9,
+                      "transport": _transport_of(name)}
             if not seen:
                 record["stale"] = True
             out.append(record)
@@ -184,11 +186,22 @@ class SliverClient:
     def callbacks_by_name(self):
         return {record["name"]: record for record in self._records()}
 
+    def record_fresh(self, record, max_age=None):
+        if not record or record.get("dead") or not record.get("seen_at"):
+            return False
+        # A session is a live connection in GetSessions; LastCheckin only moves
+        # on traffic, so an idle session is not a dead one. A beacon is dead
+        # only after its own interval + jitter has passed without a check-in.
+        if not record.get("async"):
+            return True
+        age = self._now() - float(record["seen_at"])
+        limit = max(float(max_age or self.callback_max_age),
+                    float(record.get("interval") or 60) * 2 + 60)
+        return age <= limit
+
     def fresh_callbacks(self):
-        now = self._now()
         return {box: rec for box, rec in self.callbacks().items()
-                if rec.get("seen_at") is not None and not rec.get("stale")
-                and (now - rec["seen_at"]) <= self.callback_max_age}
+                if self.record_fresh(rec)}
 
     def callback_for(self, box_id):
         record = self.callbacks().get(box_id)
