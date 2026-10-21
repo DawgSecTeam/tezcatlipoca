@@ -334,9 +334,9 @@ def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
         entry["plant"] = not job["beacon"] and job["transport"] not in PIVOT_TRANSPORTS
         return entry
 
-    # Sliver compiles server-side; two at a time cuts the matrix wall time
-    # without starving the box's CPU.
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    # Sliver's Go importer is not re-entrant across concurrent Generate calls
+    # (two Windows builds collided on src/runc/cgroup), so the matrix is serial.
+    with ThreadPoolExecutor(max_workers=1) as pool:
         built = list(pool.map(_build, jobs))
     for entry in built:
         data = entry.pop("data")

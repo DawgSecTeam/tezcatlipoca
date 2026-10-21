@@ -95,6 +95,9 @@ def install_script(box_ip):
     url = f"{SLIVER_REPO}/releases/download/{SLIVER_VERSION}/{SERVER_NAME}"
     return f"""set -e
 mkdir -p {INSTALL_DIR} /etc/tlaloc
+# Build scratch from a killed c2-prep survives and makes the next Generate fail
+# with "rename import dir: target exists"; the Go build cache is elsewhere.
+rm -rf /root/.sliver/slivers
 if [ ! -x {SERVER_BIN} ]; then
   curl -fsSL --retry 3 --retry-delay 5 -o {SERVER_BIN}.tmp {url}
   chmod 755 {SERVER_BIN}.tmp
