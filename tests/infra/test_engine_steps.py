@@ -161,6 +161,9 @@ class QuotientInjectPatch(unittest.TestCase):
         # an engine that already has the plugin must not re-fetch the key from the CDN
         self.assertIn("docker compose version", key_cmd)
         self.assertIn("command -v growpart", key_cmd)
+        pkgs = cmds["install engine packages"]
+        self.assertIn("--fix-missing", pkgs)
+        self.assertIn("for i in 1 2 3", pkgs)
 
 
 if __name__ == "__main__":

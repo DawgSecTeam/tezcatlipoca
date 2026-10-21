@@ -81,12 +81,17 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         "sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null; "
         "sudo dpkg --configure -a 2>/dev/null; "
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 -f install -y 2>/dev/null; "
-        "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && "
-        "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 upgrade -y && "
-        "sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y "
+        # A reset mid-download fails the whole apt run (live: run-802b37f5, "Unable to connect
+        # to us.archive.ubuntu.com"); the retry only costs time when the mirror really is gone.
+        "ok=0; for i in 1 2 3; do "
+        "  if sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && "
+        "     sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 upgrade -y && "
+        "     sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --fix-missing "
         # python3-paramiko is what the remote nakon deploy imports; baked in so a deploy
         # never pip-installs into the engine's system python.
-        "docker.io git curl python3-pip python3-paramiko apt-cacher-ng"
+        "       docker.io git curl python3-pip python3-paramiko apt-cacher-ng; "
+        "  then ok=1; break; fi; sleep 15; "
+        "done; test \"$ok\" = 1"
     ), timeout=1800, step="install engine packages")
 
     # apt-cacher-ng defaults to port 3142 on all interfaces; the boxes' gateway is the
