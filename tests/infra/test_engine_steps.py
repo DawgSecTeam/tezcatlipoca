@@ -158,6 +158,9 @@ class QuotientInjectPatch(unittest.TestCase):
         self.assertIn("-o /etc/apt/keyrings/docker.asc", key_cmd)
         self.assertNotIn("| sudo tee /etc/apt/keyrings/docker.asc", key_cmd)
         self.assertIn("test -s /etc/apt/keyrings/docker.asc", key_cmd)
+        # an engine that already has the plugin must not re-fetch the key from the CDN
+        self.assertIn("docker compose version", key_cmd)
+        self.assertIn("command -v growpart", key_cmd)
 
 
 if __name__ == "__main__":

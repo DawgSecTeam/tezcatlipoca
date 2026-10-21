@@ -103,6 +103,11 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     # "succeeded" and the deploy died later as an unsigned-repo GPG error (live: run-8d6ea600).
     _run_engine_cmd(ctx, (
         "set -e; "
+        # An engine derived from a template already carries the plugin; re-fetching its key
+        # is how a CDN reset killed a deploy whose engine needed nothing (live: run-dbb5c3dc).
+        "if sudo docker compose version >/dev/null 2>&1 && command -v growpart >/dev/null 2>&1; then "
+        "  echo '  docker compose v2 already present'; exit 0; "
+        "fi; "
         "sudo install -m 0755 -d /etc/apt/keyrings; "
         "for i in 1 2 3; do "
         "  sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && break; "
