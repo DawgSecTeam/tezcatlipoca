@@ -253,7 +253,7 @@ class PlantTests(unittest.TestCase):
         manifest = self.comp / "red" / "manifest.json"
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(json.dumps(
-            {"boxes": {"192.168.101.2": {"stages": [{"stage": "access"}]}}}))
+            {"boxes": {"192.168.101.2": {"stages": ["access", "channel"]}}}))
 
     def test_assume_breach_off_skips_the_seed_and_manifest(self):
         self.comp = compfile(self.tmp.name + "off", "red.assume_breach off\nred.c2 off\n"

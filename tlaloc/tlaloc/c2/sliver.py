@@ -150,29 +150,34 @@ class SliverClient:
             rows.append((beacon, True))
         return rows
 
-    def callbacks(self):
-        """Keyed by box id: the freshest channel per box, all channels under by_name."""
-        out = {}
+    def _records(self):
+        out = []
         for row, is_beacon in self._rows():
             name = str(row.Name or "").strip()
             if not name:
                 continue
-            box_id = _box_id(name)
             seen = float(row.LastCheckin or 0)
             record = {"seen_at": seen or self._now(), "agent": row.Transport or "?",
-                      "external_id": row.ID, "name": name, "box_id": box_id,
+                      "external_id": row.ID, "name": name, "box_id": _box_id(name),
                       "host": row.Hostname, "user": row.Username,
                       "process": row.Filename, "async": is_beacon,
                       "os": row.OS, "transport": _transport_of(name)}
             if not seen:
                 record["stale"] = True
-            current = out.get(box_id)
+            out.append(record)
+        return out
+
+    def callbacks(self):
+        """Keyed by box id: the freshest channel per box, all channels under by_name."""
+        out = {}
+        for record in self._records():
+            current = out.get(record["box_id"])
             if current is None or record["seen_at"] > current["seen_at"]:
-                out[box_id] = record
+                out[record["box_id"]] = record
         return out
 
     def callbacks_by_name(self):
-        return {record["name"]: record for record in self.callbacks().values()}
+        return {record["name"]: record for record in self._records()}
 
     def fresh_callbacks(self):
         now = self._now()

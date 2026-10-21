@@ -70,6 +70,19 @@ def test_callbacks_are_keyed_by_box_and_match_their_build_name():
     assert record["external_id"] == "id-1"
 
 
+def test_each_transport_keeps_its_own_callback_row_on_one_box():
+    from tlaloc.c2.sliver_proto.clientpb import client_pb2
+    rows = [(client_pb2.Session(ID=f"id-{t}", Name=f"web01-150-{t}",
+                                OS="linux", Transport=t, LastCheckin=1000 + i),
+             False)
+            for i, t in enumerate(("mtls", "http", "dns"))]
+    c = SliverClient(_cfg(), channel=FakeRpc(rows), now=lambda: 1001)
+    assert set(c.callbacks_by_name()) == {
+        "web01-150-mtls", "web01-150-http", "web01-150-dns"}
+    # the per-box view stays one freshest channel; the per-name view proves coverage
+    assert c.callbacks()["web01-150"]["transport"] == "dns"
+
+
 def test_dns_keeps_the_gateway_port_separate_from_the_server_port():
     assert DEFAULT_PORTS["dns"]["gateway"] == 53
     assert DEFAULT_PORTS["dns"]["server"] == 5353

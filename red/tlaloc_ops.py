@@ -661,6 +661,19 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                 f"the day-0 seed left no planted box: the manifest at {manifest['path']} "
                 f"lists none (tlaloc's seed exits 0 even when every box fails)")
         print(f"  tlaloc      : seed manifest proves {seeded} box(es) planted")
+        if (use_mythic or use_sliver) and int(block.get("depth", 3)) >= 2:
+            try:
+                seeded_boxes = (json.loads(Path(manifest["path"]).read_text())
+                                .get("boxes") or {})
+            except (OSError, ValueError):
+                seeded_boxes = {}
+            no_channel = [ip for ip, rec in seeded_boxes.items()
+                          if "channel" not in (rec.get("stages") or [])]
+            if no_channel:
+                raise RuntimeError(
+                    f"the day-0 seed did not plant a checked-in C2 channel on "
+                    f"{', '.join(no_channel)} — the payloads ran but their "
+                    f"callbacks never landed (full spread proves every transport)")
     else:
         print("  tlaloc      : assume_breach off — no day-0 seed or manifest")
     start_unit(ssh_key, red_ip, runner=runner)
