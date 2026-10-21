@@ -99,9 +99,16 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     ), check=False, timeout=60, step="enable apt-cacher-ng")
 
     print("  Installing Docker Compose v2 plugin...")
+    # The key fetch must own its exit status: piped into tee, a reset mid-download still
+    # "succeeded" and the deploy died later as an unsigned-repo GPG error (live: run-8d6ea600).
     _run_engine_cmd(ctx, (
-        "install -m 0755 -d /etc/apt/keyrings && "
-        "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc > /dev/null && "
+        "set -e; "
+        "sudo install -m 0755 -d /etc/apt/keyrings; "
+        "for i in 1 2 3; do "
+        "  sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && break; "
+        "  sleep 5; "
+        "done; "
+        "sudo test -s /etc/apt/keyrings/docker.asc && "
         "sudo chmod a+r /etc/apt/keyrings/docker.asc && "
         "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] "
         "https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable\" "

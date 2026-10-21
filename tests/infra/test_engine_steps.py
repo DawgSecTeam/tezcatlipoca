@@ -137,9 +137,12 @@ class QuotientInjectPatch(unittest.TestCase):
         steps = []
         timeouts = {}
 
+        cmds = {}
+
         def fake_run_cmd(ctx, cmd, step, **kwargs):
             steps.append(step)
             timeouts[step] = kwargs.get("timeout")
+            cmds[step] = cmd
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         with mock.patch.object(bo, "_run_engine_cmd", side_effect=fake_run_cmd), \
@@ -150,6 +153,11 @@ class QuotientInjectPatch(unittest.TestCase):
                         steps.index("patch Quotient inject page"))
         # a slow link must not fail the clone at the old 120s cap (live: run-5286db18)
         self.assertGreaterEqual(timeouts["clone Quotient"], 300)
+        # the docker key fetch owns its exit status (a reset must not surface as a GPG error)
+        key_cmd = cmds["install docker compose v2 plugin"]
+        self.assertIn("-o /etc/apt/keyrings/docker.asc", key_cmd)
+        self.assertNotIn("| sudo tee /etc/apt/keyrings/docker.asc", key_cmd)
+        self.assertIn("test -s /etc/apt/keyrings/docker.asc", key_cmd)
 
 
 if __name__ == "__main__":
