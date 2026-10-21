@@ -302,9 +302,11 @@ def _transports_arg(raw):
 
 
 def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
+    from concurrent.futures import ThreadPoolExecutor
     from .c2 import PIVOT_TRANSPORTS
     client.ensure_listeners()
-    beacons = {"mtls", "http"} & set(transports)
+    beacons = {"mtls"} & set(transports)
+    jobs = []
     for box in ctx.intel.boxes():
         box_id = f"{box['box']}-{box['identifier']}"
         os_name = "windows" if box["windows"] else "linux"
@@ -312,24 +314,35 @@ def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
         for transport in transports:
             if transport == "named-pipe" and os_name != "windows":
                 continue
-            kinds = [(False, transport)]
+            jobs.append({"box_id": box_id, "os": os_name, "gateway": gateway,
+                         "transport": transport,
+                         "pivot_host": box["ip"] if transport in PIVOT_TRANSPORTS else None,
+                         "beacon": False})
             if transport in beacons:
-                kinds.append((True, f"{transport}-beacon"))
-            for beacon, key_transport in kinds:
-                pivot_host = box["ip"] if transport in PIVOT_TRANSPORTS else None
-                entry = client.build_payload(
-                    box_id, os_name, transport=transport, gateway=gateway,
-                    pivot_host=pivot_host, beacon=beacon)
-                suffix = "exe" if os_name == "windows" else "bin"
-                entry["file"] = f"{entry['name']}.{suffix}"
-                entry["pivot"] = transport in PIVOT_TRANSPORTS
-                # Pivots need a parent listener and beacons are the alternate
-                # control path; both are built and shipped, not seeded blind.
-                entry["plant"] = not beacon and transport not in PIVOT_TRANSPORTS
-                data = entry.pop("data")
-                if write:
-                    (out_dir / entry["file"]).write_bytes(data)
-                manifest["boxes"][f"{entry['name']}"] = entry
+                jobs.append({**jobs[-1], "beacon": True})
+
+    def _build(job):
+        entry = client.build_payload(
+            job["box_id"], job["os"], transport=job["transport"],
+            gateway=job["gateway"], pivot_host=job["pivot_host"],
+            beacon=job["beacon"])
+        entry["file"] = (f"{entry['name']}."
+                         f"{'exe' if job['os'] == 'windows' else 'bin'}")
+        entry["pivot"] = job["transport"] in PIVOT_TRANSPORTS
+        # Pivots need a parent listener and beacons are the alternate control
+        # path; both are built and shipped, not seeded blind.
+        entry["plant"] = not job["beacon"] and job["transport"] not in PIVOT_TRANSPORTS
+        return entry
+
+    # Sliver compiles server-side; two at a time cuts the matrix wall time
+    # without starving the box's CPU.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        built = list(pool.map(_build, jobs))
+    for entry in built:
+        data = entry.pop("data")
+        if write:
+            (out_dir / entry["file"]).write_bytes(data)
+        manifest["boxes"][entry["name"]] = entry
 
 
 def build_parser():
