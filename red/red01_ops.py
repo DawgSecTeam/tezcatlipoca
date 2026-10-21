@@ -177,6 +177,18 @@ def _iface_mac(node, vmid, name):
     return _exec(node, vmid, f"cat /sys/class/net/{name}/address").strip().lower()
 
 
+def _apt_prelude():
+    # A fresh clone's cloud-init (and unattended-upgrades) can hold apt's lists lock;
+    # DPkg::Lock::Timeout covers the dpkg lock, not the lists lock `update` takes
+    # (live: run-00488d45's cde deploy died at its last step on exactly that).
+    return ("export DEBIAN_FRONTEND=noninteractive; "
+            "cloud-init status --wait >/dev/null 2>&1 || true; "
+            "for i in $(seq 1 12); do "
+            "apt-get -o DPkg::Lock::Timeout=600 update -qq && break; sleep 10; "
+            "done; "
+            "apt-get -o DPkg::Lock::Timeout=600 install -y -qq " + DEPS)
+
+
 def _exec(node, vmid, script, timeout=300):
     rc, out, err = guest_agent_exec_root(node, vmid, script, timeout=timeout)
     if rc != 0:
@@ -275,9 +287,7 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
                       f"ip -4 -brief addr show | grep -qF '{ip}'", 90)
 
     # Mythic's own deps are installed by Gaia, not here.
-    _exec(node, vmid, "export DEBIAN_FRONTEND=noninteractive; "
-                      "apt-get -o DPkg::Lock::Timeout=600 update -qq && "
-                      "apt-get -o DPkg::Lock::Timeout=600 install -y -qq " + DEPS, 900)
+    _exec(node, vmid, _apt_prelude(), 1800)
     return {"ok": True, "vmid": vmid, "ip": ip, "node": node,
             "segment_ip": RED_SEGMENT_IP, "segment_subnet": RED_SEGMENT_SUBNET}
 
