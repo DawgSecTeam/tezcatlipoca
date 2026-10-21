@@ -223,8 +223,10 @@ class World:
         self.meta["dead_artifacts"] = sorted(set(keys))
         self.save()
 
-    def add_impact(self, ip, service, mode, detail=None, team=None):
+    def add_impact(self, ip, service, mode, detail=None, team=None, port=None):
         rec = {"ip": ip, "service": service, "mode": mode, "at": now_iso()}
+        if port:
+            rec["port"] = port
         if team:
             # The report groups impacts by team; a target record only carries one
             # once something happened to create it, so the count mostly read "?".

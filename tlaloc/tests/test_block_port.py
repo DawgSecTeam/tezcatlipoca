@@ -98,6 +98,7 @@ def test_a_block_that_holds_is_an_impact_with_an_exact_undo(
     assert impacts[0]["service"] == "MySQL pin"
     assert impacts[0]["mode"] == "block_port"
     assert impacts[0]["ip"] == IP
+    assert impacts[0]["port"] == int(PIN["port"])
 
     recipe = result.restore["recipe"]
     if undo is None:
