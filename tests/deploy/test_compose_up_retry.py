@@ -28,6 +28,7 @@ def _run(failures):
 
     with mock.patch.object(engine_identity_ops, "_run_engine_cmd", side_effect=fake), \
          mock.patch.object(engine_identity_ops, "push_quotient_env"), \
+         mock.patch.object(engine_identity_ops, "_install_firewall_and_healthcheck"), \
          mock.patch.object(engine_identity_ops.time, "sleep"):
         engine_identity_ops.prepare_engine_from_template(SimpleNamespace(), "pg", "redis")
     return attempts

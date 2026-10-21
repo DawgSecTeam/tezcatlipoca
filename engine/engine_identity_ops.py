@@ -3,7 +3,7 @@
 import time
 
 from engine.engine_cmd_ops import _run_engine_cmd
-from engine.engine_bootstrap_ops import push_quotient_env
+from engine.engine_bootstrap_ops import _install_firewall_and_healthcheck, push_quotient_env
 
 
 def clean_engine_for_template(ctx, vmid):
@@ -103,3 +103,9 @@ def prepare_engine_from_template(ctx, postgres_password, redis_password):
         "ss -ltn | grep -q ':3142 ' && echo '  apt-cacher-ng listening on 3142' "
         "|| sudo systemctl enable --now apt-cacher-ng"
     ), check=False, timeout=60, step="ensure apt-cacher-ng")
+    # Kernel iptables state never survives a clone: a template-derived engine relies on the
+    # template's range-firewall.timer, which fires on boot only if the template build reached
+    # that step (a build that failed earlier leaves no units — observed on the leftover build
+    # VM, run-62f9e120). Installing here makes the team NAT immediate and independent of the
+    # template's build state, which is what the golden builds on the team bridges depend on.
+    _install_firewall_and_healthcheck(ctx)
