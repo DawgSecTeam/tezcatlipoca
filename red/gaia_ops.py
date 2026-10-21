@@ -514,8 +514,11 @@ def push_env(ssh_key, red_ip, body, *, runner=None, timeout=120):
 
 
 def mythic_enabled(comp_dir):
-    raw = compfile_value(Path(comp_dir) / "Compfile", "red.c2", "") or ""
-    return str(raw).strip().lower() not in ("off", "false", "0", "no")
+    comp = Path(comp_dir) / "Compfile"
+    raw = compfile_value(comp, "red.c2", "") or ""
+    engine = (compfile_value(comp, "red.c2_engine") or "sliver").strip().lower()
+    return (engine == "mythic"
+            and str(raw).strip().lower() not in ("off", "false", "0", "no"))
 
 
 def _team_records(comp_dir):

@@ -32,7 +32,7 @@ Per-symbol rationale: [internals.md](internals.md). Open problems: [known-issues
 | `quotient/setup.py` | `event.conf`, team seeding, unpause, injects; `_SERVICE_TO_CHECK` map |
 | `common/` | `constants` (vmid math, limits, snapshot names), `targets`, `ssh_ops`, `windows_ops`, `timing`, `utils` |
 | `estate/` | The one component that mutates real infrastructure: `state` (the competition's document + resource inventory), `config` (native process config), `apply` (bridges, engine, team boxes), `engine_setup` (guest-side engine setup), `destroy` (tier order) |
-| `red/`, `run-agent-scrim.py`, `scrim-report.py` | Red-team range ops (`red01_ops` for red01 + the engine's red rules, `tlaloc_ops` for phase 7, `gaia_ops` for Mythic) and the red/blue scrim ([scrim-harness.md](scrim-harness.md)) |
+| `red/`, `run-agent-scrim.py`, `scrim-report.py` | Red-team range ops (`red01_ops` for red01 + the engine's red rules, `tlaloc_ops` for phase 7, `sliver_ops` for the Sliver server/operator; `gaia_ops` keeps the legacy Mythic path) and the red/blue scrim ([scrim-harness.md](scrim-harness.md)) |
 | `tlaloc/` | The red agent as a self-contained folder: package, tests, docs, systemd unit. Staged to red01 at `/opt/tlaloc` by `red/tlaloc_ops.py` and run by `tlaloc.service` |
 | `vendor/nakon` | Submodule pinned to a release; CLI-only catalog access and bundle builder |
 
@@ -157,9 +157,10 @@ ranges.
 container restart. The segment rules are not optional — they are installed even when `red.c2 off`.
 The script is a routed-segment FORWARD trio (`red → 192.168.0.0/16` ACCEPT, return
 `RELATED,ESTABLISHED` ACCEPT, DROP toward red) plus, when the C2 supplies a callback port, a
-per-team-gateway DNAT of that port to `10.200.0.10:<port>` and a nat-ACCEPT that keeps the flow out
-of the range's team SNAT. `red.c2 off` skips the Mythic install and the payload freeze; of the
-engine rules, only the DNAT is skipped. Satellite teams are reached through their jump: the jump
+per-team-gateway DNAT of each C2 transport port to `10.200.0.10:<server-port>` and a nat-ACCEPT
+that keeps the flow out of the range's team SNAT. Sliver is the default C2 (`red.c2_engine sliver`,
+installed by `red/sliver_ops.py`); `red.c2 off` skips the C2 install and the payload freeze, and of
+the engine rules only the DNAT is skipped. Mythic remains selectable with `red.c2_engine mythic`. Satellite teams are reached through their jump: the jump
 carries the single `RED_SEGMENT_SUBNET` path, accepts red to its local teams and SNATs it to
 `192.168.<id>.1` (so red's source identity survives only on engine-node teams)
 ([multi-node.md](multi-node.md#routed-red)).

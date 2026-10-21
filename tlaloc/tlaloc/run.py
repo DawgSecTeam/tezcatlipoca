@@ -9,7 +9,7 @@ from pathlib import Path
 from . import decide as decide_mod
 from . import report as report_mod
 from . import seed as seed_mod
-from .c2 import FakeMythic, MythicClient
+from .c2 import FakeMythic, FakeSliver, MythicClient, SliverClient
 from .ctx import Ctx
 from .effects import execute, get as get_effect, reload_registry
 from .errors import (EffectParamError, GuardrailError, PolicyError,
@@ -397,9 +397,13 @@ def build_context(cfg, *, comp_dir=None, dry_run=None, clef=None, llm=None, c2=N
 
     c2_client = c2
     if c2_client is None and cfg["c2"].get("enabled"):
-        c2_client = (MythicClient(cfg, log=log) if not (dry_run if dry_run is not None
-                                                        else cfg["run"]["dry_run"])
-                     else FakeMythic())
+        dry = dry_run if dry_run is not None else cfg["run"]["dry_run"]
+        engine = str(cfg["c2"].get("engine") or "sliver").lower()
+        if dry:
+            c2_client = FakeSliver() if engine == "sliver" else FakeMythic()
+        else:
+            c2_client = (SliverClient(cfg, log=log) if engine == "sliver"
+                         else MythicClient(cfg, log=log))
     sensors_client = sensors
     if sensors_client is None:
         sensors_client = Sensors(cfg, intel, world=world, log=log)

@@ -28,7 +28,9 @@ class ImplantChannel(Effect):
                   "desc": "'true' to re-try after two failures (a deliberate "
                           "re-plant, e.g. the day-0 seed or an operator fix)"},
         "box_id": {"type": "str", "desc": "manifest key (default <box>-<team>)"},
-        "transport": {"type": "enum", "choices": ["http", "webhook"],
+        "transport": {"type": "enum",
+                       "choices": ["mtls", "http", "https", "dns", "wg",
+                                   "named-pipe", "tcp-pivot"],
                       "desc": "callback transport (default: the manifest's)"},
     }
     tags = frozenset({"c2", "access"})
@@ -57,7 +59,8 @@ class ImplantChannel(Effect):
         planter = Planter(ctx, comp_dir=ctx.cfg["run"].get("comp_dir"),
                           manifest=getattr(ctx, "payload_manifest", None))
         info = planter.plant(ip, box_id, transport=params.get("transport"))
-        # A fresh Mythic needs minutes for its first check-in; 45s false-reported "no callback".
+        # A fresh C2 needs minutes for its first check-in; a shorter window
+        # false-reported "no callback".
         wait = int(ctx.cfg["c2"].get("callback_wait_sec", 120))
         detail = info.get("detail", "")
         # A channel that installs but never checks in is undiagnosable from the
@@ -79,7 +82,8 @@ class ImplantChannel(Effect):
         outcome = f"{detail}; channel: {channel}"
         result = Result(info.get("ok") and info.get("callback_seen"), outcome,
                         data={"box_id": box_id, "channel": bool(info.get("callback_seen")),
-                              "uuid": info.get("uuid"), "paths": info.get("paths")},
+                              "uuid": info.get("uuid"), "paths": info.get("paths"),
+                              "coverage": info.get("coverage") or {}},
                         installed=bool(info.get("ok")))
         if info.get("ok"):
             result.artifacts = [{"ip": ip, "kind": "c2-implant",

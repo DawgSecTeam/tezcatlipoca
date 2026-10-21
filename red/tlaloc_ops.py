@@ -141,12 +141,20 @@ def validate_red_block(block):
     if caps and int(caps.get("min_standing", 1)) < 1:
         problems.append({"field": "red.caps.min_standing",
                          "problem": "must be >= 1 (the pin needs one reachable service)"})
+    engine = str(block.get("c2_engine") or "sliver").strip().lower()
+    if engine not in ("sliver", "mythic"):
+        problems.append({"field": "red.c2_engine",
+                         "problem": f"must be sliver|mythic, got {engine!r}"})
+    spread = str(block.get("c2_implant_spread") or "draw").strip().lower()
+    if spread not in ("draw", "full"):
+        problems.append({"field": "red.c2_implant_spread",
+                         "problem": f"must be draw|full, got {spread!r}"})
     return problems
 
 
 def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
                   red_ip=None, quotient_url=None, clef_url=None, c2_url=None,
-                  c2_operation=None, llm=None):
+                  c2_operation=None, c2=None, llm=None):
     """The body of /etc/tlaloc/config.yaml — a diff against tlaloc's DEFAULTS."""
     block = block if block is not None else red_block(comp_dir)
     comp_dir = Path(comp_dir).resolve()
@@ -171,6 +179,8 @@ def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
     if c2_url:
         cfg.setdefault("c2", {}).update({"enabled": True, "base_url": c2_url,
                                          "operation": c2_operation or cfg["run"]["comp"]})
+    if c2:
+        cfg.setdefault("c2", {}).update(c2)
     # red.c2_implant_spread full: every implant surface on every box, not the per-plant draw.
     spread = str(block.get("c2_implant_spread") or "").strip()
     if spread:
@@ -225,10 +235,37 @@ def stage_command(comp_dir):
 
 def seed_command():
     """cd and --comp are load-bearing: the package is staged, and blind intel still exits 0."""
-    # Source c2.env — the unit gets the Mythic operator password through EnvironmentFile; a
-    # bare seed cannot authenticate, so its "no callback" verdicts are blind spots.
-    return (f"cd {INSTALL_DIR} && sudo -n bash -c 'set -a; . /etc/tlaloc/c2.env; "
+    # Source c2.env when it exists — the Mythic operator password arrives that way;
+    # Sliver's operator profile is a file the config names, so no env is needed.
+    return (f"cd {INSTALL_DIR} && sudo -n bash -c 'set -a; "
+            f"[ -f /etc/tlaloc/c2.env ] && . /etc/tlaloc/c2.env; "
             f"set +a; python3 -m tlaloc --config {CONFIG_PATH} --comp {INTEL_DIR} seed'")
+
+
+def comp_prep_remote_command(transports="all"):
+    """Runs ON red01, where the operator profile and the target intel live."""
+    return (f"cd {INSTALL_DIR} && sudo -n python3 -m tlaloc --config {CONFIG_PATH} "
+            f"--comp {INTEL_DIR} c2-prep --transports {transports}")
+
+
+def pull_payload_manifest(ssh_key, red_ip, comp_dir, *, runner=None):
+    dest = Path(comp_dir) / "red" / "payloads"
+    dest.mkdir(parents=True, exist_ok=True)
+    target = dest / "manifest.json"
+    proc = _ssh_run(ssh_key, red_ip, f"sudo -n cat {INTEL_DIR}/red/payloads/manifest.json",
+                    runner=runner, timeout=120)
+    if getattr(proc, "returncode", 1) != 0 or not getattr(proc, "stdout", ""):
+        raise RuntimeError(f"c2-prep wrote no payload manifest on red01 "
+                           f"({_tail(proc)})")
+    target.write_text(proc.stdout)
+    try:
+        boxes = (json.loads(proc.stdout) or {}).get("boxes") or {}
+    except ValueError as exc:
+        raise RuntimeError(f"c2-prep's manifest on red01 is not JSON: {exc}") from exc
+    if not boxes:
+        raise RuntimeError("c2-prep's manifest lists no payloads — the seed would "
+                           "plant nothing")
+    return {"path": str(target), "payloads": len(boxes)}
 
 
 def plant_command():
@@ -471,7 +508,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                         mythic_runner=None, llm=None, llm_key=None):
     """[7/8] Deploy red01, install the C2, seed, prove the config — every step raises."""
     from infra.ownership import Ownership
-    from red import gaia_ops, red01_ops
+    from red import gaia_ops, red01_ops, sliver_ops
     comp_dir = Path(getattr(ctx, "comp_dir"))
     # The workspace directory is not an identity: a dashboard run's comp dir is "comp" while the
     # competition is "scrim-one", so the same range named its state two ways and a seeded
@@ -503,11 +540,16 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
             "no decision-model endpoint: set the competition's red.clef_url or "
             "TEZ_CLEF_URL in the run host's environment (red01 must be able to "
             "reach it, or every decision silently falls back)")
+    engine = str(block.get("c2_engine") or "sliver").lower()
+    use_mythic = (bool(mythic) if mythic is not None
+                  else engine == "mythic" and gaia_ops.mythic_enabled(comp_dir))
+    use_sliver = (engine == "sliver" and not use_mythic
+                  and sliver_ops.sliver_enabled(comp_dir))
     write_config(comp_dir, cfg_path,
                  comp_id=comp_id,
                  engine_ip=getattr(ctx, "scoring_ip", None) or getattr(ctx, "engine_ip", None),
                  clef_url=clef_url,
-                 c2_url=block.get("c2_url"),
+                 c2_url=block.get("c2_url") if use_mythic else None,
                  c2_operation=block.get("c2_operation"),
                  llm=llm)
     print("  red01      : provisioning (clone + network + engine rules)...")
@@ -525,17 +567,16 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     grown = resize_red_disk(comp_dir, red_ip, red_vmid, ssh_key=ssh_key, runner=runner)
     if not grown.get("ok"):
         raise RuntimeError(
-            f"red01's disk could not grow to {red_disk_gb(comp_dir)}G — Mythic needs it "
+            f"red01's disk could not grow to {red_disk_gb(comp_dir)}G — the C2 needs it "
             f"({str(grown.get('detail'))[:300]})")
-    print(f"  mythic      : red01 disk {grown.get('before_gb')}G -> "
+    print(f"  c2          : red01 disk {grown.get('before_gb')}G -> "
           f"{grown.get('after_gb')}G (target {red_disk_gb(comp_dir)}G)")
 
     team_identifiers = _team_identifiers(getattr(ctx, "teams", None))
-    callback_port = callback_host = None
-    mythic_result = None
-    if mythic is None:
-        mythic = gaia_ops.mythic_enabled(comp_dir)
-    if mythic:
+    callback_port = callback_host = callback_ports = None
+    mythic_result = sliver_result = payload_manifest = None
+    c2_summary = None
+    if use_mythic:
         plan = gaia_ops.c2_plan(comp_dir, red_ip=red_ip, comp_id=comp_id)
         callback_port, callback_host = plan["callback_port"], plan["callback_host"]
         if not callback_port:
@@ -563,6 +604,20 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                                            env=env)
         if getattr(prep, "returncode", 1) != 0:
             raise RuntimeError(f"c2-prep (payload freeze) failed: {_tail(prep)}")
+        c2_summary = {"engine": "mythic", "callback_port": callback_port,
+                      "callback_host": callback_host}
+    elif use_sliver:
+        plan = sliver_ops.c2_plan(comp_dir, red_ip=red_ip, comp_id=comp_id)
+        sliver_result = sliver_ops.prepare_sliver(
+            comp_dir, box_ip=plan["box"], ssh_user=RED_USER, ssh_key=ssh_key,
+            runner=runner, plan=plan)
+        if not sliver_result.get("ok"):
+            detail = "; ".join(sliver_result.get("degradations") or [])[:500]
+            raise RuntimeError(f"the Sliver step failed — no C2 on red01 ({detail})")
+        sliver_ops.apply_c2_to_config(cfg_path, sliver_result["c2"])
+        callback_ports = plan["ports"]
+        c2_summary = {"engine": "sliver", "transport_ports": callback_ports,
+                      "domain": plan["domain"], "box": plan["box"]}
 
     # Without a C2 the DNAT is skipped but not the FORWARD trio: red01 must still reach teams.
     print("  red rules   : installing the red-segment rules on the engine...")
@@ -571,8 +626,10 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         engine_user=getattr(ctx, "scoring_user", "sysadmin"),
         team_identifiers=team_identifiers,
         callback_port=callback_port, callback_host=callback_host or "",
-        runner=runner)
-    stage_red01(ssh_key, red_ip, comp_dir, runner=runner, c2=bool(mythic))
+        callback_ports=callback_ports, runner=runner)
+    # Sliver builds its payloads ON red01 after the package is staged; Mythic's are
+    # frozen on the operator before the box exists, so only that path stages them.
+    stage_red01(ssh_key, red_ip, comp_dir, runner=runner, c2=bool(use_mythic))
     push_config(ssh_key, red_ip, cfg_path.read_text(), runner=runner)
     if mythic_result and mythic_result.get("env"):
         env_push = gaia_ops.push_env(ssh_key, red_ip, mythic_result["env"],
@@ -580,6 +637,17 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         if not env_push.get("ok"):
             raise RuntimeError(f"pushing the C2 env file failed: {env_push.get('detail')}")
     verify_config_contract(ssh_key, red_ip, intended=cfg_path, runner=runner)
+    if use_sliver:
+        prep = _ssh_run(ssh_key, red_ip, comp_prep_remote_command("all"),
+                        runner=runner, timeout=3600)
+        if getattr(prep, "returncode", 1) != 0:
+            raise RuntimeError(f"Sliver c2-prep (payload matrix) failed on red01: "
+                               f"{_tail(prep, 1500)}")
+        payload_manifest = pull_payload_manifest(ssh_key, red_ip, comp_dir,
+                                                 runner=runner)
+        c2_summary["payloads"] = payload_manifest["payloads"]
+        print(f"  sliver      : {payload_manifest['payloads']} frozen payload(s) "
+              f"across {len(callback_ports)} transport port(s)")
     if llm_key:
         push_llm_env(ssh_key, red_ip, llm_key, runner=runner)
     install_unit(ssh_key, red_ip, runner=runner)
@@ -599,7 +667,8 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     print(f"  tlaloc      : loop started on red01 ({UNIT})")
     summary = {"engine": "tlaloc", "vmid": red_vmid, "red_ip": red_ip,
                "node": identity["node"], "config": str(cfg_path),
-               "manifest": manifest.get("path") if manifest else None, "at": _now()}
+               "manifest": manifest.get("path") if manifest else None,
+               "c2": c2_summary, "at": _now()}
     ctx.state["red"] = summary
     ctx.save_state()
     if manifest:
@@ -609,7 +678,6 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         print(f"  tlaloc      : red01 ready on {red_ip} (assume_breach off — no seed; "
               f"unit {UNIT} started)")
     return summary
-
 
 def destroy_tlaloc_red(comp_dir, *, ownership, engine_ip="", engine_user="sysadmin",
                        env=None, runner=None, ssh_key=None, red_ip=None):
@@ -630,10 +698,14 @@ def destroy_tlaloc_red(comp_dir, *, ownership, engine_ip="", engine_user="sysadm
                   f"— the box still holds it")
         print(f"  red01      : stopping {UNIT} before teardown...")
         _ssh_run(ssh_key, red_ip, unit_stop_command(), runner=runner, timeout=180)
+    from red import sliver_ops
+    callback_ports = (sliver_ops.transport_ports()
+                      if sliver_ops.sliver_enabled(comp_dir) else None)
     removed = red01_ops.destroy(
         comp_dir, ownership=ownership, vmid=identity.get("vmid"),
         node=identity.get("node"), engine_ip=engine_ip, ssh_key=ssh_key,
-        engine_user=engine_user, runner=runner)
+        engine_user=engine_user, runner=runner,
+        callback_ports=callback_ports)
     return {"ok": True, "removed": removed}
 
 

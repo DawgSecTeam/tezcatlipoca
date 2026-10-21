@@ -309,7 +309,7 @@ Local-files → Markdown. The packet is the same for every team (real credential
 One red engine, owned by this tree. There is no sibling checkout and no `red.engine` switch: tlaloc is
 the only engine, and the range side of red is a component like the engine and the team boxes.
 Three modules: `red/red01_ops.py` owns red01 and its engine-side rules, `red/tlaloc_ops.py` is
-deploy phase 7, `red/gaia_ops.py` installs Mythic. The agent itself lives IN this tree at `tlaloc/`
+deploy phase 7, `red/sliver_ops.py` installs Sliver (`red/gaia_ops.py` keeps the legacy Mythic path). The agent itself lives IN this tree at `tlaloc/`
 (package, tests, docs, systemd unit); its own map is `tlaloc/README.md` and `tlaloc/AGENTS.md`, and
 the deploy contract is `tlaloc/docs/deploy.md`.
 
@@ -360,8 +360,8 @@ the deploy contract is `tlaloc/docs/deploy.md`.
   (default `full`), `red.depth 0..3` (default 3), `red.duration_min`, the `red.ladder` tiers
   (`at_pct`/`at_min`, sorted by time, known takedown modes) and `red.caps.min_standing >= 1`.
   `red.disk_gb`, `red.clef_url`, `red.c2_url`, `red.c2_callback_port`, `red.c2_ip`, `red.c2 off`,
-  `red01_vmid` and `red01_ip` are the engine/VM knobs; `red.windows` and `red.budget` travel to
-  tlaloc with the rest of its block.
+  `red.c2_engine`, `red.c2_implant_spread`, `red.c2_dns_domain`, `red01_vmid` and `red01_ip` are
+  the engine/VM knobs; `red.windows` and `red.budget` travel to tlaloc with the rest of its block.
 - **The config**: `.tlaloc-config.yaml` in the comp dir is rendered from the block and pushed to
   `/etc/tlaloc/config.yaml` (0600). Only values the deploy knows are written, so the pushed file is
   a diff against tlaloc's documented defaults; `verify_config_contract` fetches it back and diffs it
@@ -369,18 +369,45 @@ the deploy contract is `tlaloc/docs/deploy.md`.
   absent (that feature would run on defaults on the VM while every local test stays green).
 - **Order, every step fatal** (a range with no working red team is a failed deploy):
   render config → provision red01 (`red01_ops.deploy`, then `record_identity` into the placement) →
-  grow the disk to `red.disk_gb` (default 60G; Mythic's images filled a 9.8G disk, Docker never
-  started and the channel had nowhere to call home) → unless `red.c2 off`: install Mythic via Gaia
-  and freeze the payloads (`tlaloc c2-prep`) → install the engine's red rules (the DNAT only when
-  the C2 supplied a callback port) → stage the agent to `/opt/tlaloc` (package, unit,
+  grow the disk to `red.disk_gb` (default 60G; a C2 install overran a 9.8G disk and never started) →
+  unless `red.c2 off`: install the C2 → install the engine's red rules (the transport DNATs only
+  when the C2 supplied ports) → stage the agent to `/opt/tlaloc` (package, unit,
   `config.example.yaml`, plus the comp's intel files) → push the config and prove the contract →
-  install and enable `tlaloc.service` → run the day-0 seed on the box (`python3 -m tlaloc --config …
-  --comp /var/lib/tlaloc/intel seed`) → pull the seed manifest to `<comp>/red/manifest.json`. A
-  scrim-supplied LLM key rides a 0600 `/etc/tlaloc/env`. Staging, not installation, is deliberate:
-  red01 has no pip, and the unit is what puts the package on the import path. `scrim/red_stage.py`
-  calls the same `plant_assume_breach`, so the harness and the deploy cannot drift.
+  for Sliver, run `tlaloc c2-prep` ON red01 (it writes the payload matrix under
+  `/var/lib/tlaloc/intel/red/payloads`) and pull the manifest; for Mythic, freeze on the operator
+  before staging → install and enable `tlaloc.service` → run the day-0 seed on the box (`python3 -m
+  tlaloc --config … --comp /var/lib/tlaloc/intel seed`) → pull the seed manifest to
+  `<comp>/red/manifest.json`. A scrim-supplied LLM key rides a 0600 `/etc/tlaloc/env`. Staging, not
+  installation, is deliberate: red01 has no pip, and the unit is what puts the package on the
+  import path. `scrim/red_stage.py` calls the same `plant_assume_breach`, so the harness and the
+  deploy cannot drift.
 
-**`gaia_ops.py` — Mythic via Gaia**
+**`sliver_ops.py` — Sliver (the default C2)**
+
+- The server is pinned to `SLIVER_VERSION` (v1.7.8) and downloaded from the release URL to
+  `/opt/sliver/sliver-server` on the C2 box (red01 unless `red.c2_ip`). A systemd unit runs
+  `sliver-server daemon --lhost <red01-ip> --lport 31337`, then the step generates the operator
+  profile at `/etc/tlaloc/sliver.cfg` (`operator --permissions all`). That profile carries the mTLS
+  certs and token; it stays 0600 root on red01 and the pushed tlaloc config names only its path.
+- `red.c2_engine` defaults to `sliver`; `mythic` keeps the legacy Gaia path below. `red.c2 off`
+  skips both. `sliver_ops` exports the transport map (`mtls` 8888, `http` 8080, `https` 8443,
+  `dns` gateway 53 → server 5353, `wg` UDP 51820); `red01_ops.firewall_script` installs one
+  per-team-gateway DNAT per port and the teardown removes every one. DNS is the exception because
+  the implant resolver is pinned at 53.
+- `tlaloc/tlaloc/c2/sliver.py` is a native gRPC client (generated protobuf stubs under
+  `c2/sliver_proto`, `python3-grpcio`/`python3-protobuf` installed on red01). It starts the
+  listeners idempotently, builds the full matrix in `c2-prep` (every transport, plus beacons on
+  mtls/http and the Windows named-pipe and cross-platform tcp-pivot pivots), and maps callbacks by
+  the Sliver build name `<box>-<transport>` — no payload description field, so the name is the
+  attribution. A session task uses `Execute`; a beacon task is queued and polled through
+  `GetBeaconTaskContent`.
+- The matrix is per box: the payload dials that box's own team gateway (`192.168.<id>.1`), so a
+  two-team range does not have every payload dialing team 1. `red.c2_implant_spread draw` plants
+  one channel per box; `full` plants every network transport on every box (beacons and pivots are
+  built and listed in the manifest but marked `plant: false`). Pivot planting needs a parent
+  listener and is deliberately not seeded blind.
+
+**`gaia_ops.py` — Mythic via Gaia (legacy, `red.c2_engine mythic`)**
 
 - The Gaia checkout is on the deploy host at `knobs.gaia_path` (empty → `~/gaia`); the step clones
   it at `main` if missing, builds its venv from `requirements.txt`, and runs every `gaia.py`
@@ -398,8 +425,7 @@ the deploy contract is `tlaloc/docs/deploy.md`.
   (`192.168.<id>.1`, or `172.31.<id>.1` behind an in-path firewall) and the port
   `red.c2_callback_port`, else the Compfile's `firewall_dnat` port. A competition with no derivable
   callback port refuses before installing — the frozen payloads would dial nothing and the channel
-  could never check in. `red.c2 off` skips the Mythic install and the payload freeze; the engine's
-  segment rules are installed either way.
+  could never check in.
 - Tasking speaks Mythic's own contract: `createTask` takes a command NAME plus that command's raw
   parameter string (a script sent as `command` is looked up as a command that does not exist, and
   JSON-wrapping it hands the agent a literal `{"command": ...}` line). The agent picks the command
@@ -449,7 +475,7 @@ already-created resource instead of re-planning; nothing runs a resource out of 
 
 **config.py** — the native config surface for the deploy's process settings (`tezcatlipoca.toml` and its `TEZ_*` env overrides).
 
-- A `Config` over `tezcatlipoca.toml` (`TEZ_CONFIG` overrides the path), resolved per key as override → env → file → default (env beats file because the dashboard injects per-run node tokens and the engine mgmt IP into the process environment). `_SPEC` is the one place the key set lives, as `key -> default`, and it is the operator-facing set; names the code reads that are deliberately not operator config (the dashboard's `TEZ_PAUSE_FILE`/`TEZ_DASHBOARD_*` handoffs, the portal's `TEZ_OPS_*`) are allowlisted with a reason in `tests/hygiene/test_secret_hygiene.py`'s `INTERNAL_ENV`, not declared here. `config.env_name(key)` is `TEZ_` + the key upper-cased with dots as underscores and the `knobs.` prefix dropped, and the default's type drives parsing. `config.require(key)` raises on an unset key; `Config.is_set` distinguishes unset from deliberately empty (an empty engine mgmt IP means DHCP, not "re-default me"). `knobs.gaia_path` names the Gaia checkout the Mythic step runs from (empty → `~/gaia`).
+- A `Config` over `tezcatlipoca.toml` (`TEZ_CONFIG` overrides the path), resolved per key as override → env → file → default (env beats file because the dashboard injects per-run node tokens and the engine mgmt IP into the process environment). `_SPEC` is the one place the key set lives, as `key -> default`, and it is the operator-facing set; names the code reads that are deliberately not operator config (the dashboard's `TEZ_PAUSE_FILE`/`TEZ_DASHBOARD_*` handoffs, the portal's `TEZ_OPS_*`) are allowlisted with a reason in `tests/hygiene/test_secret_hygiene.py`'s `INTERNAL_ENV`, not declared here. `config.env_name(key)` is `TEZ_` + the key upper-cased with dots as underscores and the `knobs.` prefix dropped, and the default's type drives parsing. `config.require(key)` raises on an unset key; `Config.is_set` distinguishes unset from deliberately empty (an empty engine mgmt IP means DHCP, not "re-default me"). `knobs.gaia_path` names the Gaia checkout the legacy Mythic step runs from (empty → `~/gaia`); Sliver has no operator-side checkout.
 - `Config.activate`/`deactivate` are in-process overrides, which is what lets multi-node placement point the process at one host (`multinode/nodes_config.apply_node_env`) without mutating `os.environ`.
 - `ssh_key_path()` resolves a relative private key against the checkout root.
 

@@ -217,7 +217,7 @@ class PlantTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.comp = compfile(self.tmp.name, "red.c2 off\n" + self.CLEF)
+        self.comp = compfile(self.tmp.name, "red.c2 off\nred.c2_engine mythic\n" + self.CLEF)
         self.ctx = FakeCtx(self.comp)
         self.runner = lambda argv, **kw: Completed(0, "[]")
 

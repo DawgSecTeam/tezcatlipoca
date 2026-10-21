@@ -17,8 +17,10 @@ RED_USER = "sysadmin"
 NAME = "tlaloc-red01"
 DEFAULT_TEMPLATE = "base-ubuntu24.04-fix"
 # python3-paramiko is tlaloc's SSH transport; without it every box action fails
-# and the day-0 seed plants nothing while exiting 0.
-DEPS = "python3-yaml python3-paramiko cloud-guest-utils lvm2 nmap"
+# and the day-0 seed plants nothing while exiting 0. grpcio/protobuf are the
+# Sliver operator client (the generated stubs are sent with the package).
+DEPS = ("python3-yaml python3-paramiko python3-grpcio python3-protobuf "
+        "cloud-guest-utils lvm2 nmap")
 ROUTE_NOTE = "192.168.0.0/16"
 
 
@@ -325,8 +327,27 @@ def dnat_destinations(team_identifiers, callback_host=""):
     return dsts
 
 
-def firewall_script(*, team_identifiers, callback_port, callback_host="",
-                    red_ip=RED_SEGMENT_IP, red_subnet=RED_SEGMENT_SUBNET):
+def _callback_ports(callback_port, callback_ports):
+    """Normalize one port (Mythic) or the Sliver transport map into DNAT specs."""
+    if callback_ports:
+        specs = []
+        for name, value in (callback_ports or {}).items():
+            if not isinstance(value, dict):
+                continue
+            specs.append({"name": name,
+                          "gateway": int(value.get("gateway") or value.get("port")),
+                          "server": int(value.get("server") or value.get("gateway")
+                                        or value.get("port"))})
+        return specs
+    if callback_port:
+        return [{"name": "c2", "gateway": int(callback_port),
+                 "server": int(callback_port)}]
+    return []
+
+
+def firewall_script(*, team_identifiers, callback_port=None, callback_host="",
+                    callback_ports=None, red_ip=RED_SEGMENT_IP,
+                    red_subnet=RED_SEGMENT_SUBNET):
     """Rule order is load-bearing: return-accept before the DROP-toward-red, DNAT before the team-SNAT exemption, else check-ins appear to come from the engine."""
     lines = [
         "#!/bin/bash",
@@ -341,28 +362,27 @@ def firewall_script(*, team_identifiers, callback_port, callback_host="",
         f"iptables -C FORWARD -d {red_subnet} -j DROP 2>/dev/null || "
         f"iptables -I FORWARD 3 -d {red_subnet} -j DROP",
     ]
-    if callback_port:
-        port = int(callback_port)
+    specs = _callback_ports(callback_port, callback_ports)
+    for spec in specs:
+        gw, srv = spec["gateway"], spec["server"]
         for dst in dnat_destinations(team_identifiers, callback_host):
             for proto in ("tcp", "udp"):
                 # Docker publishes Quotient on 0.0.0.0:80 and jumps its own chain at
                 # PREROUTING 1: an appended DNAT is shadowed; ours stays at position 1.
-                rule = (f"-d {dst}/32 -p {proto} -m {proto} --dport {port} "
-                        f"-j DNAT --to-destination {red_ip}:{port}")
+                rule = (f"-d {dst}/32 -p {proto} -m {proto} --dport {gw} "
+                        f"-j DNAT --to-destination {red_ip}:{srv}")
                 lines += [
-                    f"if ! iptables -t nat -S PREROUTING | grep '^-A' | head -1 | "
-                    f"grep -q -- '{rule}'; then "
-                    f"while iptables -t nat -D PREROUTING -p {proto} -d {dst} --dport {port} "
-                    f"-j DNAT --to-destination {red_ip}:{port} 2>/dev/null; do :; done; "
-                    f"iptables -t nat -I PREROUTING 1 -p {proto} -d {dst} --dport {port} "
-                    f"-j DNAT --to-destination {red_ip}:{port}; fi",
-                    f"iptables -C FORWARD -p {proto} -d {red_ip} --dport {port} -j ACCEPT "
+                    f"while iptables -t nat -D PREROUTING -p {proto} -d {dst} "
+                    f"--dport {gw} -j DNAT --to-destination {red_ip}:{srv} 2>/dev/null; do :; done; "
+                    f"iptables -t nat -I PREROUTING 1 -p {proto} -d {dst} --dport {gw} "
+                    f"-j DNAT --to-destination {red_ip}:{srv}",
+                    f"iptables -C FORWARD -p {proto} -d {red_ip} --dport {srv} -j ACCEPT "
                     f"2>/dev/null || iptables -I FORWARD 1 -p {proto} -d {red_ip} "
-                    f"--dport {port} -j ACCEPT",
+                    f"--dport {srv} -j ACCEPT",
                     f"iptables -t nat -C POSTROUTING -s 192.168.0.0/16 -d {red_ip} "
-                    f"-p {proto} --dport {port} -j ACCEPT 2>/dev/null || "
+                    f"-p {proto} --dport {srv} -j ACCEPT 2>/dev/null || "
                     f"iptables -t nat -I POSTROUTING 1 -s 192.168.0.0/16 -d {red_ip} "
-                    f"-p {proto} --dport {port} -j ACCEPT",
+                    f"-p {proto} --dport {srv} -j ACCEPT",
                 ]
     return "\n".join(lines) + "\n"
 
@@ -374,9 +394,11 @@ _RED_TIMER = ("[Unit]\nDescription=Re-assert the red segment rules\n\n"
 
 
 def install_engine_rules(engine_ip, ssh_key, *, engine_user, team_identifiers,
-                         callback_port, callback_host="", runner=None, timeout=180):
+                         callback_port=None, callback_host="", callback_ports=None,
+                         runner=None, timeout=180):
     script = firewall_script(team_identifiers=team_identifiers,
-                             callback_port=callback_port, callback_host=callback_host)
+                             callback_port=callback_port, callback_host=callback_host,
+                             callback_ports=callback_ports)
     units = {
         "/usr/local/sbin/range-red-firewall.sh": (script, "755"),
         "/etc/systemd/system/range-red-firewall.service": (_RED_SERVICE, "644"),
@@ -401,19 +423,21 @@ def install_engine_rules(engine_ip, ssh_key, *, engine_user, team_identifiers,
 
 
 def remove_engine_rules(engine_ip, ssh_key, *, engine_user, runner=None, timeout=120,
-                        team_identifiers=(), callback_port=None, callback_host=""):
+                        team_identifiers=(), callback_port=None, callback_host="",
+                        callback_ports=None):
     """Best effort: the engine survives a teams-only teardown, so its red rules must not outlive red01."""
     dnat = ""
-    if callback_port:
+    for spec in _callback_ports(callback_port, callback_ports):
+        gw, srv = spec["gateway"], spec["server"]
         for dst in dnat_destinations(team_identifiers, callback_host):
             for proto in ("tcp", "udp"):
                 dnat += (f"while sudo iptables -t nat -D PREROUTING -p {proto} -d {dst} "
-                         f"--dport {int(callback_port)} -j DNAT --to-destination "
-                         f"{RED_SEGMENT_IP}:{int(callback_port)} 2>/dev/null; do :; done; "
+                         f"--dport {gw} -j DNAT --to-destination "
+                         f"{RED_SEGMENT_IP}:{srv} 2>/dev/null; do :; done; "
                          f"while sudo iptables -D FORWARD -p {proto} -d {RED_SEGMENT_IP} "
-                         f"--dport {int(callback_port)} -j ACCEPT 2>/dev/null; do :; done; "
+                         f"--dport {srv} -j ACCEPT 2>/dev/null; do :; done; "
                          f"while sudo iptables -t nat -D POSTROUTING -s 192.168.0.0/16 -d "
-                         f"{RED_SEGMENT_IP} -p {proto} --dport {int(callback_port)} -j ACCEPT "
+                         f"{RED_SEGMENT_IP} -p {proto} --dport {srv} -j ACCEPT "
                          f"2>/dev/null; do :; done; ")
     proc = _run(ssh_argv(ssh_key, engine_ip, (
         "sudo systemctl disable --now range-red-firewall.timer 2>/dev/null; "
@@ -437,7 +461,7 @@ def _tail(proc, n=300):
 
 def destroy(comp_dir, *, ownership, node=None, vmid=None, engine_ip=None, ssh_key=None,
             engine_user=None, runner=None, team_identifiers=(), callback_port=None,
-            callback_host=""):
+            callback_host="", callback_ports=None):
     """Destroyed through the ownership guard: a recycled vmid or another run's red01 is refused, not deleted."""
     recorded = recorded_identity(comp_dir)
     node = node or recorded.get("node") or config.active().proxmox.node
@@ -447,7 +471,7 @@ def destroy(comp_dir, *, ownership, node=None, vmid=None, engine_ip=None, ssh_ke
         removed["rules"] = remove_engine_rules(
             engine_ip, ssh_key, engine_user=engine_user, runner=runner,
             team_identifiers=team_identifiers, callback_port=callback_port,
-            callback_host=callback_host).get("ok", False)
+            callback_host=callback_host, callback_ports=callback_ports).get("ok", False)
     if not vmid:
         raise RuntimeError("red01's vmid is not recorded for this competition — cannot "
                            "prove what to destroy")

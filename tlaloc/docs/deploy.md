@@ -3,8 +3,8 @@
 Who owns what (design principle 3):
 
 - **tezcatlipoca** owns the range: cloning red01, the red segment, the engine's
-  red rules and C2 DNAT (with their 30s re-assert timer), the Mythic install,
-  destroy, and the teardown that captures red's verdict.
+  red rules and per-transport C2 DNAT (with their 30s re-assert timer), the
+  Sliver install, destroy, and the teardown that captures red's verdict.
 - **tlaloc** owns decisions and effects: what to do, to which box, with what
   mechanism, and the restore knowledge for everything it changed.
 
@@ -24,10 +24,12 @@ red.windows.endgame_teardown 15
 red.windows.lockout 3
 red.budget.extra_pressure_max 2
 red.clef_url http://203.0.113.30:8080
-red.c2_url https://10.0.0.210
-red.c2_callback_port 4470   # else the Compfile's `firewall_dnat` supplies it
+red.c2_engine sliver        # sliver (default) | mythic (legacy Gaia path)
+red.c2_implant_spread full  # draw (one channel/box) | full (every transport/box)
+red.c2_dns_domain c2.demo.range
 red.c2_ip 10.0.0.210        # optional: the C2 box; default is red01
-red.c2 off                  # opt out of Mythic/C2 (instead of the red.c2* values)
+red.c2 off                  # opt out of the C2 entirely
+# Mythic only: red.c2_url, red.c2_callback_port (else the Compfile firewall_dnat)
 red.disk_gb 60
 red01_vmid <vmid>           # else derived one golden stride past the golden band
 red01_ip 10.0.0.245         # else picked from the red band at deploy time
@@ -55,23 +57,26 @@ compromised:
    disabled on the box), grow the disk to `red.disk_gb` (default 60G), and stamp
    the run's ownership tags. An occupied vmid is a refusal naming the owner, never
    a silent reuse,
-3. **install Mythic** with Gaia unless `red.c2 off` (on red01, or on `red.c2_ip`)
-   and merge the agent's `c2.*` block into the rendered config; a competition
-   with no callback port fails here,
+3. **install the C2** unless `red.c2 off`: Sliver (pinned server + operator
+   profile at `/etc/tlaloc/sliver.cfg`) on red01, or `red.c2_ip`; merge the
+   agent's `c2.*` block into the rendered config. The legacy `red.c2_engine
+   mythic` path installs via Gaia and requires a callback port,
 4. **install the engine's red rules** (`range-red-firewall.service` + `.timer`,
-   re-asserted every 30s): the routed FORWARD trio, the per-team-gateway C2 DNAT
-   to `10.200.0.10:<port>`, and the nat ACCEPT that exempts the C2 flow from team
-   SNAT. The FORWARD trio is installed even with `red.c2 off` (red01 must reach
-   the teams); only the DNAT is skipped, because there is no callback port,
-5. **freeze payloads** (`tlaloc c2-prep`): build the payload matrix against the
-   competition's Mythic operation and freeze it into
-   `competitions/<id>/red/payloads/` with a `uuid → box` manifest. Builds never
-   run mid-event,
+   re-asserted every 30s): the routed FORWARD trio, one per-team-gateway DNAT
+   per C2 transport port to `10.200.0.10:<server-port>`, and the nat ACCEPT that
+   exempts the C2 flow from team SNAT. The FORWARD trio is installed even with
+   `red.c2 off` (red01 must reach the teams); only the DNATs are skipped,
+5. **freeze payloads**: Sliver builds run ON red01 (`tlaloc c2-prep`) and land
+   in `/var/lib/tlaloc/intel/red/payloads/` with a build-name → box manifest;
+   the operator pulls the manifest to `competitions/<id>/red/payloads/`. The
+   matrix covers every transport (`mtls`, `http`, `https`, `dns`, `wg`,
+   `named-pipe`, `tcp-pivot`) and beacons on mtls/http. Builds never run
+   mid-event. The legacy Mythic path freezes on the operator instead,
 6. **stage red01**: push the tlaloc package to `/opt/tlaloc` (staged, never
    pip-installed — the systemd unit is what puts it on the import path) and the
    competition's nakon intel to `/var/lib/tlaloc/intel`,
 7. **push the config** to `/etc/tlaloc/config.yaml` (0600), push the C2/LLM env
-   files (0600) if the Mythic step or the LLM key produced one, and **verify the
+   files (0600) if the C2 step or the LLM key produced one, and **verify the
    per-field contract**: the pushed file is fetched back and diffed against
    `tlaloc verify-config --print-contract` — a field the deploy meant to set but
    the push dropped is a feature that is dead on the VM while every local test
@@ -90,7 +95,8 @@ Every failure here aborts the deploy: a range with no red team is not a range.
 /opt/tlaloc/            the staged package (+ systemd/ + config.example.yaml)
 /etc/tlaloc/config.yaml 0600, pushed by the deploy
 /etc/tlaloc/env         optional 0600 KEY=VALUE (TLALOC_LLM_API_KEY)
-/etc/tlaloc/c2.env      0600 Mythic password for the agent (TLALOC_MYTHIC_PASSWORD)
+/etc/tlaloc/sliver.cfg  0600 Sliver operator mTLS profile + token (the config names this path)
+/etc/tlaloc/c2.env      legacy Mythic password for the agent (TLALOC_MYTHIC_PASSWORD)
 /var/lib/tlaloc/        state + audit + reports (per competition: fresh dir)
   intel/                the pushed nakon facts (`seed --comp` reads this)
   world.json            belief state (0600, schema+comp stamped)

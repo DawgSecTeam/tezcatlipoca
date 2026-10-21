@@ -74,7 +74,7 @@ tlaloc/
   exec/              ssh.py (one transport), gate.py (the choke point), winexec.py
   effects/           one module per effect + the registry + the shared execute() template
   intel/             nakon facts (the sanctioned cheat) with a blind fallback
-  c2/                Mythic client + the planter (frozen payloads, callback evidence)
+  c2/                Sliver gRPC client (Mythic legacy) + the planter (frozen payloads, callback evidence)
 config.example.yaml  annotated config
 docs/                architecture, decision layer, ROE, deploy, testing, effect authoring
                      + TEST-PROMPT.md (the independent verification prompt)
@@ -110,11 +110,11 @@ Implemented and tested offline (see `docs/testing.md` for how each is verified):
   waits/keepalive/close-on-replace, the gate (POSIX **and** Windows pattern sets),
   the effect registry + `execute()` template, the loop with circuit breakers and
   host guard, the decision layer (clef client, question catalog, confidence gate,
-  LLM arbiter, replay tests), the C2 layer (Mythic REST client, payload planter,
-  callback-freshness liveness), assume-breach seeding, the report + restore-table
-  artifacts, the CLI.
+  LLM arbiter, replay tests), the C2 layer (Sliver gRPC client + payload planter;
+  legacy Mythic), assume-breach seeding, the report + restore-table artifacts,
+  the CLI.
 
-The live half is a scrim: the Mythic install through Gaia, the comp-prep payload
-freeze against a live Mythic, the engine's red rules and C2 DNAT, and the
-report/verdict pull are wired in `red/tlaloc_ops.py` (phase 7), but the offline
-suite does not exercise a live Mythic or a real range.
+The live half is a scrim: the pinned Sliver install, the comp-prep payload matrix
+built on red01, the engine's red rules and per-transport DNAT, and the
+report/verdict pull are wired in `red/tlaloc_ops.py` (phase 7); the offline suite
+does not exercise a live C2 or a real range.
