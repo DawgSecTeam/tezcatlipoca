@@ -44,6 +44,28 @@ def _wait_for_windows_setup_complete(node, vmid, deadline):
     return False
 
 
+
+
+def _feature_block(features):
+    if not features:
+        return ""
+    feature_list = ", ".join(f"'{f}'" for f in features)
+    # A feature install can hit ERROR_SHARING_VIOLATION (0x80070020) while setup/Update
+    # holds the file; that is transient, so retry it instead of failing the deploy
+    # (live: run-f7976169 failed ad01's bootstrap on AD-Domain-Services).
+    return (
+        f"$featureOk = $false\n"
+        f"for ($attempt = 0; $attempt -lt 3 -and -not $featureOk; $attempt++) {{\n"
+        f"  try {{ Install-WindowsFeature -Name @({feature_list}) "
+        f"-IncludeManagementTools -ErrorAction Stop | Out-Null; $featureOk = $true }}\n"
+        f"  catch {{\n"
+        f"    if ($_.Exception.Message -notmatch '0x80070020|being used by another process') "
+        f"{{ throw }}\n"
+        f"    Start-Sleep -Seconds 20\n"
+        f"  }}\n"
+        f"}}\n"
+        f"if (-not $featureOk) {{ throw 'Install-WindowsFeature failed after 3 attempts' }}\n")
+
 def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, timeout=1800,
                           features=()):
 # 1800 s: a fresh DC clone's sysprep first boot is IO-bound far past the old 900 s default.
@@ -63,11 +85,8 @@ def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, t
     # BEFORE the plan's step runs: the template ships the server role without the
     # management tools, and `Import-Module WebAdministration` then fails with
     # FileNotFoundException (live: scrim-one/win02 IIS FTP, 2026-10-19).
-    feature_block = ""
-    if features:
-        feature_list = ", ".join(f"'{f}'" for f in features)
-        feature_block = (f"Install-WindowsFeature -Name @({feature_list}) "
-                         f"-IncludeManagementTools -ErrorAction Stop | Out-Null\n")
+    feature_block = _feature_block(features)
+# (the block itself lives in _feature_block, so a test can assert its retry)
     ps_script = f"""
 $ErrorActionPreference = 'Stop'
 $adapter = Get-NetAdapter | Where-Object {{ $_.Status -eq 'Up' }} | Select-Object -First 1
