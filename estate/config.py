@@ -33,6 +33,7 @@ _SPEC = {
     "portal.hostname": "",
     "portal.tunnel_token": "",
     "portal.open": False,
+    "knobs.box_dns": "1.1.1.1 8.8.8.8",
     "knobs.thin_headroom": 1.0,
     "knobs.cycle_timeout": 600,
     "knobs.python": "",

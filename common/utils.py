@@ -128,7 +128,15 @@ def valid_comp_name(name):
 # A hardcoded public resolver broke every box on an uplink that filters it (live: run-fee03a45
 # could not resolve download.docker.com); TEZ_BOX_DNS lets a placement name its own resolver
 # first (the range gateway), with public ones as fallback.
-BOX_DNS = (os.environ.get("TEZ_BOX_DNS") or "1.1.1.1 8.8.8.8").strip()
+def _box_dns():
+    try:
+        value = (config.active().knobs.box_dns or "").strip()
+    except Exception:  # no config in tests/early import
+        value = ""
+    return value or "1.1.1.1 8.8.8.8"
+
+
+BOX_DNS = _box_dns()
 BOX_DNS_PRIMARY = BOX_DNS.split()[0]
 _DNS_RESOLV = "".join(f"nameserver {ns}\\n" for ns in BOX_DNS.split())
 DNS_FIX_CMD = (
