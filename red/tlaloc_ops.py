@@ -639,7 +639,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     verify_config_contract(ssh_key, red_ip, intended=cfg_path, runner=runner)
     if use_sliver:
         prep = _ssh_run(ssh_key, red_ip, comp_prep_remote_command("all"),
-                        runner=runner, timeout=3600)
+                        runner=runner, timeout=7200)
         if getattr(prep, "returncode", 1) != 0:
             raise RuntimeError(f"Sliver c2-prep (payload matrix) failed on red01: "
                                f"{_tail(prep, 1500)}")
