@@ -113,6 +113,13 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
         "if sudo docker compose version >/dev/null 2>&1 && command -v growpart >/dev/null 2>&1; then "
         "  echo '  docker compose v2 already present'; exit 0; "
         "fi; "
+        # The archive carries the same plugin; prefer it over the CDN, which resets on this
+        # estate (live: run-5e27ecd5) — the CDN path stays as the fallback for images without it.
+        "if sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y "
+        "--fix-missing docker-compose-v2 >/dev/null 2>&1 && "
+        "   sudo docker compose version >/dev/null 2>&1; then "
+        "  echo '  docker compose v2 from the archive'; exit 0; "
+        "fi; "
         "sudo install -m 0755 -d /etc/apt/keyrings; "
         "for i in 1 2 3; do "
         "  sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && break; "

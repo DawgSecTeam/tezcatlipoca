@@ -161,6 +161,10 @@ class QuotientInjectPatch(unittest.TestCase):
         # an engine that already has the plugin must not re-fetch the key from the CDN
         self.assertIn("docker compose version", key_cmd)
         self.assertIn("command -v growpart", key_cmd)
+        # the archive plugin is tried before the CDN (which resets on this estate)
+        self.assertIn("docker-compose-v2", key_cmd)
+        self.assertLess(key_cmd.index("docker-compose-v2"),
+                        key_cmd.index("-o /etc/apt/keyrings/docker.asc"))
         pkgs = cmds["install engine packages"]
         self.assertIn("--fix-missing", pkgs)
         self.assertIn("for i in 1 2 3", pkgs)
