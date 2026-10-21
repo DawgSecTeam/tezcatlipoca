@@ -125,11 +125,13 @@ def is_legacy_account_name(name):
 def valid_comp_name(name):
     return bool(name) and ".." not in name and _COMP_NAME_RE.fullmatch(name) is not None
 
+# 8.8.8.8 alone broke every box on an uplink that filters it (live: run-fee03a45 could not
+# resolve download.docker.com while 1.1.1.1 answered); resolved fails over between the two.
 DNS_FIX_CMD = (
-    'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf; '
-    'printf "nameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf.head; '
+    'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf; '
+    'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" | sudo tee /etc/resolv.conf.head; '
     "sudo mkdir -p /etc/systemd/resolved.conf.d; "
-    'printf "[Resolve]\\nDNS=8.8.8.8\\n" | sudo tee /etc/systemd/resolved.conf.d/upstream.conf; '
+    'printf "[Resolve]\\nDNS=1.1.1.1 8.8.8.8\\n" | sudo tee /etc/systemd/resolved.conf.d/upstream.conf; '
     "sudo systemctl restart systemd-resolved 2>/dev/null || true"
 )
 

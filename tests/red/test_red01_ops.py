@@ -63,7 +63,7 @@ class Network(unittest.TestCase):
         self.assertIn("via: 10.0.0.1", text)
         self.assertIn("addresses: ['10.200.0.10/24']", text)
         self.assertIn("to: 192.168.0.0/16\n          via: 10.200.0.1", text)
-        self.assertIn("nameservers:\n        addresses: [8.8.8.8]", text)
+        self.assertIn("nameservers:\n        addresses: [1.1.1.1, 8.8.8.8]", text)
 
 
 class Rules(unittest.TestCase):

@@ -189,7 +189,7 @@ class TeamBox(Base):
         self.assertEqual(config["ciuser"], "ubuntu")
         self.assertEqual(config["cipassword"], "pw")
         self.assertEqual(config["ipconfig0"], "ip=192.168.120.2/24,gw=192.168.120.1")
-        self.assertEqual(config["nameserver"], "8.8.8.8")
+        self.assertEqual(config["nameserver"], "1.1.1.1 8.8.8.8")
         self.assertEqual(config["cores"], 2)
         self.assertEqual(config["memory"], 2048)
 
