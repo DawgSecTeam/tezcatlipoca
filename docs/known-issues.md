@@ -23,6 +23,19 @@ full teardown failed.
 when `range.reclaimable_templates` is true (destroy only; verify/reset stay disabled) and
 update `Range.test.jsx`'s retired-range case.
 
+### A two-team scrim on one LLM endpoint loses every other blue cycle to the 600 s cap
+
+`run-6b0732dc-run3` (scrim-one, 2 teams, 45 min, both blue teams on one deepseek-v4-pro
+endpoint): 8 cycle starts, 4 completed rc=0 and 4 hit the per-cycle cap (2 per team), so the
+`timeouts <= 2` gate failed and the verdict read NOT READY despite 38 interaction points
+(27 takedowns, 17 restore-reactions, 7 simultaneous down on each team, 16 restorations). The
+two teams serialise on the one LLM lock and a real incident cycle needs more than 600 s, so a
+team's next cycle starts already behind. The gate's own expectation is one cut per team, but
+each team here lost half its cycles.
+**Next action**: decide the multi-team recipe deliberately — raise `TEZ_CYCLE_TIMEOUT` (e.g.
+1200 s) for multi-team events and scale the `timeouts` gate with the team count, or accept that
+one endpoint serves one team per window and run multi-team ranges with per-team endpoints.
+
 ### The template builders reach their scratch VM through node shell
 
 `tools/build-{pfsense,vyos}-provision-template.py` alias `192.168.1.2` on the node's bridge and `ssh -W` through `root@<node>` to drive the scratch VM's bootstrap LAN (`192.168.1.0/24`); their ISO fetch (`download-url`) and template rename (`PUT .../config`) are API-only, leaving this hop and template sync ([multi-node.md](multi-node.md#template-copies)) as the repo's only node-shell uses. The pfSense agent retrofit cannot simply switch to the agent channel instead: installing that agent is what the hop is for. **Next action**: on a host whose shell is closed, either alias `192.168.1.2` on the *operator's* NIC where the operator shares the scratch VM's bridge L2, or console-type an operator-routable bootstrap address (`/monitor sendkey`, which these tools already drive the console with).

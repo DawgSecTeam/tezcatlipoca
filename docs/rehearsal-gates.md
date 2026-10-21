@@ -36,9 +36,10 @@ cycle carrying real incident work costs 20–30 min wall clock on the club's end
 teams serialise on one shared LLM lock, so a short scrim affords about one per team.
 `restorations` — blue answering red's takedowns. `injects` — the paperwork layer, which is real
 points, counted only for injects whose window opened inside the run. `notebook_entries` — working
-memory, not a write-only diary. `timeouts` — cycles cut at the event deadline: one window-edge cut
-per team is expected, several means the endpoint stopped producing, and `cycles_rc0` still fails a
-run that never completed a cycle.
+memory, not a write-only diary. `timeouts` — cycles cut at the per-cycle cap
+(`TEZ_CYCLE_TIMEOUT`, 600 s) or at the event deadline: one cut per team is expected on a shared
+endpoint, several means blue is not finishing real cycles inside its scope — raise the cap or
+give the team another endpoint — and `cycles_rc0` still fails a run that never completed a cycle.
 
 `evictions` is deliberately not a gate: red's health checks only see SSH-class footholds, so a zero
 is an observability limit rather than a failed red. Blue's self-reported `EVICTED:` lines count
