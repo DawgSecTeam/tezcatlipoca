@@ -54,10 +54,10 @@ def transport_ports():
 def dns_domain_for(comp_dir, comp_id=None):
     raw = compfile_value(Path(comp_dir) / "Compfile", "red.c2_dns_domain", "") or ""
     if str(raw).strip():
-        return str(raw).strip().strip(".").lower()
+        return str(raw).strip().strip(".").lower() + "."
     name = comp_id or Path(comp_dir).resolve().name
     safe = re.sub(r"[^a-z0-9-]", "-", str(name).lower()).strip("-") or "range"
-    return f"c2.{safe}.range"
+    return f"c2.{safe}.range."
 
 
 def c2_plan(comp_dir, *, red_ip=None, comp_id=None):

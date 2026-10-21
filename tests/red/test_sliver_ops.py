@@ -51,7 +51,7 @@ def test_the_plan_names_red01_and_a_per_competition_dns_domain():
         path = comp(tmp, "red.c2_dns_domain ops.demo\n")
         plan = s.c2_plan(path, red_ip="10.0.0.198", comp_id="Sliver Demo")
         assert plan["box"] == "10.0.0.198"
-        assert plan["domain"] == "ops.demo"
+        assert plan["domain"] == "ops.demo."
         assert plan["ports"]["mtls"]["server"] == 8888
 
 

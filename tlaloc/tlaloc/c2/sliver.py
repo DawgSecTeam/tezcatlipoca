@@ -39,7 +39,8 @@ class SliverClient:
         self.base_url = (c2.get("base_url") or "").rstrip("/")
         self.operator_config = str(c2.get("operator_config")
                                    or DEFAULT_OPERATOR_CONFIG)
-        self.dns_domain = str(c2.get("dns_domain") or DEFAULT_DNS_DOMAIN).strip(".")
+        # Sliver's DNS matcher compares FQDNs; the parent must carry the root dot.
+        self.dns_domain = str(c2.get("dns_domain") or DEFAULT_DNS_DOMAIN).strip(".") + "."
         self.ports = _ports(c2.get("transports"))
         self.callback_max_age = float(c2.get("callback_max_age_sec", 120))
         self.task_timeout = float(c2.get("task_timeout_sec", 120))
@@ -128,7 +129,11 @@ class SliverClient:
         ]
         started = []
         for name, start in wanted:
-            if name in jobs and jobs[name].Port == self.ports[name]["server"]:
+            same = (name in jobs
+                    and jobs[name].Port == self.ports[name]["server"])
+            if same and name == "dns":
+                same = list(jobs[name].Domains) == [self.dns_domain]
+            if same:
                 continue
             if name in jobs:
                 self._call("KillJob", clientpb.KillJobReq(ID=jobs[name].ID),
@@ -304,8 +309,10 @@ class SliverClient:
             return f"https://{gateway}:{ports['https']['server']}"
         if transport == "dns":
             # The resolver is fixed at port 53 on the team gateway; the engine
-            # DNATs that to the server's 5353.
-            return (f"dns://{domain or self.dns_domain}?resolvers={gateway}")
+            # DNATs that to the server's 5353. The implant side may carry the
+            # bare name; the server-side match needs the root dot.
+            name = (domain or self.dns_domain).strip(".")
+            return (f"dns://{name}?resolvers={gateway}")
         if transport == "wg":
             return f"wg://{gateway}:{ports['wg']['server']}"
         if transport == "named-pipe":
