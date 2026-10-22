@@ -5,6 +5,7 @@ import re
 import time
 
 from .effects.base import can_root
+from .effects.persist import families as persist_families
 from .errors import PolicyError
 from .state import digest as digest_mod
 from .state.world import parse_ts
@@ -403,13 +404,17 @@ class Policy:
                                           cost="med", tag=f"persist {ip}"))
         if root and dead:
             family = self._family_of(dead[0])
-            out.append(make_candidate("persist",
-                                      {"ip": ip, "family": family or "auto",
-                                       "force": "true"},
-                                      BASE_SCORE["persist"] + 15 + score_bonus,
-                                      f"blue removed {len(dead)} artifact(s) here — "
-                                      f"re-plant ({family or 'auto'})",
-                                      cost="med", tag=f"replant {ip}"))
+            windows = bool((self.world.foothold(ip) or {}).get("windows"))
+            # A dead c2-implant is repaired by the implant_channel candidate above; naming
+            # its kind as a persist family made the effect refuse eight times (live: cde-2026).
+            if not family or family in persist_families(windows):
+                out.append(make_candidate("persist",
+                                          {"ip": ip, "family": family or "auto",
+                                           "force": "true"},
+                                          BASE_SCORE["persist"] + 15 + score_bonus,
+                                          f"blue removed {len(dead)} artifact(s) here — "
+                                          f"re-plant ({family or 'auto'})",
+                                          cost="med", tag=f"replant {ip}"))
 
         if root:
             up, down = counts.get(team, (None, None))

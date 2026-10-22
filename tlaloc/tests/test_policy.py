@@ -432,3 +432,17 @@ def test_two_block_port_failures_suppress_the_whole_box(tmp_path):
     again = [c["params"]["port"] for c in policy.candidates(ctx)
              if c["effect"] == "block_port" and c["params"]["ip"] == ip]
     assert again == [], f"expected no block_port candidates after a box-wide failure, got {again}"
+
+
+def test_a_dead_c2_implant_is_not_a_persist_family(tmp_path):
+    """The re-plant names the dead artifact's kind as a persist family; `c2-implant` is not
+    one, so the effect refused eight times in cde-2026. The channel repair covers it."""
+    ctx, policy = policy_for(tmp_path)
+    ip = "192.168.1.10"
+    ctx.world.add_foothold(ip, "ubuntu", "boxpw-1", "root", escalation="sudo")
+    ctx.world.add_artifact(ip, "c2-implant", "implant channel")
+    from tlaloc.state.world import artifact_key
+    ctx.world.set_dead_artifacts([artifact_key(ctx.world.artifacts()[-1])])
+    cands = [c for c in policy.candidates(ctx)
+             if c["effect"] == "persist" and c["params"]["ip"] == ip]
+    assert all(c["params"]["family"] != "c2-implant" for c in cands)
