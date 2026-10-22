@@ -200,7 +200,11 @@ def enrollment_markdown(comp_id, server_url, entries):
         lines.append(f"## {e['person']} (team {e['team']})")
         lines.append("")
         lines.append("```")
-        lines.append(f"tailscale up --login-server {server_url} --authkey {e['key']}")
+        # --accept-routes: the team /24 is a subnet route on the engine; without it the
+        # participant sees the router in the netmap but cannot reach a single box (validated
+        # on the headscale VPS: `tailscale ping 192.168.107.1` said "no matching peer").
+        lines.append(f"tailscale up --login-server {server_url} --authkey {e['key']} "
+                     f"--accept-routes")
         lines.append("```")
         lines.append("")
     return "\n".join(lines)
