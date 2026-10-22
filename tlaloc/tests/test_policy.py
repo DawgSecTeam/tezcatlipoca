@@ -385,3 +385,31 @@ def test_pressure_only_offers_names_the_scoreboard_scores(tmp_path):
     assert "takedown:192.168.1.10:nginx" in ids
     assert "takedown:192.168.1.10:ssh" not in ids
     assert not [i for i in ids if "nginx-off-by-slash" in i]
+
+
+def test_a_blocked_port_is_not_offered_a_second_block(tmp_path):
+    """One block per port is the whole effect; re-offering it spent 14 cycles re-blocking
+    ftp:21 on cde-2026 while the other scored services stayed up."""
+    ctx, policy = policy_for(tmp_path)
+    duration = ctx.cfg["red"]["duration_min"]
+    ctx.world.meta["event_start"] = policy._now() - (duration - 1) * 60
+    ctx.world.save()
+    ip = "192.168.1.10"
+    ctx.world.add_foothold(ip, "ubuntu", "boxpw-1", "root", escalation="sudo")
+    ports = [c["params"]["port"] for c in policy.candidates(ctx)
+             if c["effect"] == "block_port" and c["params"]["ip"] == ip]
+    assert ports, "expected a scored port candidate on a rooted box"
+    ctx.world.add_impact(ip, "ftp", "block_port", "tcp/21 (ftp) blocked", port=ports[0])
+    again = [c["params"]["port"] for c in policy.candidates(ctx)
+             if c["effect"] == "block_port" and c["params"]["ip"] == ip]
+    assert ports[0] not in again
+
+
+def test_a_scored_http_matches_an_apache_intel_name():
+    """cde-2026's web01 says `apache` while the scoreboard scores `http`; the alias map
+    only bridged http->nginx, so web01 was never a takedown target in any cde run."""
+    from tlaloc.policy import _scored_key, _service_key
+
+    assert _service_key("apache") == _scored_key("http")
+    assert _service_key("httpd") == _scored_key("http")
+    assert _service_key("mariadb") == _scored_key("sql")

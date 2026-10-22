@@ -104,3 +104,19 @@ Root cause unsolved. A stop/start on a planted box can kill SSH preauth (`Access
 ### Student portal: unproven paths
 
 A single-node two-team, four-box acceptance run (`portal-smoke`) proved health/login/scoping, the closed gate (`423`), cross-team refusal (`403`), four truly concurrent relays (each `101` + `RFB 003.008`), ACL removal/reapply across a real box rebuild, and full teardown revocation (the exact `tezcon-<comp>-<engine-run-id>@pve` user and its ACLs gone). A second one-box run (`tiny-portal-smoke`) proved the **gate-open** path: `open: True`, team gate `HTTP 200`, and the console relay. A third one-box run proved the **public Cloudflare path** with a quick tunnel (`trycloudflare.com`): tunnel healthz `200`, tunnel team login `200`, and a tunnel console relay `wss 101` + `RFB 003.008`. Still unproven: the deploy-side **named-tunnel start** (`TEZ_PORTAL_TUNNEL_TOKEN`/`TEZ_PORTAL_HOSTNAME`, including the ownership decision) because the token is absent, and multi-node (the field node was down). **Next action**: run with the event's tunnel token/hostname and a two-node range.
+
+### A promoted DC refuses the local Administrator over SSH, so SSH-only pressure fails there
+
+cde-2026's domain controller (`ad01`) is promoted to AD DS before red is seeded, and the local
+`Administrator` becomes the DSRM account, which Windows refuses for network logon. Red's
+foothold is nonetheless recorded as a root/Administrator foothold because the seed reaches the
+box over the planted channel; `block_port`'s Windows transport is SSH-only, so paramiko
+completes kex with the box's sshd and the server resets during password auth
+(`TransportError: ssh Administrator@192.168.107.2: Connection reset by peer`). Measured live on
+run-65e60fc7 and re-measured on run-c18dc254: paramiko reports `kex ok, hostkey: ssh-ed25519`
+then `ConnectionResetError` on `auth_password`; an OpenSSH client from the host completes kex
+the same way. The failure-aware rotation stops re-offering the port after two attempts, and
+takedowns on the same box succeed (they run through the planted channel), so the cost is two
+cycles per run. **Next action**: execute SSH-only Windows effects through the C2 channel when
+the foothold's SSH auth fails, or record the working transport in the foothold record so the
+policy stops offering `block_port` there. Architectural, so not changed unattended.

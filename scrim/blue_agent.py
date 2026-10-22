@@ -253,6 +253,10 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
         took = time.time() - started
         stop.wait(min(600, max(30, core.CYCLE_TARGET_PERIOD - took)))
 
+    # Stay alive until the supervisor stops us: exiting at the (duration-2)
+    # budget made the supervisor report a DIED worker and fail an otherwise
+    # healthy run (live: cde run-65e60fc7, T+44min).
+    stop.wait()
 
 def finalize_blue_narratives(args):
     """Write a blue narrative for every team that ran, whatever its cycles did. Never raises.

@@ -205,7 +205,7 @@ class BlockPort(Effect):
                    for m in inserted if m not in holding]
         return Result(True, detail,
                       impact={"ip": ip, "service": display, "mode": "block_port",
-                              "detail": detail},
+                              "detail": detail, "port": port},
                       restore={"recipe": recipe, "secrets": None},
                       artifacts=[_artifact(
                           ip, f"{detail}; unblock: "
@@ -241,7 +241,7 @@ class BlockPort(Effect):
         ctx.world.note(ip, f"impact: {detail}")
         return Result(True, detail,
                       impact={"ip": ip, "service": display, "mode": "block_port",
-                              "detail": detail},
+                              "detail": detail, "port": port},
                       restore={"recipe": [
                           f"# block_port on {ip}: undo the rule this activation added",
                           windows_undo(rule)],

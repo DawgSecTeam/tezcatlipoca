@@ -74,7 +74,9 @@ def make_candidate(effect, params, score, reason, cost="low", tag=None,
 # Scored services are named `<box>-<short>` by the engine, intel carries package
 # names; without one shared key a service taken DOWN reads as up and is re-taken forever.
 _SERVICE_ALIASES = {"ldap": "adds", "http": "nginx", "https": "nginx",
+                    "apache": "nginx", "httpd": "nginx",   # cde-2026's web01 intel
                     "smtp": "postfix", "imap": "dovecot", "sql": "mysql",
+                    "mariadb": "mysql", "mysqld": "mysql",
                     "ftp": "iisftp", "winrm": "enablewinrm"}
 
 
@@ -441,8 +443,15 @@ class Policy:
             elif modes and dead:
                 pass          # re-plant first: a dead box cannot be pressured
             if self.unrecoverable_unlocked():
+                # One successful block per port is the whole effect: re-offering it spent
+                # 14 cycles re-blocking ftp:21 on cde-2026 while other services stayed up.
+                blocked = {i.get("port") for i in self.world.impacts()
+                           if i.get("mode") == "block_port" and i.get("ip") == ip
+                           and i.get("port")}
                 for pin in self.intel.port_checks_for(ip):
                     if not pin.get("port"):
+                        continue
+                    if int(pin["port"]) in blocked:
                         continue
                     # same failure-aware rule as takedown: a port whose block already
                     # failed twice is refused by the effect, so stop offering it
