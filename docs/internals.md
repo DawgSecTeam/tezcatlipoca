@@ -403,9 +403,14 @@ the deploy contract is `tlaloc/docs/deploy.md`.
   `GetBeaconTaskContent`.
 - The matrix is per box: the payload dials that box's own team gateway (`192.168.<id>.1`), so a
   two-team range does not have every payload dialing team 1. `red.c2_implant_spread draw` plants
-  one channel per box; `full` plants every network transport on every box (beacons and pivots are
-  built and listed in the manifest but marked `plant: false`). Pivot planting needs a parent
-  listener and is deliberately not seeded blind.
+  one channel per box; `full` plants every network transport on every box except DNS, which is
+  built for every box but seeded on one Linux box (the Windows DNS client exits when its resolver
+  is unreachable, so the Windows DNS payload is compiled/listed with `plant: false`). Beacons and
+  pivots are built and listed but likewise not seeded blind: a pivot needs a parent listener.
+- Sliver sessions are live connections, not periodic polls: `LastCheckin` only moves on traffic,
+  so the freshness gate counts a session from `GetSessions` as live while it is not dead, and
+  gives a beacon its interval + jitter. The Mythic-style 120s age gate made every quiet channel
+  look stale and the day-0 seed reported "no callback" while the implant was running.
 
 **`gaia_ops.py` — Mythic via Gaia (legacy, `red.c2_engine mythic`)**
 

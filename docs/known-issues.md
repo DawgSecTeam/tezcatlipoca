@@ -1,3 +1,15 @@
+### Sliver's Windows DNS implant exits when its resolver is unreachable
+
+The Windows DNS client does not survive the seed's callback window: it exits
+(nonzero) when the DNS listener or gateway resolver is unavailable, and the
+Windows persistence surfaces do not revive it reliably. The payload is still
+compiled and listed in the manifest (`plant: false`); DNS is planted and proven
+on one Linux box. `tlaloc c2-prep` builds every transport for every box, but the
+full-spread seed must not require Windows DNS until the client is fixed.
+**Next action**: rebuild the Windows DNS payload with a forced resolver, run it
+under the service guard, and require it in the full matrix once it survives a
+listener restart.
+
 ### A pre-slug kept template cannot be adopted by a fresh deploy
 
 Templates created before the comp-tag slug fix carry the display name split at its space
