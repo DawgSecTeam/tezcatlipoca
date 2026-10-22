@@ -411,6 +411,11 @@ the deploy contract is `tlaloc/docs/deploy.md`.
   so the freshness gate counts a session from `GetSessions` as live while it is not dead, and
   gives a beacon its interval + jitter. The Mythic-style 120s age gate made every quiet channel
   look stale and the day-0 seed reported "no callback" while the implant was running.
+- WG builds are unobfuscated (`ObfuscateSymbols=False`): garble's `-tiny` output died with
+  status 2 before creating its TUN on some seeds, while the plain build connected. A channel
+  repair plants only the transports whose callback is missing, and installing one transport
+  first stops that transport's old units — a re-seed used to stack a second WG client on `wg0`
+  and a second DNS client on one session.
 
 **`gaia_ops.py` — Mythic via Gaia (legacy, `red.c2_engine mythic`)**
 
