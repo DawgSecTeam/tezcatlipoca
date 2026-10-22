@@ -288,6 +288,26 @@ class Loop:
             out.append(holder)
         return out
 
+    def c2_probe(self):
+        """One benign C2 task per foothold: proves the channel beyond its callback and
+        gives the event an immediate successful action instead of a T+0 stall."""
+        if self.ctx.c2 is None or self.ctx.dry_run:
+            return
+        for fh in self.world.footholds():
+            ip = fh["ip"]
+            try:
+                result = execute("task_channel",
+                                 {"ip": ip,
+                                  "command": "whoami" if self.ctx.is_windows(ip) else "id",
+                                  "goal": "C2 channel check"},
+                                 self.ctx, source="seed")
+            except Exception as exc:
+                self.log.emit("c2_probe_error", ip=ip,
+                              error=f"{type(exc).__name__}: {exc}")
+                continue
+            self.log.emit("c2_probe", ip=ip, ok=result.ok,
+                          detail=(result.detail or "")[:200])
+
     def run(self, *, max_cycles=None):
         self.guard_host()
         started = time.time()
@@ -303,6 +323,7 @@ class Loop:
                           boxes=len(seeded.get("boxes") or {}),
                           steps=seeded.get("steps"))
 
+        self.c2_probe()
         while True:
             if max_cycles is not None and self.cycle >= max_cycles:
                 break
