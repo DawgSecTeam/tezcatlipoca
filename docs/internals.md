@@ -416,6 +416,9 @@ the deploy contract is `tlaloc/docs/deploy.md`.
   repair plants only the transports whose callback is missing, and installing one transport
   first stops that transport's old units — a re-seed used to stack a second WG client on `wg0`
   and a second DNS client on one session.
+- The red loop proves every planted channel with one `id`/`whoami` before its first cycle.
+  It is deliberately benign: a takedown there lands before T0 and makes blue start against
+  a pre-existing outage instead of an in-window one.
 
 **`gaia_ops.py` — Mythic via Gaia (legacy, `red.c2_engine mythic`)**
 

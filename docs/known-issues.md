@@ -1,3 +1,15 @@
+### Red's first in-event impact can lag 16–19 minutes
+
+Two 30-minute scrims on `sliver-practice` (runs `run-b0b1ae1c`, `run-c0044f51`) passed every
+blue gate and the red takedown/restore/foothold/tactics gates, but failed only `stalls`: the
+first in-window impact landed at T+16 and T+19. The channel probe is benign by design (a
+pre-T0 takedown makes blue start against an existing outage), so the gap is red cadence: the
+deterministic policy spends early cycles on recon/persistence before its first pressure
+action. The red tactics are otherwise present (4 distinct, 9 takedowns in the better run).
+**Next action**: make the opening cycle carry a scored takedown (or lower the pressure
+threshold for the first two cycles) and re-run a 30-minute scrim; do not count the seed's
+benign C2 probe as an impact.
+
 ### Sliver's Windows DNS implant exits when its resolver is unreachable
 
 The Windows DNS client does not survive the seed's callback window: it exits
