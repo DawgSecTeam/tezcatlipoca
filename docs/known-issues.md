@@ -36,20 +36,6 @@ each team here lost half its cycles.
 1200 s) for multi-team events and scale the `timeouts` gate with the team count, or accept that
 one endpoint serves one team per window and run multi-team ranges with per-team endpoints.
 
-### The boxes' DNS is a hardcoded public resolver, and this uplink filters it
-
-`estate/apply.py` gives every box `nameserver: 8.8.8.8`; `common/utils.DNS_FIX_CMD` writes the
-same into `resolv.conf` and `resolved.conf.d`. On this estate's uplink both 8.8.8.8 and 1.1.1.1
-now time out from the host while the gateway resolver 10.0.0.1 answers, so a fresh engine cannot
-resolve `download.docker.com`/`security.ubuntu.com` and the deploy dies at
-`install docker compose v2 plugin` (`run-fee03a45`), and boxes lose the Ubuntu archive the same
-way. The pair `1.1.1.1 8.8.8.8` covers a single filtered resolver, not a filtered *public* path.
-`TEZ_BOX_DNS` now carries the placement value (space-separated, first entry is the box's
-cloud-init nameserver, all entries land in `resolv.conf`/`resolved.conf.d`); it is unset on this
-estate, which therefore still gets the public pair.
-**Next action**: set `TEZ_BOX_DNS` to the range gateway resolver for this uplink and deploy
-cde-2026 to prove resolution end to end before trusting it as the estate default.
-
 ### The template builders reach their scratch VM through node shell
 
 `tools/build-{pfsense,vyos}-provision-template.py` alias `192.168.1.2` on the node's bridge and `ssh -W` through `root@<node>` to drive the scratch VM's bootstrap LAN (`192.168.1.0/24`); their ISO fetch (`download-url`) and template rename (`PUT .../config`) are API-only, leaving this hop and template sync ([multi-node.md](multi-node.md#template-copies)) as the repo's only node-shell uses. The pfSense agent retrofit cannot simply switch to the agent channel instead: installing that agent is what the hop is for. **Next action**: on a host whose shell is closed, either alias `192.168.1.2` on the *operator's* NIC where the operator shares the scratch VM's bridge L2, or console-type an operator-routable bootstrap address (`/monitor sendkey`, which these tools already drive the console with).
