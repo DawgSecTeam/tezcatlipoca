@@ -50,7 +50,9 @@ Warn-and-proceed like the rest of teardown.
 ## Running it
 
 - **Enrollment** lands in `competitions/<id>/remote-access/`: `enrollment.md` (per-person
-  `tailscale up --login-server … --authkey …` commands) and `keys.json` (gitignored, 0600). The
+  `tailscale up --login-server … --authkey … --accept-routes` commands — the flag is what makes the
+  team `/24` a subnet route on the participant, without it the router is visible in the netmap but
+  no box answers) and `keys.json` (gitignored, 0600). The
   student portal surfaces the same ([portal.md](portal.md)).
 - **Opt out** per comp: `remote_access 0` in the Compfile (practice/capacity runs that must not
   touch the production tailnet).

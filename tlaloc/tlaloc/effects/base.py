@@ -1,5 +1,6 @@
 """The effect registry: tags, preconditions and the shared execute() template's contract."""
 
+import re
 import shlex
 from dataclasses import dataclass, field
 
@@ -68,6 +69,9 @@ def can_root(fh):
     return any(esc.startswith(e) for e in ESCALATIONS)
 
 
+_SHELL_META = re.compile(r"[;&|<>$`(){}\[\]*?\n]")
+
+
 def root_cmd(cmd, fh):
     """Wrap a command for the foothold's escalation label.
 
@@ -78,9 +82,10 @@ def root_cmd(cmd, fh):
     """
     if fh.get("windows"):
         return cmd  # SYSTEM label is not routable; admin rides the session
-    # A multi-line shell script cannot ride a bare prefix (`sudo -n if ...` is a
-    # syntax error, not a script): give it one root shell and one quoted argument.
-    if "\n" in cmd:
+    # Anything shell-shaped cannot ride a bare prefix: `sudo -n for u in ...` is a syntax
+    # error, and `sudo -n a; b` leaves b unprivileged. Give it one root shell and one
+    # quoted argument (live: cde-2026's apache->httpd resolution always failed this way).
+    if _SHELL_META.search(cmd) and not cmd.startswith("sh -c "):
         cmd = f"sh -c {shlex.quote(cmd)}"
     esc = fh.get("escalation") or ""
     if esc == "sudo":

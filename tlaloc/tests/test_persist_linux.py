@@ -76,7 +76,9 @@ def _cmd(ssh, index=0):
 
 def _sudo(script):
     """The script as root_cmd() wraps it for a `sudo` foothold label."""
-    if "\n" in script:
+    from tlaloc.effects.base import _SHELL_META
+
+    if _SHELL_META.search(script):
         return f"sudo -n sh -c {shlex.quote(script)}"
     return f"sudo -n {script}"
 

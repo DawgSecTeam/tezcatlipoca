@@ -5,6 +5,7 @@ import re
 import time
 
 from .effects.base import can_root
+from .effects.persist import families as persist_families
 from .errors import PolicyError
 from .state import digest as digest_mod
 from .state.world import parse_ts
@@ -396,13 +397,17 @@ class Policy:
                                           cost="med", tag=f"persist {ip}"))
         if root and dead:
             family = self._family_of(dead[0])
-            out.append(make_candidate("persist",
-                                      {"ip": ip, "family": family or "auto",
-                                       "force": "true"},
-                                      BASE_SCORE["persist"] + 15 + score_bonus,
-                                      f"blue removed {len(dead)} artifact(s) here — "
-                                      f"re-plant ({family or 'auto'})",
-                                      cost="med", tag=f"replant {ip}"))
+            windows = bool((self.world.foothold(ip) or {}).get("windows"))
+            # A dead c2-implant is repaired by the implant_channel candidate above; naming
+            # its kind as a persist family made the effect refuse eight times (live: cde-2026).
+            if not family or family in persist_families(windows):
+                out.append(make_candidate("persist",
+                                          {"ip": ip, "family": family or "auto",
+                                           "force": "true"},
+                                          BASE_SCORE["persist"] + 15 + score_bonus,
+                                          f"blue removed {len(dead)} artifact(s) here — "
+                                          f"re-plant ({family or 'auto'})",
+                                          cost="med", tag=f"replant {ip}"))
 
         if root:
             up, down = counts.get(team, (None, None))
@@ -441,7 +446,13 @@ class Policy:
                 blocked = {i.get("port") for i in self.world.impacts()
                            if i.get("mode") == "block_port" and i.get("ip") == ip
                            and i.get("port")}
-                for pin in self.intel.port_checks_for(ip):
+                # A transport failure is box-wide, not per port: ad01's DC refuses SSH, and
+                # red spent six cycles re-failing it on three ports (live: cde-2026).
+                pins = self.intel.port_checks_for(ip)
+                if sum(self.world.failure_count("block_port", ip, int(p["port"]))
+                       for p in pins if p.get("port")) >= 2:
+                    pins = []
+                for pin in pins:
                     if not pin.get("port"):
                         continue
                     if int(pin["port"]) in blocked:

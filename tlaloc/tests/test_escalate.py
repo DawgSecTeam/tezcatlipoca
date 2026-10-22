@@ -298,3 +298,19 @@ def test_emitted_labels_stay_inside_the_shared_routing_vocabulary():
     assert not can_root({"user": "Administrator", "kind": "user",
                          "escalation": "system"})
     assert "system" not in ESCALATIONS
+
+
+def test_a_shell_shaped_command_rides_one_root_shell():
+    """`sudo -n for u in ...` is a syntax error, so the unit-resolution script never ran
+    and cde-2026's apache takedowns never looked at httpd; `sudo -n a; b` also left b
+    unprivileged."""
+    from tlaloc.effects.takedown import unit_alias_script
+
+    sudo = {"escalation": "sudo", "kind": "root", "user": "blueteam"}
+    wrapped = root_cmd(unit_alias_script("apache"), sudo)
+    assert wrapped.startswith("sudo -n sh -c ")
+    assert "for u in apache apache2 httpd" in wrapped
+    # already-wrapped scripts are not wrapped twice
+    assert root_cmd("sh -c 'a; b'", sudo) == "sudo -n sh -c 'a; b'"
+    # a plain argv stays bare
+    assert root_cmd("id", sudo) == "sudo -n id"
