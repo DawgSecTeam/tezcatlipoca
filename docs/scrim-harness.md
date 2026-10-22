@@ -4,6 +4,18 @@ Design notes for `run-agent-scrim.py` (lifecycle orchestrator), `scrim-report.py
 
 Cross-module calls are module-qualified (`procs.run_tree`, `quotient_api.qget`), so tests patch where a function is *defined* (`mock.patch.object(procs, "run", ...)`). `log` is from-imported; patch it in the module under test.
 
+### Validated practice recipe
+
+The strongest practice runs use **one team, 45 minutes, `deepseek-v4-pro` at the local
+`http://10.0.0.143:8180/v1` endpoint, on a four-box/9-service competition** (for example
+`practice-4box-2026-09`). A 2-team/30-minute run on the small two-box/3-service estate
+serialises blue cycles and leaves red too few re-kill windows: it can pass the blue gates
+but not `restore_reactions` and it frequently records an opening stall. The local
+`8180` endpoint advertises a 1M context; the older `8080` llama.cpp endpoint advertises
+16k and the harness refuses it for blue. When reusing `practice-4box`, clean its stale
+pins first — `IIS HTTP` expects `W3SVC` and `iis-webshell` expects Defender, neither of
+which the current Windows base template installs.
+
 ## run-agent-scrim.py
 
 Stages: author (optional) → deploy → verify + fire test → blue agents (opencode, fresh session per cycle) → red01 staged with tlaloc through the same planter phase 7 uses → feeds and monitoring to the deadline → evidence capture → teardown (red01 + range, unless `--keep-range`; `--keep-templates` keeps the golden + engine templates, which hands the event the exact artifacts the practice run verified — [internals.md](internals.md#template-lifecycle-engine-template_freeze-py-engine_template_ops-py)). Run dir: `competitions/<comp>/.automated-tests/<run-id>/`, `--run-dir` overrides. Before red01 is destroyed the harness collects `RED-TEAM.md`, `BLUE-TEAM.md`, `REPORT.md`, `evidence/**` and the scrim verdict into `test.json` ([automated-test-artifacts.md](automated-test-artifacts.md)).
