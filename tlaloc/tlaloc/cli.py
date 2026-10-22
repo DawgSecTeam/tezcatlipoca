@@ -321,6 +321,9 @@ def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
             if transport in beacons:
                 jobs.append({**jobs[-1], "beacon": True})
 
+    dns_owner = next((job["box_id"] for job in jobs
+                      if job["transport"] == "dns" and job["os"] == "linux"), None)
+
     def _build(job):
         entry = client.build_payload(
             job["box_id"], job["os"], transport=job["transport"],
@@ -333,7 +336,8 @@ def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
         # path; both are built and shipped, not seeded blind.
         # Windows' DNS client exits after the resolver gives up; the transport is
         # built and shipped, and DNS is planted and proven on the Linux boxes.
-        unsupported = job["os"] == "windows" and job["transport"] == "dns"
+        unsupported = job["transport"] == "dns" and (
+            job["os"] == "windows" or job["box_id"] != dns_owner)
         entry["plant"] = (not job["beacon"] and not unsupported
                           and job["transport"] not in PIVOT_TRANSPORTS)
         return entry
