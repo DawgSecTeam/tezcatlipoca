@@ -134,10 +134,14 @@ Set-NetFirewallProfile -All -Enabled True -ErrorAction SilentlyContinue | Out-Nu
 if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
     New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
 }}
-# The scored RDP check is a plain Tcp dial on 3389; the Remote Desktop rule
-# group ships disabled on the template even after the RDP plant flips the
-# registry, so the listener is up but every external dial is filtered.
-Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMode-In-UDP -ErrorAction SilentlyContinue
+# Every CCDC blue team administers Windows over RDP, so it must exist even on a
+# competition that does not plant an "RDP misconfig": the template ships RDP
+# disabled and the rule group disabled, and without both the scored Tcp dial
+# (and a human's mstsc) is filtered (live: cde-2026 ad01/ftp01, 3389 closed).
+Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue
+Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue
+Start-Service -Name TermService -ErrorAction SilentlyContinue
+Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMode-In-UDP,RemoteDesktop-Shadow-In-TCP -ErrorAction SilentlyContinue
 {feature_block}"""
     deadline = time.time() + timeout
     while True:
