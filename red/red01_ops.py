@@ -294,8 +294,12 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     _write(node, vmid, "/etc/netplan/51-tlaloc.yaml", netplan, "600")
     _write(node, vmid, "/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg",
            "network: {config: disabled}\n", "644")
-    _exec(node, vmid, "rm -f /etc/netplan/50-cloud-init.yaml && netplan apply && "
-                      f"ip -4 -brief addr show | grep -qF '{ip}'", 90)
+    # netplan apply is asynchronous under cloud-init/networkd; one check raced the
+    # address and failed a whole deploy (live: 1-team Sliver range, 2026-10-22).
+    _exec(node, vmid, "rm -f /etc/netplan/50-cloud-init.yaml; "
+          "for i in $(seq 1 15); do netplan apply >/dev/null 2>&1; "
+          f"ip -4 -brief addr show | grep -qF '{ip}' && exit 0; sleep 2; done; exit 1",
+          120)
 
     # Mythic's own deps are installed by Gaia, not here.
     _exec(node, vmid, _apt_prelude(), 1800)
