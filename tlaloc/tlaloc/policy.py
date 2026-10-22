@@ -389,10 +389,14 @@ class Policy:
                                           - 10 * fails + score_bonus,
                                           why, cost="med", tag=f"implant {ip}"))
             else:
-                out.append(make_candidate("task_channel", {"ip": ip},
+                command = ("whoami" if self.world.target(ip).get("os") == "windows"
+                           else "id")
+                out.append(make_candidate("task_channel",
+                                          {"ip": ip, "command": command,
+                                           "goal": "C2 channel check"},
                                           BASE_SCORE["task_channel"] + score_bonus,
-                                          "live channel — usable for a takedown that "
-                                          "does not need SSH",
+                                          "live channel — prove it with a benign task "
+                                          "that does not need SSH",
                                           cost="low", tag=f"task {ip}"))
 
         if root and not dead:
