@@ -238,6 +238,9 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
         print(f"  red01      : adopting vmid {vmid} (this run's) for reconfigure")
     from golden.golden_target_ops import _quote_sshkeys
     data = {"name": NAME, "onboot": 1, "agent": 1,
+            # Sliver compiles the whole payload matrix on this box; 8/6 keeps that
+            # under an hour instead of serialising on the default 2 vCPU.
+            "cores": 8, "memory": 6144,
             "net0": f"virtio,bridge={_mgmt_bridge(placement)}",
             "ipconfig0": f"ip={ip}/24,gw={gw}",
             "ciuser": RED_USER, "sshkeys": _quote_sshkeys(pub_key),
