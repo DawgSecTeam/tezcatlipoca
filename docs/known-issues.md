@@ -7,22 +7,6 @@ refuses the slot ("collides with VMs ... golden vmid"), so a later deploy cannot
 them and only a full destroy reclaims the vmids. Either re-tag such templates once
 (`comp-<slug>`) or destroy them; the reuse path itself is correct for post-fix templates.
 
-### The dashboard's range page still hides teardown on a retired range with kept templates
-
-`--teams-only` retires the range and keeps this competition's golden + engine templates for
-its next run, which is the documented practice-run loop. The dashboard now resolves a `destroy`
-on a retired range whose document records only kept templates and no live VMs
-(`dashboard/ranges.py:reclaimable_templates`, wired into `runner.py`), and the engine's
-ownership guard still scopes what is destroyed — so the API and
-`destroy-competition.py --teams-only`/full paths can reclaim them. What remains is the web:
-`Range.jsx` computes `blocked = retired || …`, so the page offers no action menu and an
-operator cannot reach that resolver from the range view. Caught live before the backend fix:
-a teams-only teardown left the engine template and its goldens in place and the follow-up
-full teardown failed.
-**Next action**: in `tezcatlipoca-dashboard`'s `web/src/pages/Range.jsx`, show the action menu
-when `range.reclaimable_templates` is true (destroy only; verify/reset stay disabled) and
-update `Range.test.jsx`'s retired-range case.
-
 ### A two-team scrim on one LLM endpoint loses every other blue cycle to the 600 s cap
 
 `run-6b0732dc-run3` (scrim-one, 2 teams, 45 min, both blue teams on one deepseek-v4-pro
@@ -39,22 +23,6 @@ one endpoint serves one team per window and run multi-team ranges with per-team 
 ### The template builders reach their scratch VM through node shell
 
 `tools/build-{pfsense,vyos}-provision-template.py` alias `192.168.1.2` on the node's bridge and `ssh -W` through `root@<node>` to drive the scratch VM's bootstrap LAN (`192.168.1.0/24`); their ISO fetch (`download-url`) and template rename (`PUT .../config`) are API-only, leaving this hop and template sync ([multi-node.md](multi-node.md#template-copies)) as the repo's only node-shell uses. The pfSense agent retrofit cannot simply switch to the agent channel instead: installing that agent is what the hop is for. **Next action**: on a host whose shell is closed, either alias `192.168.1.2` on the *operator's* NIC where the operator shares the scratch VM's bridge L2, or console-type an operator-routable bootstrap address (`/monitor sendkey`, which these tools already drive the console with).
-
-### A per-run workspace keeps disappearing, and no code in this repo deletes it
-
-The original entry claimed the dashboard removes each run's workspace when the run ends, including
-a run that FAILED and a destroy that ended `teardown_failed`, stranding the range: the journal,
-the run id and the ownership set all live in that workspace, so deleting it removes the sanctioned
-way to finish. **That premise does not reproduce.** There is no code in the dashboard that deletes
-`<run_dir>/comp` — the only per-run deletion is the engine worktree — and on the ops host most
-stored runs still have their workspace, including a `teardown_failed` range that still
-carries its eight recorded resources. Of the four `teardown_failed` ids the entry named, two have
-no store row at all and two have no run dir. So *something outside both repos* is removing run
-directories, and until it is identified this cannot be fixed here.
-**Fixed in passing**: the deletion site that does exist (`workspaces.release`) now holds the
-workspace of any run whose range is not retired, reclaiming only bare debris.
-**Next action**: identify what removes run dirs on the ops host (a janitor, a retention job, a
-systemd timer) and make it retire the range through `POST /api/ranges/retire` before it deletes.
 
 ### The engine management IP is resolved but never selected
 

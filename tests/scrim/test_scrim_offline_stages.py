@@ -149,9 +149,13 @@ class RunFolderAndResume(Base):
         self.assertTrue(oct((self.run_dir / "run.json").stat().st_mode & 0o777).endswith("600"))
 
     def test_cli_error_paths(self):
+        # The subprocess must resolve the same modules as this interpreter. HOME is patched
+        # to a temp dir for isolation, which also moves the subprocess's user site, where
+        # python-dotenv lives on the ops host.
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
         def run(*a):
             return subprocess.run([sys.executable, str(REPO / "run-agent-scrim.py"), *a],
-                                  capture_output=True, text=True, cwd=REPO, timeout=60)
+                                  capture_output=True, text=True, cwd=REPO, timeout=60, env=env)
         self.assertNotEqual(run().returncode, 0)
         self.assertIn("invalid competition name", run("--competition", "a/b").stderr)
         self.assertIn("no such competition", run("--competition", "zz-nope").stderr)
