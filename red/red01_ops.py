@@ -184,10 +184,17 @@ def _apt_prelude():
     # lists lock; DPkg::Lock::Timeout covers the dpkg lock, not the lists lock `update` takes
     # (live: run-00488d45's cde deploy died at its last step on exactly that).
     return ("export DEBIAN_FRONTEND=noninteractive; "
+            "systemctl stop unattended-upgrades apt-daily.service "
+            "apt-daily-upgrade.service 2>/dev/null || true; "
+            "for i in $(seq 1 36); do "
+            "pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null || "
+            "pgrep -x unattended-upgr >/dev/null || break; sleep 5; done; "
             "for i in $(seq 1 12); do "
-            "apt-get -o DPkg::Lock::Timeout=600 update -qq && break; sleep 10; "
+            "apt-get -o DPkg::Lock::Timeout=900 update -qq && break; sleep 10; "
             "done; "
-            "apt-get -o DPkg::Lock::Timeout=600 install -y -qq " + DEPS)
+            "for i in $(seq 1 3); do "
+            "apt-get -o DPkg::Lock::Timeout=900 install -y -qq " + DEPS +
+            " && break; sleep 10; done")
 
 
 def _exec(node, vmid, script, timeout=300):
