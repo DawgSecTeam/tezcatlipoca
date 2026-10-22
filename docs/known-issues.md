@@ -1,12 +1,3 @@
-### A pre-slug kept template cannot be adopted by a fresh deploy
-
-Templates created before the comp-tag slug fix carry the display name split at its space
-(`comp-CDE` + `2026` instead of `comp-cde-2026`). The collision preflight compares the
-slugged comp tag, does not recognise them as this competition's own kept artifacts, and
-refuses the slot ("collides with VMs ... golden vmid"), so a later deploy cannot reuse
-them and only a full destroy reclaims the vmids. Either re-tag such templates once
-(`comp-<slug>`) or destroy them; the reuse path itself is correct for post-fix templates.
-
 ### A two-team scrim on one LLM endpoint loses every other blue cycle to the 600 s cap
 
 `run-6b0732dc-run3` (scrim-one, 2 teams, 45 min, both blue teams on one deepseek-v4-pro
