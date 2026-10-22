@@ -204,13 +204,10 @@ class SliverClient:
                 if self.record_fresh(rec)}
 
     def callback_for(self, box_id):
-        record = self.callbacks().get(box_id)
+        record = self.callbacks_by_name().get(box_id)
         if record:
             return record
-        for candidate in self.callbacks().values():
-            if candidate.get("name") == box_id:
-                return candidate
-        return None
+        return self.callbacks().get(box_id)
 
     def task(self, box_id, command, *, timeout=None):
         if not self.enabled:
