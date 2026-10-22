@@ -403,3 +403,13 @@ def test_a_blocked_port_is_not_offered_a_second_block(tmp_path):
     again = [c["params"]["port"] for c in policy.candidates(ctx)
              if c["effect"] == "block_port" and c["params"]["ip"] == ip]
     assert ports[0] not in again
+
+
+def test_a_scored_http_matches_an_apache_intel_name():
+    """cde-2026's web01 says `apache` while the scoreboard scores `http`; the alias map
+    only bridged http->nginx, so web01 was never a takedown target in any cde run."""
+    from tlaloc.policy import _scored_key, _service_key
+
+    assert _service_key("apache") == _scored_key("http")
+    assert _service_key("httpd") == _scored_key("http")
+    assert _service_key("mariadb") == _scored_key("sql")

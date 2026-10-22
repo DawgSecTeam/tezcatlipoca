@@ -74,7 +74,9 @@ def make_candidate(effect, params, score, reason, cost="low", tag=None,
 # Scored services are named `<box>-<short>` by the engine, intel carries package
 # names; without one shared key a service taken DOWN reads as up and is re-taken forever.
 _SERVICE_ALIASES = {"ldap": "adds", "http": "nginx", "https": "nginx",
+                    "apache": "nginx", "httpd": "nginx",   # cde-2026's web01 intel
                     "smtp": "postfix", "imap": "dovecot", "sql": "mysql",
+                    "mariadb": "mysql", "mysqld": "mysql",
                     "ftp": "iisftp", "winrm": "enablewinrm"}
 
 
