@@ -448,7 +448,13 @@ class Policy:
                 blocked = {i.get("port") for i in self.world.impacts()
                            if i.get("mode") == "block_port" and i.get("ip") == ip
                            and i.get("port")}
-                for pin in self.intel.port_checks_for(ip):
+                # A transport failure is box-wide, not per port: ad01's DC refuses SSH, and
+                # red spent six cycles re-failing it on three ports (live: cde-2026).
+                pins = self.intel.port_checks_for(ip)
+                if sum(self.world.failure_count("block_port", ip, int(p["port"]))
+                       for p in pins if p.get("port")) >= 2:
+                    pins = []
+                for pin in pins:
                     if not pin.get("port"):
                         continue
                     if int(pin["port"]) in blocked:

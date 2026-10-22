@@ -413,3 +413,22 @@ def test_a_scored_http_matches_an_apache_intel_name():
     assert _service_key("apache") == _scored_key("http")
     assert _service_key("httpd") == _scored_key("http")
     assert _service_key("mariadb") == _scored_key("sql")
+
+
+def test_two_block_port_failures_suppress_the_whole_box(tmp_path):
+    """A transport failure is box-wide; ad01's DC refuses SSH and red re-failed it on three
+    ports (six cycles) before this cap."""
+    ctx, policy = policy_for(tmp_path)
+    duration = ctx.cfg["red"]["duration_min"]
+    ctx.world.meta["event_start"] = policy._now() - (duration - 1) * 60
+    ctx.world.save()
+    ip = "192.168.1.10"
+    ctx.world.add_foothold(ip, "ubuntu", "boxpw-1", "root", escalation="sudo")
+    ports = [c["params"]["port"] for c in policy.candidates(ctx)
+             if c["effect"] == "block_port" and c["params"]["ip"] == ip]
+    assert ports, "expected scored port candidates"
+    for _ in range(2):
+        ctx.world.tally_failure("block_port", ip, ports[0])
+    again = [c["params"]["port"] for c in policy.candidates(ctx)
+             if c["effect"] == "block_port" and c["params"]["ip"] == ip]
+    assert again == [], f"expected no block_port candidates after a box-wide failure, got {again}"
