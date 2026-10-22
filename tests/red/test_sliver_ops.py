@@ -68,6 +68,8 @@ def test_prepare_runs_install_operator_and_returns_the_block():
 
     def runner(argv, **kwargs):
         calls.append((argv, kwargs))
+        if len(calls) == 1:          # the daemon-liveness probe: not running yet
+            return Completed(1, "")
         return Completed(0, "ok")
 
     with tempfile.TemporaryDirectory() as tmp:

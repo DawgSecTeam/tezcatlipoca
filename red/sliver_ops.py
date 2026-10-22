@@ -157,21 +157,33 @@ def prepare_sliver(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
         return result
 
     with sliver_lock(box_ip):
-        proc = _run(ssh_key, box_ip, install_script(box_ip), runner=runner,
-                    timeout=INSTALL_TIMEOUT)
-        result["reached"].append("install")
-        result["install_output"] = _tail(proc, 1200)
-        if getattr(proc, "returncode", 1) != 0:
-            result["degradations"].append(f"sliver server install: {_tail(proc)}")
-            return result
+        running = sliver_running(ssh_key, box_ip, runner=runner)
+        if running:
+            # A scrim's stage_red calls phase 7 again on a live range: restarting
+            # the daemon would kill every checked-in implant.
+            result["reached"].append("install (already running)")
+            result["install_output"] = "skipped: daemon answers on 31337"
+        else:
+            proc = _run(ssh_key, box_ip, install_script(box_ip), runner=runner,
+                        timeout=INSTALL_TIMEOUT)
+            result["reached"].append("install")
+            result["install_output"] = _tail(proc, 1200)
+            if getattr(proc, "returncode", 1) != 0:
+                result["degradations"].append(f"sliver server install: {_tail(proc)}")
+                return result
 
-        proc = _run(ssh_key, box_ip, operator_script(box_ip), runner=runner,
-                    timeout=SHORT_TIMEOUT)
-        result["reached"].append("operator")
-        result["operator_output"] = _tail(proc, 600)
-        if getattr(proc, "returncode", 1) != 0:
-            result["degradations"].append(f"sliver operator config: {_tail(proc)}")
-            return result
+        if running and _remote_ok(ssh_key, box_ip, f"test -s {OPERATOR_CONFIG}",
+                                  runner=runner):
+            result["reached"].append("operator (present)")
+            result["operator_output"] = "skipped: operator profile exists"
+        else:
+            proc = _run(ssh_key, box_ip, operator_script(box_ip), runner=runner,
+                        timeout=SHORT_TIMEOUT)
+            result["reached"].append("operator")
+            result["operator_output"] = _tail(proc, 600)
+            if getattr(proc, "returncode", 1) != 0:
+                result["degradations"].append(f"sliver operator config: {_tail(proc)}")
+                return result
 
     spread = compfile_value(comp_dir / "Compfile", "red.c2_implant_spread", "") or ""
     wait = compfile_value(comp_dir / "Compfile", "red.c2_callback_wait_sec", "") or ""
@@ -201,6 +213,16 @@ def apply_c2_to_config(config_path, c2_block):
     section.update(c2_block or {})
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
+
+
+def sliver_running(ssh_key, box_ip, *, runner=None):
+    """Check over SSH so a management-network ACL cannot make a live daemon look absent."""
+    return _remote_ok(ssh_key, box_ip, "ss -ltn | grep -q ':31337 '", runner=runner)
+
+
+def _remote_ok(ssh_key, box_ip, command, *, runner=None):
+    proc = _run(ssh_key, box_ip, command, runner=runner, timeout=SHORT_TIMEOUT)
+    return getattr(proc, "returncode", 1) == 0
 
 
 def sliver_answering(box_ip, timeout=3):

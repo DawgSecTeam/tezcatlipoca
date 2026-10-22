@@ -519,6 +519,21 @@ class Planter:
                 "paths": [f"registry:{key}"],
                 "undo": [f'reg delete "{key}" /f']}
 
+    def channels_up(self, box_id, transport=None):
+        """True when every plantable payload for this box already has a fresh callback."""
+        entries = [entry for entry in manifest_entries(self.manifest, box_id, transport)
+                   if entry.get("plant", True)]
+        if not entries or self.ctx.c2 is None:
+            return False
+        records = (self.ctx.c2.callbacks_by_name()
+                   if hasattr(self.ctx.c2, "callbacks_by_name")
+                   else self.ctx.c2.callbacks())
+        for entry in entries:
+            name = entry.get("name") or f"{box_id}-{entry.get('transport')}"
+            if not self._fresh(records.get(name)):
+                return False
+        return True
+
     def wait_for_callback(self, box_id, *, wait_sec=45, poll_interval=5):
         """tavern/mythic keep callback rows after the agent dies; only a fresh row counts."""
         return self.wait_for_callbacks([box_id], wait_sec=wait_sec,

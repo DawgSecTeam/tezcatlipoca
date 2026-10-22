@@ -244,8 +244,19 @@ def seed_command():
 
 def comp_prep_remote_command(transports="all"):
     """Runs ON red01, where the operator profile and the target intel live."""
-    return (f"cd {INSTALL_DIR} && sudo -n python3 -m tlaloc --config {CONFIG_PATH} "
+    return (f"sudo -n rm -rf /root/.sliver/slivers && cd {INSTALL_DIR} && "
+            f"sudo -n python3 -m tlaloc --config {CONFIG_PATH} "
             f"--comp {INTEL_DIR} c2-prep --transports {transports}")
+
+
+def payloads_ready(ssh_key, red_ip, *, runner=None):
+    """A resume/scrim reuses the matrix already built on red01; rebuilding 30 implants is hours."""
+    remote = (f"cd {INTEL_DIR}/red/payloads 2>/dev/null && sudo -n python3 -c "
+              "\"import json,os; d=json.load(open('manifest.json')); "
+              "assert d.get('boxes'); "
+              "assert all(os.path.isfile(e['file']) for e in d['boxes'].values())\"")
+    proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=120)
+    return getattr(proc, "returncode", 1) == 0
 
 
 def pull_payload_manifest(ssh_key, red_ip, comp_dir, *, runner=None):
@@ -638,16 +649,22 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
             raise RuntimeError(f"pushing the C2 env file failed: {env_push.get('detail')}")
     verify_config_contract(ssh_key, red_ip, intended=cfg_path, runner=runner)
     if use_sliver:
-        prep = _ssh_run(ssh_key, red_ip, comp_prep_remote_command("all"),
-                        runner=runner, timeout=7200)
-        if getattr(prep, "returncode", 1) != 0:
-            raise RuntimeError(f"Sliver c2-prep (payload matrix) failed on red01: "
-                               f"{_tail(prep, 1500)}")
-        payload_manifest = pull_payload_manifest(ssh_key, red_ip, comp_dir,
-                                                 runner=runner)
+        if payloads_ready(ssh_key, red_ip, runner=runner):
+            payload_manifest = pull_payload_manifest(ssh_key, red_ip, comp_dir,
+                                                     runner=runner)
+            print(f"  sliver      : reusing {payload_manifest['payloads']} frozen "
+                  f"payload(s) already on red01")
+        else:
+            prep = _ssh_run(ssh_key, red_ip, comp_prep_remote_command("all"),
+                            runner=runner, timeout=7200)
+            if getattr(prep, "returncode", 1) != 0:
+                raise RuntimeError(f"Sliver c2-prep (payload matrix) failed on red01: "
+                                   f"{_tail(prep, 1500)}")
+            payload_manifest = pull_payload_manifest(ssh_key, red_ip, comp_dir,
+                                                     runner=runner)
+            print(f"  sliver      : {payload_manifest['payloads']} frozen payload(s) "
+                  f"across {len(callback_ports)} transport port(s)")
         c2_summary["payloads"] = payload_manifest["payloads"]
-        print(f"  sliver      : {payload_manifest['payloads']} frozen payload(s) "
-              f"across {len(callback_ports)} transport port(s)")
     if llm_key:
         push_llm_env(ssh_key, red_ip, llm_key, runner=runner)
     install_unit(ssh_key, red_ip, runner=runner)

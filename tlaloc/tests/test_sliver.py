@@ -88,6 +88,32 @@ def test_dns_keeps_the_gateway_port_separate_from_the_server_port():
     assert DEFAULT_PORTS["dns"]["server"] == 5353
 
 
+def test_channels_up_is_a_replant_skip_only_when_every_transport_checked_in(tmp_path):
+    from tlaloc.c2.implant import Planter
+    from tlaloc.c2.sliver import FakeSliver
+    manifest = {"boxes": {
+        "web01-150-mtls": {"name": "web01-150-mtls", "box": "web01-150",
+                           "transport": "mtls", "plant": True},
+        "web01-150-http": {"name": "web01-150-http", "box": "web01-150",
+                           "transport": "http", "plant": True},
+        "web01-150-dns": {"name": "web01-150-dns", "box": "web01-150",
+                          "transport": "dns", "plant": False},
+    }}
+    callbacks = {"web01-150-mtls": {"name": "web01-150-mtls", "seen_at": 100,
+                                    "agent": "mtls", "async": False},
+                 "web01-150-http": {"name": "web01-150-http", "seen_at": 100,
+                                    "agent": "http", "async": False}}
+    ctx = SimpleNamespace(cfg={"c2": {"implant_spread": "full",
+                                      "callback_max_age_sec": 120},
+                               "run": {"comp_dir": str(tmp_path)}},
+                          world=SimpleNamespace(note_callback=lambda *a, **k: None),
+                          c2=FakeSliver(callbacks))
+    planter = Planter(ctx, comp_dir=tmp_path, manifest=manifest, now=lambda: 100)
+    assert planter.channels_up("web01-150") is True
+    planter.ctx.c2 = FakeSliver({"web01-150-mtls": callbacks["web01-150-mtls"]})
+    assert planter.channels_up("web01-150") is False
+
+
 class FakePrepClient:
     def __init__(self):
         self.builds = []

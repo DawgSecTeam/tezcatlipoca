@@ -120,6 +120,11 @@ def _run_stage(ctx, ip, stage, mode, dry_run=False):
         if mode == "light" and not ctx.world.foothold(ip):
             return {"stage": stage, "effect": "implant_channel", "ok": False,
                     "detail": "light mode needs a foothold to plant the channel"}
+        from .c2.implant import Planter
+        if Planter(ctx, comp_dir=ctx.cfg["run"].get("comp_dir"),
+                   manifest=getattr(ctx, "payload_manifest", None)).channels_up(ip):
+            return {"stage": stage, "effect": "implant_channel", "ok": True,
+                    "detail": "every C2 transport already checked in"}
         # force: the seed is a deliberate re-plant, so it re-tries a box whose
         # earlier attempts already counted two failures.
         result = execute("implant_channel", {"ip": ip, "force": "true"}, ctx,
