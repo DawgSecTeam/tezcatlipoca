@@ -32,10 +32,11 @@ class EventLog:
             fh.write(json.dumps(rec, default=str) + "\n")
 
     def decision(self, *, cycle, question=None, bundle, answer, probabilities,
-                 theta, source, chosen, ok, note=None):
+                 theta, source, chosen, ok, note=None, top_prob=None):
         self.emit("decision", cycle=cycle, question=question, bundle=bundle,
                   answer=answer, probabilities=probabilities, theta=theta,
-                  source=source, chosen=chosen, ok=ok, note=note)
+                  source=source, chosen=chosen, ok=ok, note=note,
+                  top_prob=top_prob)
 
     def action(self, *, cycle, effect, params, result, source, duration_s):
         self.emit("action", cycle=cycle, effect=effect, params=params,

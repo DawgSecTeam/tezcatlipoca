@@ -291,6 +291,9 @@ class SliverClient:
             ObfuscateSymbols=not debug and transport != "wg",
             Debug=bool(debug),
             ReconnectInterval=int(30 * 1e9), MaxConnectionErrors=0,
+            # Windows' native resolver ignores the dns:// resolvers option; the pure
+            # Go resolver honors it, so DNS survives an unreachable system resolver.
+            NetGoEnabled=transport == "dns",
             HTTPC2ConfigName="default",
             C2=[clientpb.ImplantC2(URL=url, Priority=0)])
         if transport == "wg":

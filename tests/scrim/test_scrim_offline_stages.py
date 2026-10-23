@@ -56,7 +56,7 @@ class RedLlmHeadroom(unittest.TestCase):
             _args(None, llm_base_url="http://100.64.0.47:8000/v1", red_model="qwen3.8-flash-next"))
         self.assertEqual(llm["timeout_sec"], 300)
         self.assertEqual(llm["model"], "qwen3.8-flash-next")
-        self.assertTrue(llm["enabled"])
+        self.assertFalse(llm["enabled"])  # CLEF decides; no free-form arbiter
 
 
 

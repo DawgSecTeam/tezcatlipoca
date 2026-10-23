@@ -38,6 +38,14 @@ def test_ladder_tiers_follow_event_progress(tmp_path):
     assert seen[0.9] == "brutal"
 
 
+def test_observe_tier_unlocks_a_first_stop_after_two_minutes(tmp_path):
+    ctx, policy = policy_for(tmp_path)
+    assert policy.impact_started() is False
+    ctx.world.meta["event_start"] = policy._now() - 3 * 60
+    assert policy.impact_started() is True
+    assert "stop" in policy.allowed_impact_modes()
+
+
 def test_ladder_pause_after_restore_holds_the_clock(tmp_path):
     ctx, policy = policy_for(tmp_path)
     duration = ctx.cfg["red"]["duration_min"]

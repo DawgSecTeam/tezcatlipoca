@@ -57,6 +57,7 @@ CONFIG_CONTRACT = (
     "limits.spray_delay_sec",
     "limits.spray_probe_timeout",
     "limits.unreachable_halt_after",
+    "red.opening_takedown_min",
     "llm.api_key_env",
     "llm.base_url",
     "llm.enabled",
@@ -219,7 +220,8 @@ def cmd_report(args):
     ctx, policy, _ = run_mod.build_context(cfg, comp_dir=cfg["run"].get("comp_dir"))
     paths = report_mod.write_artifacts(cfg["run"]["state_dir"], ctx.world,
                                       policy=policy, sensors=ctx.sensors,
-                                      out_dir=args.out)
+                                      out_dir=args.out, c2=ctx.c2,
+                                      comp_dir=cfg["run"].get("comp_dir"))
     print(json.dumps(paths, indent=2))
     return 0
 
@@ -321,9 +323,6 @@ def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
             if transport in beacons:
                 jobs.append({**jobs[-1], "beacon": True})
 
-    dns_owner = next((job["box_id"] for job in jobs
-                      if job["transport"] == "dns" and job["os"] == "linux"), None)
-
     def _build(job):
         entry = client.build_payload(
             job["box_id"], job["os"], transport=job["transport"],
@@ -334,11 +333,7 @@ def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
         entry["pivot"] = job["transport"] in PIVOT_TRANSPORTS
         # Pivots need a parent listener and beacons are the alternate control
         # path; both are built and shipped, not seeded blind.
-        # Windows' DNS client exits after the resolver gives up; the transport is
-        # built and shipped, and DNS is planted and proven on the Linux boxes.
-        unsupported = job["transport"] == "dns" and (
-            job["os"] == "windows" or job["box_id"] != dns_owner)
-        entry["plant"] = (not job["beacon"] and not unsupported
+        entry["plant"] = (not job["beacon"]
                           and job["transport"] not in PIVOT_TRANSPORTS)
         return entry
 

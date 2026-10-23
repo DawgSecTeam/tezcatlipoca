@@ -188,6 +188,9 @@ class Loop:
             "chosen": (decision.chosen or {}).get("id"),
             "top_prob": round(decision.top_prob, 3),
             "executed": [e["id"] for e in executed if e],
+            "outcomes": [{"id": e["id"], "ok": e.get("ok"),
+                          "detail": (e.get("detail") or "")[:240]}
+                         for e in executed if e],
         })
         return {"cycle": self.cycle, "decision": decision, "executed": executed,
                 "digest": digest, "candidates": len(candidates)}
@@ -361,7 +364,8 @@ class Loop:
         paths = report_mod.write_artifacts(
             self.reports_dir or self.ctx.cfg["run"]["state_dir"], self.world,
             policy=self.policy, sensors=self.sensors, decisions=self.records,
-            out_dir=self.reports_dir)
+            out_dir=self.reports_dir, c2=self.ctx.c2,
+            comp_dir=self.ctx.cfg["run"].get("comp_dir"))
         self.log.emit("run_end", cycle=self.cycle,
                       duration_s=round(time.time() - started, 1), reports=paths)
         return {"cycles": self.cycle, "reports": paths,

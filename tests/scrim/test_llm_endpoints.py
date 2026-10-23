@@ -74,7 +74,7 @@ class RedProfileAndTunnel(unittest.TestCase):
         llm = red_stage.red_llm_config(self._args())
         self.assertEqual(llm["base_url"], DEEPSEEK)
         self.assertEqual(llm["model"], "deepseek-flash")
-        self.assertTrue(llm["enabled"])
+        self.assertFalse(llm["enabled"])  # CLEF decides; no free-form arbiter
         self.assertEqual(llm["timeout_sec"], 240)
         self.assertEqual(llm["api_key_env"], "TLALOC_LLM_API_KEY")
 

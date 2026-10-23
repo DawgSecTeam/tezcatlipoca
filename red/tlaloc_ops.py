@@ -25,7 +25,7 @@ UNIT_SRC = TLALOC_REPO / "systemd" / "tlaloc.service"
 DEFAULT_RED_DISK_GB = 60
 
 CONFIG_KEYS = ("assume_breach", "depth", "duration_min", "ladder", "caps",
-               "windows", "budget")
+               "opening_takedown_min", "windows", "budget")
 TAKEDOWN_MODES = ("stop", "stop_mask", "stop_rename", "stop_break_config",
                   "stop_rename_config", "block_port", "recon")
 
@@ -175,7 +175,9 @@ def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
         cfg["sensors"] = {"quotient_enabled": True,
                           "quotient_url": quotient_url or f"http://{engine_ip}"}
     if clef_url:
-        cfg.setdefault("clef", {})["base_url"] = clef_url
+        cfg.setdefault("clef", {}).update({
+            "base_url": clef_url,
+            "model": str(block.get("clef_model") or "clef-flash")})
     if c2_url:
         cfg.setdefault("c2", {}).update({"enabled": True, "base_url": c2_url,
                                          "operation": c2_operation or cfg["run"]["comp"]})

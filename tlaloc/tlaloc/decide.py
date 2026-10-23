@@ -553,7 +553,7 @@ class Decider:
                               probabilities=record["probabilities"],
                               theta=record["theta"], source=record["source"],
                               chosen=record["chosen"], ok=None,
-                              note=record["note"])
+                              note=record["note"], top_prob=record["top_prob"])
         return decision
 
     def record(self, cycle=None, decisions=(), *, executed=None):

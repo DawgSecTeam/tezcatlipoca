@@ -192,7 +192,11 @@ class Policy:
         tier = self.ladder()
         if tier is None:
             return list(MODE_RANK)
-        return [m for m in (tier.get("modes") or []) if m in MODE_RANK]
+        modes = [m for m in (tier.get("modes") or []) if m in MODE_RANK]
+        opening = float(self.red.get("opening_takedown_min", 2))
+        if "recon" in modes and self.elapsed_min() >= opening:
+            modes.append("stop")
+        return modes
 
     def allowed_impact_modes(self):
         """The takedown mechanisms unlocked now — what `takedown.check()` reads."""
@@ -210,8 +214,11 @@ class Policy:
             return True
         tier = self.ladder()
         if tier is not None:
-            return bool([m for m in (tier.get("modes") or []) if m in MODE_RANK
-                         and m != "recon"])
+            if bool([m for m in (tier.get("modes") or []) if m in MODE_RANK
+                     and m != "recon"]):
+                return True
+            # observe tier: a short recon window, then the first pressure action
+            return self.elapsed_min() >= float(self.red.get("opening_takedown_min", 2))
         return self.elapsed_min() >= float(self.red["caps"].get("grace_min", 10))
 
     def unrecoverable_unlocked(self):

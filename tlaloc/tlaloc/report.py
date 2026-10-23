@@ -74,8 +74,140 @@ def restore_commands(world):
     return out
 
 
+def decision_trace(state_dir, limit=10):
+    """The last CLEF exchanges, from the event log (bundle + answer + confidence)."""
+    path = Path(state_dir) / "events.jsonl"
+    if not path.exists():
+        return []
+    rows = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("kind") == "decision":
+                rows.append(event)
+    except OSError:
+        return []
+    return rows[-limit:]
+
+
+def c2_matrix(c2, comp_dir):
+    """Every planned implant and whether its own callback name checked in."""
+    if not c2 or not comp_dir:
+        return []
+    from .c2.implant import entry_name, load_manifest
+    try:
+        manifest = load_manifest(comp_dir)
+        callbacks = c2.callbacks_by_name()
+    except (OSError, ValueError, AttributeError):
+        return []
+    rows = []
+    for key, entry in (manifest.get("boxes") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        name = entry_name(entry, entry.get("box") or key.split(":", 1)[0])
+        record = callbacks.get(name) or callbacks.get(key)
+        if entry.get("plant") is False:
+            status = "built only"
+        elif record and getattr(c2, "record_fresh", lambda r: True)(record):
+            status = "callback"
+        elif record:
+            status = "stale"
+        else:
+            status = "NO CALLBACK"
+        rows.append({"box": entry.get("box") or key.split(":", 1)[0],
+                     "transport": entry.get("transport") or "?",
+                     "kind": entry.get("kind") or "session",
+                     "plant": entry.get("plant") is not False,
+                     "name": name, "status": status,
+                     "seen_at": (record or {}).get("seen_at"),
+                     "callback": entry.get("callback")})
+    return rows
+
+
+def _box_caption(state):
+    boxes = []
+    for box in state.get("boxes") or []:
+        svc = ", ".join(f"{name}:{status}" for name, status in box.get("svc") or [])
+        boxes.append(f"{box.get('id')}({box.get('os')},{box.get('acc')}) "
+                     f"[{svc}]")
+    return "; ".join(boxes) if boxes else "no boxes"
+
+
+def _render_c2(lines, rows):
+    lines += ["", "## C2 implant matrix (per build name)"]
+    if not rows:
+        lines.append("- no C2 client/manifest available at report time")
+        return
+    planted = [r for r in rows if r["plant"]]
+    live = [r for r in planted if r["status"] == "callback"]
+    lines.append(f"- planted: **{len(live)}/{len(planted)}** checked in; "
+                 f"built-only: {len(rows) - len(planted)}")
+    missing = [r for r in planted if r["status"] != "callback"]
+    if missing:
+        lines.append("- **no callback / not working**: "
+                     + ", ".join(f"{r['box']}:{r['transport']} ({r['status']})"
+                                 for r in missing))
+    for r in rows:
+        seen = f" last={r['seen_at']}" if r.get("seen_at") is not None else ""
+        lines.append(f"- {r['box']:<14} {r['transport']:<11} {r['kind']:<8} "
+                     f"{r['status']:<12}{seen}  `{r['callback'] or ''}`")
+    beacons = [r for r in rows if r["kind"] == "beacon"]
+    if beacons:
+        called = [r for r in beacons if r["status"] == "callback"]
+        lines.append(f"- beacon builds: {len(called)}/{len(beacons)} checked in "
+                     "(alternate control paths are built, not seeded)")
+
+
+def _render_decisions(lines, trace, legacy=None):
+    lines += ["", "## CLEF decisions (input → answer → pick)"]
+    outcomes = {r.get("cycle"): r.get("outcomes") for r in (legacy or [])}
+    if not trace:
+        if legacy:
+            for record in legacy[-10:]:
+                lines.append(f"- cycle {record.get('cycle')}: {record.get('kind')} "
+                             f"{record.get('chosen') or record.get('effect') or ''} "
+                             f"source={record.get('source')}")
+        else:
+            lines.append("- no decision events at report time")
+        return
+    for event in trace:
+        cycle, question = event.get("cycle"), event.get("question")
+        answer = event.get("answer")
+        top = float(event.get("top_prob") or 0)
+        theta = float(event.get("theta") or 0)
+        source = event.get("source") or "?"
+        lines.append(f"### cycle {cycle} — {question} → `{answer}` "
+                     f"({source}, p={top:.2f}, theta={theta:.2f})")
+        bundle = event.get("bundle") or {}
+        state = bundle.get("state") or {}
+        if state:
+            lines.append(f"- given: T+{state.get('t', '?')} phase={state.get('phase', '?')} "
+                         f"down={state.get('down', '?')} cap={state.get('cap', '?')}; "
+                         f"{_box_caption(state)}")
+        questions = (bundle.get("questions") or {}).get(question) or {}
+        if questions.get("instructions"):
+            lines.append(f"- asked: {questions['instructions']}")
+        criteria = questions.get("criteria") or {}
+        probs = event.get("probabilities") or {}
+        if criteria and isinstance(criteria, dict):
+            ranked = sorted(probs.items(), key=lambda item: item[1], reverse=True)
+            for option, prob in ranked[:6]:
+                lines.append(f"  - {prob:.2f} `{option}`: "
+                             f"{criteria.get(option, '')[:160]}")
+        for outcome in outcomes.get(cycle) or []:
+            lines.append(f"- executed `{outcome['id']}`: "
+                         f"{'ok' if outcome.get('ok') else 'FAILED'}"
+                         + (f" — {outcome['detail']}" if outcome.get("detail") else ""))
+        note = event.get("note")
+        if note:
+            lines.append(f"- note: {note}")
+        lines.append("")
+
 def render_report(world, *, policy=None, sensors=None, narrative=None,
-                  decisions=None, summary=None):
+                  decisions=None, summary=None, trace=None, c2_rows=None):
     summary = summary or summarize(world, policy, sensors)
     lines = [f"# tlaloc after-action — {summary.get('comp') or 'unset competition'}",
              "",
@@ -109,13 +241,8 @@ def render_report(world, *, policy=None, sensors=None, narrative=None,
         lines.append(f"- `{entry['effect']}` on {entry['ip']} "
                      f"{('[' + entry['service'] + ']') if entry['service'] else ''}: "
                      + " ; ".join(str(s) for s in steps if s))
-    if decisions:
-        lines += ["", "## Decision log (last cycles)"]
-        for record in decisions[-25:]:
-            lines.append(f"- cycle {record.get('cycle')}: {record.get('kind')} "
-                         f"{record.get('chosen') or record.get('effect') or ''} "
-                         f"source={record.get('source')} "
-                         f"top_prob={record.get('top_prob', '-')}")
+    _render_c2(lines, c2_rows or [])
+    _render_decisions(lines, trace or [], decisions)
     lines.append("")
     return "\n".join(lines)
 
@@ -145,12 +272,14 @@ def render_secrets(world, *, summary=None):
 
 
 def write_artifacts(state_dir, world, *, policy=None, sensors=None, narrative=None,
-                    decisions=None, out_dir=None):
+                    decisions=None, out_dir=None, c2=None, comp_dir=None):
     out = Path(out_dir or state_dir)
     out.mkdir(parents=True, exist_ok=True)
     summary = summarize(world, policy, sensors)
     report = render_report(world, policy=policy, sensors=sensors,
-                           narrative=narrative, decisions=decisions, summary=summary)
+                           narrative=narrative, decisions=decisions, summary=summary,
+                           trace=decision_trace(state_dir),
+                           c2_rows=c2_matrix(c2, comp_dir))
     secrets = render_secrets(world, summary=summary)
     table = {"comp": summary.get("comp"), "generated_at": now_iso(),
              "entries": restore_table(world),
