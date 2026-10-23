@@ -36,6 +36,29 @@ def _publish_red_intel_state(ctx):
     }))
 
 
+
+def _ensure_pinned_ftp(ctx):
+    """The IIS FTP helper starts FTPSVC before setting it Automatic; if the feature
+    install leaves it running, the start type stays Disabled and the next boot loses
+    the scored port."""
+    from infra.guest_exec import guest_agent_exec_windows
+    path = ctx.comp_dir / "box_services.json"
+    if not path.exists():
+        return
+    services = json.loads(path.read_text())
+    for target in ctx.managed_targets:
+        box = target.get("box") or {}
+        pins = services.get(box.get("name")) or []
+        names = [(pin.get("name") if isinstance(pin, dict) else pin) for pin in pins]
+        if "IIS FTP" not in names:
+            continue
+        rc, _out, err = guest_agent_exec_windows(
+            target.get("node") or ctx.node, target["vmid"],
+            "Set-Service FTPSVC -StartupType Automatic; Start-Service FTPSVC",
+            timeout=180)
+        if rc != 0:
+            raise RuntimeError(f"could not enable FTPSVC on {box.get('name')}: {err[-300:]}")
+
 def phase7_domains_and_final(ctx):
     if ctx.from_phase > 7:
         print("[7/8] Skipped (resume).")
@@ -77,6 +100,8 @@ def phase7_domains_and_final(ctx):
         print("  ERROR: `team_beacons` belonged to the earlier agent and no longer exists — remove it "
               "from the Compfile")
         raise RuntimeError("team_beacons is not supported")
+
+    _ensure_pinned_ftp(ctx)
 
     # Red goes in before the snapshot: the restore point every box carries must already be
     # compromised, and a range with no red team aborts the deploy rather than degrade.
