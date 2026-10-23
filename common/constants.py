@@ -14,10 +14,15 @@ MAX_TEAMS = 154
 SCORING_ENGINE_VMID = 1000
 
 # Static: the DHCP engine drifted mid-event; high in the /24, clear of red01 slots and the observed drift.
+# Not a silent default: engine_mgmt_ip_gate refuses an unverifiable .250 unless the operator pinned
+# TEZ_ENGINE_MGMT_IP, because a foreign engine has held this address on the shared L2 before.
 DEFAULT_ENGINE_MGMT_IP = "10.0.0.250"
 DEFAULT_ENGINE_MGMT_GW = "10.0.0.1"
 
-# Top-of-/24: lower addresses hide collisions from the agent scan; an incomplete scan keeps the .250 default.
+# Top-of-/24: lower addresses hide collisions from the agent scan. Decision: a fresh deploy
+# auto-selects the lowest free band address only when EVERY running guest answers the agent;
+# an incomplete scan keeps the marked default and the preflight refuses it unless the operator
+# pinned one. Never select an engine address from a guess.
 ENGINE_MGMT_BAND = ("10.0.0.251", "10.0.0.254")
 
 SNAP_BASE = "tz-base"

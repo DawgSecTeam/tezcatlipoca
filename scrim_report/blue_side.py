@@ -38,7 +38,8 @@ def down_windows(snaps):
 
 
 def blue_metrics(run_dir):
-    m = {"cycles_rc0": 0, "cycles_total": 0, "manual_rc0": 0, "timeouts": 0, "injects": 0,
+    m = {"cycles_rc0": 0, "cycles_total": 0, "manual_rc0": 0, "timeouts": 0,
+         "window_cuts": 0, "injects": 0,
          "notebook_entries": 0, "eradication": 0, "evictions_logged": 0}
     # Artifact names are drawn per family (tlaloc/effects/artifactnames.py), so eradication
     # attribution matches behavior classes, not red's literals.
@@ -62,7 +63,10 @@ def blue_metrics(run_dir):
                         if hdr.group(1):
                             m["manual_rc0"] += 1
                 elif re.match(r"===== cycle .* TIMEOUT", line.strip()):
-                    m["timeouts"] += 1
+                    if "(window)" in line:
+                        m["window_cuts"] += 1
+                    else:
+                        m["timeouts"] += 1
         log_text = ""
         for name in ("LOG.md", "NOTEBOOK.md"):
             p = wd / name

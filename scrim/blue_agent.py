@@ -110,6 +110,14 @@ def stage_blues(args, comp, run_dir, creds, t0):
     test_folder.record_blue_agents(args, run_dir)
 
 
+class CycleTimeout(subprocess.TimeoutExpired):
+    """A cycle cut by its own cap, or one the event window cut; only the cap gates."""
+
+    def __init__(self, cmd, timeout, reason):
+        super().__init__(cmd, timeout)
+        self.reason = reason
+
+
 def _opencode_run(args, prompt, wd, env, stop=None):
     m = re.search(r"team(\d+)$", wd.name)
     n_team = int(m.group(1)) if m else 1
@@ -125,6 +133,7 @@ def _opencode_run(args, prompt, wd, env, stop=None):
                             stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
                             text=True, start_new_session=True)
     deadline = time.time() + core.CYCLE_TIMEOUT
+    reason = "cap"
     while True:
         try:
             out, err = proc.communicate(
@@ -134,6 +143,7 @@ def _opencode_run(args, prompt, wd, env, stop=None):
             # a retried communicate loses no output (documented Popen behavior); the cycle
             # ends on its own budget OR on the event deadline, whichever comes first
             if time.time() >= deadline or (stop is not None and stop.is_set()):
+                reason = "cap" if time.time() >= deadline else "window"
                 break
     # opencode leaves a server grandchild holding the pipes; killing only the direct child made
     # subprocess.run block for that grandchild's lifetime. bash is the session leader
@@ -151,7 +161,7 @@ def _opencode_run(args, prompt, wd, env, stop=None):
             re.sub(r"\x1b\[[0-9;]*m", "", (out or "") + (err or ""))[-4000:])
     except OSError:
         pass
-    raise subprocess.TimeoutExpired(proc.args, core.CYCLE_TIMEOUT)
+    raise CycleTimeout(proc.args, core.CYCLE_TIMEOUT, reason)
 
 
 def _reap_managed_servers(home):
@@ -245,9 +255,11 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
             with (wd / "feed.log").open("a") as f:
                 f.write(f"\n===== cycle T+{elapsed} rc={r.returncode} =====\n{out[-2000:]}\n")
             log(f"blue-team{n} cycle T+{elapsed} rc={r.returncode}")
-        except subprocess.TimeoutExpired:
-            write_cycle_timeout(wd, elapsed)
-            log(f"blue-team{n} cycle T+{elapsed} TIMED OUT")
+        except subprocess.TimeoutExpired as exc:
+            window = getattr(exc, "reason", "") == "window"
+            write_cycle_timeout(wd, elapsed, window=window)
+            log(f"blue-team{n} cycle T+{elapsed} TIMED OUT"
+                f"{' at the event window' if window else ' at the cycle cap'}")
         except Exception as e:
             log(f"blue-team{n} feed error: {e}")
         took = time.time() - started
@@ -311,11 +323,11 @@ def finalize_blue_narratives(args):
             log(f"WARNING: could not write blue-team{n} REPORT.md: {e}")
 
 
-# the `timeouts == 0` rehearsal gate finds this string and nothing else, so a timeout that
-# skips it passes the gate silently.
-def write_cycle_timeout(wd, elapsed):
+# the rehearsal gate finds this string and nothing else, so a timeout that skips it passes
+# silently; a window cut carries its reason, so the gate can ignore it (it is not a slow cycle).
+def write_cycle_timeout(wd, elapsed, *, window=False):
     with (Path(wd) / "feed.log").open("a") as f:
-        f.write(f"\n===== cycle T+{elapsed} TIMEOUT =====\n")
+        f.write(f"\n===== cycle T+{elapsed} TIMEOUT{' (window)' if window else ''} =====\n")
 
 
 # One lock acquisition per attempt: wrapping the attempt AND its retry held the lock for up to
