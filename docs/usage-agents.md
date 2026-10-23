@@ -27,10 +27,6 @@ Phase 8's steps (`seeded`, `engine_unpaused`, `injects_created`) are flag-gated 
 
 ## Pre-authoring
 
-For a new lineup, generate it from a JSON spec with `generate-competition.py`; the spec
-format and OS aliases are in [competition-spec.md](competition-spec.md). The rest of this
-section describes the files it writes.
-
 ```
 competitions/<id>/Compfile     # name, scenario, difficulty
 competitions/<id>/boxes.json   # name/template/cpu/memory_mb/disk_gb/last_octet
