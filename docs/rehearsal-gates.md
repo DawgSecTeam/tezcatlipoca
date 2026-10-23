@@ -34,6 +34,13 @@ of T0.
 **Blue.** `cycles_rc0` — completed agent cycles per team, a cadence floor and not a target: a
 cycle carrying real incident work costs 20–30 min wall clock on the club's endpoint and the two
 teams serialise on one shared LLM lock, so a short scrim affords about one per team.
+A bare `IIS FTP` service pin is a protocol-login check: on a site that only allows anonymous
+or does not authorize the credlist accounts it scores DOWN every round even while `:21` is
+listening (live: `dc01-ftp`/`win01-ftp`, `sliver-practice-4box`). Write it the way `cde-2026`
+and `redtest-2box` do — `{"name":"IIS FTP","plant_only":true}` plus
+`{"name":"score/tcp","score_only":true,"check":"Tcp","display":"ftp","port":21}` — when the
+pin means "the FTP port is reachable", not "a particular FTP login works".
+
 `restorations` — blue answering red's takedowns. `injects` — the paperwork layer, which is real
 points, counted only for injects whose window opened inside the run. `notebook_entries` — working
 memory, not a write-only diary. `timeouts` — cycles cut at the per-cycle cap
