@@ -12,6 +12,7 @@ Every doc, grouped by what it is for. Entry points: [README.md](../README.md) (q
 | [glossary.md](glossary.md) | Disambiguating a term: team key vs identifier, slot, anchor, golden vs unbooted golden, stage vs pass |
 | [multi-node.md](multi-node.md) | One competition across several Proxmox hosts |
 | [packet-profiles.md](packet-profiles.md) | Compiling a competition packet into a range, or authoring `packet.yaml` |
+| [competition-spec.md](competition-spec.md) | Generating a new competition from a box/OS/service JSON spec |
 | [rehearsal-gates.md](rehearsal-gates.md) | What a scrim's pass/fail gates mean and when they lie (the numbers live in `scrim_report/gate_table.py`) |
 | [tlaloc/README.md](../tlaloc/README.md) | The red teamer itself: loop, decision layer, effects, C2, seed, reports. Deploy contract: [tlaloc/docs/deploy.md](../tlaloc/docs/deploy.md) |
 
