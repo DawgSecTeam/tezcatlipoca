@@ -160,6 +160,16 @@ class BlueFeedLockAndTimeout(unittest.TestCase):
         # be the one timeout the report could not see
         self.assertEqual(blue_side.blue_metrics(rd)["timeouts"], 1)
 
+    def test_a_window_cut_is_reported_separately_from_the_cap(self):
+        rd = Path(tempfile.mkdtemp())
+        wd = rd / "blue-team1"
+        wd.mkdir(parents=True)
+        blue_agent.write_cycle_timeout(wd, 5, window=True)
+        blue_agent.write_cycle_timeout(wd, 12)
+        metrics = blue_side.blue_metrics(rd)
+        self.assertEqual(metrics["timeouts"], 1)
+        self.assertEqual(metrics["window_cuts"], 1)
+
 
 
 class WorkerSupervision(unittest.TestCase):

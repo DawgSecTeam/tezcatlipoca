@@ -39,6 +39,8 @@ The engine clone's cores/memory/disk are forced from `ENGINE_CORES`/`ENGINE_MEMO
 
 `tools/build-vyos-provision-template.py` builds per node from the stream ISO (`download → create → install → provision → check → seal`; run from the worktree root with the node's env). Phase 5 needs: the deploy key in the **config** (`system login user vyos authentication public-keys`; a key written to `authorized_keys` is wiped on reboot), LAN `eth1 = 192.168.1.1/24`, serial getty, and **no `hw-id` lines** (MAC-pinned names rename every fresh-MAC clone's interfaces and kill the config). `check` pushes the real phase-5 script to a scratch and undoes it; `check-key` proves the key path.
 
+Both firewall builders (this one and `build-pfsense-provision-template.py`) choose their scratch-VM transport with `--mode`: `node` (default; alias `192.168.1.2` on the node's bridge and hop through `root@<node>`), `operator` (alias it on a local NIC that shares the scratch VM's L2, `--operator-iface`), or `direct` (SSH to `--bootstrap-ip`, typed at the console; needs a free address routable from the operator). Use `operator`/`direct` when the node's shell is closed — template creation and the guest-agent retrofit then need no node shell.
+
 ### Windows
 
 No cloud-init: the clone skips cloud-init config for templates whose name contains `win` (same substring as nakon's `os_to_platform()`), and `bootstrap_windows_box()` sets IP/DNS/Administrator password over the guest agent post-clone.
@@ -129,7 +131,7 @@ python3 redeploy-competition.py --competition <id> --teams 3 --dry-run   # alway
 python3 redeploy-competition.py --competition <id> --teams 3 --boxes web01 --mode reset
 ```
 
-`--teams` takes `team3`, `3`, or the subnet identifier `103`. Rollbacks discard the team's changes; `reconfigure` restores a dead service without touching their work. `--dry-run` also shows each box's starting rung and PVE tags (a stale `run-<id>` is worth knowing before anything is destroyed). Afterward run `verify-competition.py` and allow a round or two. A planted Linux box that is restarted may deny all SSH at the PAM account stage ([known-issues.md](known-issues.md)); `reset` detects and escalates past it.
+`--teams` takes `team3`, `3`, or the subnet identifier `103`. Rollbacks discard the team's changes; `reconfigure` restores a dead service without touching their work. `--dry-run` also shows each box's starting rung and PVE tags (a stale `run-<id>` is worth knowing before anything is destroyed). Afterward run `verify-competition.py` and allow a round or two. A planted Linux box that is restarted can deny all SSH at the PAM account stage; `reset` detects the signature, captures a support bundle under the run's `evidence/pam-trap/`, and escalates past it.
 
 ## Troubleshooting
 

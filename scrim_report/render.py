@@ -169,7 +169,8 @@ def build_report(run_dir):
 
     L.append("## Blue\n")
     L.append(f"- cycles rc=0: **{bm['cycles_rc0']}** of {bm['cycles_total']} logged"
-             f" (manual rc=0: {bm['manual_rc0']}, timeouts: {bm['timeouts']})")
+             f" (manual rc=0: {bm['manual_rc0']}, timeouts at the cycle cap: "
+             f"{bm['timeouts']}, cut by the event window: {bm.get('window_cuts', 0)})")
     if down:
         for team, d in sorted(down.items()):
             L.append(f"- {team}: restorations **{d['restorations']}**, "

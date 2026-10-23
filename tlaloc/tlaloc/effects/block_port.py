@@ -3,7 +3,7 @@
 import re
 import shlex
 
-from ..errors import PolicyError
+from ..errors import PolicyError, TransportError
 from . import artifactnames as names_mod
 from .base import Effect, Result, can_root, register, root_cmd
 from .takedown import windows_admin
@@ -216,14 +216,23 @@ class BlockPort(Effect):
             return Result(False, f"block_port needs an Administrator foothold on {ip}")
         rule = names_mod.block_names(ctx.world, rng=ctx.rng, mode=mode,
                                      windows=True)["rule"]
-        rc, out, err = ctx.ssh.ssh_ps(ip, fh["user"], fh.get("password") or "",
-                                      windows_add(port, rule), timeout=60,
-                                      key_path=fh.get("key_path"))
+        try:
+            rc, out, err = ctx.ssh.ssh_ps(ip, fh["user"], fh.get("password") or "",
+                                          windows_add(port, rule), timeout=60,
+                                          key_path=fh.get("key_path"))
+        except TransportError as exc:
+            return self._windows_via_c2(ctx, ip, port, display, rule, f"ssh add: {exc}")
         if rc != 0:
             return Result(False, f"netsh rc={rc}: {(err or out or '').strip()[:200]}")
-        rc, out, err = ctx.ssh.ssh_ps(ip, fh["user"], fh.get("password") or "",
-                                      windows_verify(port, rule), timeout=45,
-                                      key_path=fh.get("key_path"))
+        try:
+            rc, out, err = ctx.ssh.ssh_ps(ip, fh["user"], fh.get("password") or "",
+                                          windows_verify(port, rule), timeout=45,
+                                          key_path=fh.get("key_path"))
+        except TransportError as exc:
+            # The add succeeded, so the rule may already be on the box: a C2 add is a
+            # duplicate (its rc is ignored) and the verify decides.
+            return self._windows_via_c2(ctx, ip, port, display, rule,
+                                        f"ssh verify: {exc}", rule_may_exist=True)
         if f"{WINDOWS_MARKER}=ok" not in (out or ""):
             # Not verified: ok=False, but the accepted rule still gets its undo recorded.
             detail = (f"tcp/{port} block did not hold on {ip} — rule {rule} is not "
@@ -246,5 +255,45 @@ class BlockPort(Effect):
                           f"# block_port on {ip}: undo the rule this activation added",
                           windows_undo(rule)],
                           "secrets": None},
+                      artifacts=[_artifact(
+                          ip, f"{detail}; unblock: {windows_undo(rule)}")])
+
+    def _windows_via_c2(self, ctx, ip, port, display, rule, cause, rule_may_exist=False):
+        """A promoted DC refuses Administrator over SSH; the C2 callback is already there."""
+        undo = {"recipe": [f"# block_port on {ip}: undo the rule this activation added",
+                           windows_undo(rule)], "secrets": None}
+        if ctx.c2 is None:
+            if rule_may_exist:
+                return Result(False, f"{cause}; rule {rule} was accepted but cannot be "
+                                     "verified — no C2 layer", restore=undo, installed=True)
+            return Result(False, f"{cause}; no C2 layer to fall back to")
+        from .implant_channel import box_id_for
+        box_id = box_id_for(ctx, ip)
+        timeout = int((ctx.cfg.get("c2") or {}).get("task_timeout_sec", 120) or 120)
+        # The Windows agent runs a task as a PowerShell script (no cmd.exe / winexec wrap),
+        # exactly like reestablish's re-arm command.
+        try:
+            added = ctx.c2.task(box_id, windows_add(port, rule), timeout=timeout)
+            verified = ctx.c2.task(box_id, windows_verify(port, rule), timeout=timeout)
+        except Exception as exc:             # a C2 fault is a failed mechanism, not a crash
+            return Result(False, f"{cause}; c2 tasking failed: {type(exc).__name__}: {exc}",
+                          restore=undo if rule_may_exist else None,
+                          installed=True if rule_may_exist else None)
+        output = str(verified.get("output") or "")
+        if f"{WINDOWS_MARKER}=ok" not in output:
+            detail = (f"tcp/{port} ({display}) block did not hold on {ip} — C2 rule {rule} "
+                      f"is not reporting Block: "
+                      f"{(output or added.get('output') or '').strip()[:200]}")
+            return Result(False, detail, restore=undo,
+                          artifacts=[_artifact(
+                              ip, f"tcp/{port} ({display}) inserted as rule {rule} on "
+                                  f"{ip} but NOT verified as blocking")],
+                          installed=bool(added.get("task_id")))
+        detail = f"tcp/{port} ({display}) blocked on {ip} via C2 netsh rule {rule}"
+        ctx.world.note(ip, f"impact: {detail}")
+        return Result(True, detail,
+                      impact={"ip": ip, "service": display, "mode": "block_port",
+                              "detail": detail, "port": port},
+                      restore=undo,
                       artifacts=[_artifact(
                           ip, f"{detail}; unblock: {windows_undo(rule)}")])

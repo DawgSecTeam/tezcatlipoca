@@ -138,7 +138,7 @@ if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
 # competition that does not plant an "RDP misconfig": the template ships RDP
 # disabled and the rule group disabled, and without both the scored Tcp dial
 # (and a human's mstsc) is filtered (live: cde-2026 ad01/ftp01, 3389 closed).
-Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue
+Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue
 Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service -Name TermService -ErrorAction SilentlyContinue
 Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMode-In-UDP,RemoteDesktop-Shadow-In-TCP -ErrorAction SilentlyContinue

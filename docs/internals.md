@@ -9,7 +9,7 @@ Single source for vmid math, snapshot names, nakon budgets, naming.
 | Symbol | Value | Why |
 |---|---|---|
 | `SCORING_ENGINE_VMID` | 1000 | Default only; `--scoring-vmid` / `TEZ_SCORING_VMID` overrides. 100 collides with an unrelated VM on the primary node |
-| `DEFAULT_ENGINE_MGMT_IP` / `_GW` | `10.0.0.250` / `10.0.0.1` | Static: a DHCP engine can reboot onto a new address while the recorded one goes stale (shakedown-5x4: .221→.243→.233) |
+| `DEFAULT_ENGINE_MGMT_IP` / `_GW` | `10.0.0.250` / `10.0.0.1` | Static: a DHCP engine can reboot onto a new address while the recorded one goes stale (shakedown-5x4: .221→.243→.233). Selection rule: auto-pick the lowest free address in `ENGINE_MGMT_BAND` only when every running guest answers the agent; an incomplete scan keeps the default and the preflight refuses it unless the operator pinned `TEZ_ENGINE_MGMT_IP` |
 | `MAX_BOXES_PER_TEAM`, `MAX_TEAMS` | 10, 154 | Stride-10 vmid block per team; identifiers 101–254 |
 | `SNAP_BASE` / `SNAP_READY` | `tz-base` / `tz-ready` | |
 | `PER_MACHINE_NAKON_BUDGET` | 2400 s | `run_nakon` timeout is `max(2400, budget × machines)` |

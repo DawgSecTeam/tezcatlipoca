@@ -21,8 +21,9 @@ class BlueGateThresholds(unittest.TestCase):
         self.assertEqual(gate_table.op_str(2, "<="), "<= 2")
 
     def test_the_25_minute_scrim_passes_timeouts_but_fails_engagement(self):
-        # 0 rc=0 cycles with 2 timeouts: a cycle cut at the event deadline is not a red failure
-        rows = _blue({"cycles_rc0": 0, "timeouts": 2})
+        # 0 rc=0 cycles with no CAP cut: a cycle cut by the event window is reported as
+        # window_cuts and is not a blue failure (docs/rehearsal-gates.md).
+        rows = _blue({"cycles_rc0": 0, "timeouts": 0})
         self.assertEqual(rows["cycles_rc0"][4], "FAIL")
         self.assertEqual(rows["timeouts"][4], "PASS")
 
