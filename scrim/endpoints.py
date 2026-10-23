@@ -20,8 +20,8 @@ def api_key(base_url=None, local=None):
     like a working defense).
 
     No base_url, or a host that is not in the table (operator-side llama.cpp / a tailnet LLM
-    host), uses `OPENROUTER_API_KEY`, then the literal "local" when `local=True` (a local
-    llama.cpp ignores whatever it is sent).
+    host), uses `TEZ_SCRIM_API_KEY`, then `OPENROUTER_API_KEY`, then the literal "local" (a
+    local llama.cpp ignores whatever it is sent).
     """
     ep = llm_endpoints.lookup(base_url) if base_url else None
     if ep and ep.kind == llm_endpoints.PUBLIC:
@@ -31,6 +31,9 @@ def api_key(base_url=None, local=None):
         raise RuntimeError(
             f"{ep.name}: {ep.key_env} is not set — refusing to drive {ep.base_url} without its "
             "key (set it where the driver reads env, e.g. ~/tez-engine.env on the run host)")
+    gateway = (os.environ.get(llm_endpoints.OPERATOR_KEY_ENV) or "").strip()
+    if gateway:
+        return gateway
     for var in ("OPENROUTER_API_KEY",):
         if os.environ.get(var):
             return os.environ[var]
