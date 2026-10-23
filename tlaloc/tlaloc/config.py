@@ -50,7 +50,7 @@ DEFAULTS = {
         },
         # max_down 0 means NO LIMIT on concurrent takedowns per team (owner
         # directive 2026-10-18: red must be free to split blue's attention).
-        "caps": {"max_down": 0, "min_standing": 1, "grace_min": 10},
+        "caps": {"max_down": 0, "min_standing": 1, "grace_min": 2},
         # The observe tier is a recon pass, not a ten-minute no-op: after this
         # long the first stop is legal even while the ladder still says observe.
         "opening_takedown_min": 2,

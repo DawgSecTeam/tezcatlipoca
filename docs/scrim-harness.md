@@ -47,6 +47,9 @@ Quotient's one-session-per-account eviction has not reproduced on a live engine;
 
 - `monitor_loop` snapshots the scoreboard from T+0; `scoreboard-state.jsonl` is the structured source of truth, `monitor.log` human-readable. Red's `events.jsonl` and newest report are pulled every snapshot so a teardown-time scp flake can't lose them.
 - t0 is captured **after** `stage_red` returns: red setup can take tens of minutes and mustn't count against `--duration-min`; the T0 log line prints the out-of-scoring setup time.
+- Red starts its loop **at T0**, after the seed and pre-T0 verify: the seed owns the
+  range, but an opening takedown before T0 would make blue start against an outage it
+  never saw. `scrim/cli.py` starts `red_link.start_red_director()` after the T0 marker.
 - The window is authoritative: `supervise_workers` stops at the deadline plus `EVENT_END_GRACE` and `_opencode_run` kills the session as soon as `stop` is set — capture and teardown run at the deadline even when a cycle would have overrun it (`scrim/supervisor.py`).
 
 ### Red

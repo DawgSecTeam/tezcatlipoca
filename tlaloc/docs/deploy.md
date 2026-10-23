@@ -71,8 +71,8 @@ compromised:
    the operator pulls the manifest to `competitions/<id>/red/payloads/`. The
    matrix covers every transport (`mtls`, `http`, `https`, `dns`, `wg`,
    `named-pipe`, `tcp-pivot`) and beacons on mtls; every payload is compiled,
-   while DNS is seeded on one Linux box and pivots/beacons are build-only until
-   a parent channel exists. Builds never run mid-event. The legacy Mythic path
+   DNS is seeded on every box, and pivots/beacons are build-only until a parent
+   channel exists. Builds never run mid-event. The legacy Mythic path
    freezes on the operator instead,
 6. **stage red01**: push the tlaloc package to `/opt/tlaloc` (staged, never
    pip-installed — the systemd unit is what puts it on the import path) and the

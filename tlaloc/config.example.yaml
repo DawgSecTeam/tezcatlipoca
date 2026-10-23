@@ -38,7 +38,8 @@ red:                        # the ROE — normally supplied by the Compfile
       - {name: brutal,  at_pct: 0.86,
          modes: [stop, stop_mask, block_port, stop_rename_config],
          boxes_per_team: 4, unrecoverable: true}
-  caps: {max_down: 5, min_standing: 1, grace_min: 10}
+  caps: {max_down: 5, min_standing: 1, grace_min: 2}
+  opening_takedown_min: 2   # the observe tier stops being recon-only after this
   windows: {endgame_teardown: 15, lockout: 3}
   budget: {extra_pressure_max: 2, improvise_rounds: 2, improvise_commands: 6}
 

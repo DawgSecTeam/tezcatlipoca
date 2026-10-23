@@ -68,10 +68,14 @@ timid. Never tune against the rounded label.
 | clef | LLM | behaviour |
 |---|---|---|
 | up | up | full chain (arbiter available for unconfident high-stakes choices) |
+| up | **off in scrims** | clef decides; below theta falls straight to deterministic |
 | up | down | everything except command authoring (improvise degrades to a `Result(False)`) |
 | down | any | deterministic candidate #1, source=`deterministic`, reason logged |
 | down | down | the deterministic ladder (candidate order is the policy's score order) |
 
+The scrim harness disables the free-form LLM arbiter (`llm.enabled: false`): red's
+decisions are clef's or the deterministic fallback, never a second model. A deploy may
+enable the arbiter explicitly, but the decision log always names the source.
 clef failures are counted; `clef.failure_threshold` consecutive failures put the
 client in a `clef.cooldown_sec` cooldown so a dead endpoint costs one failed call
 per window rather than a timeout every question.
