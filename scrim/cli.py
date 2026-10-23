@@ -54,7 +54,7 @@ def main():
     p.add_argument("--from-template", default=None)
     p.add_argument("--teams", type=int, default=2)
     p.add_argument("--duration-min", type=int, default=90)
-    p.add_argument("--blue-model", default="openai/gpt-5.6-luna", help="cheap cloud model for blue agents")
+    p.add_argument("--blue-model", default="qwen3.8-27b", help="cheap model for blue agents")
     p.add_argument("--red-model", default="openai/gpt-5.6-luna", help="cheap cloud model for red")
     p.add_argument("--reasoning-effort", default="",
                    help="reasoning effort sent to the LLM (GPT-5.x/o-series only — "

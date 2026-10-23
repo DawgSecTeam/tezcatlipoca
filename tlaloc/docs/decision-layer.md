@@ -1,7 +1,8 @@
 # The decision layer
 
 clef-flash (`ggml-org/Clef-Flash-GGUF`, 9B, Jev/SystemOne-compatible) answers
-**typed questions with calibrated probabilities** in one forward pass. It is the
+**typed questions with probabilities** in one forward pass; those probabilities are
+not guaranteed calibrated. It is the
 only non-deterministic input to a cycle, and it can only choose between what
 `policy.candidates()` produced.
 
@@ -33,7 +34,7 @@ execute → record → log (bundle, answer, probabilities, theta, source, chosen
 
 | id | type | when | replaces (the earlier agent) |
 |---|---|---|---|
-| `next_effect` | choice (top ≤8 + `hold`) | every cycle | 3 override gates + the fallback ladder's picks |
+| `next_effect` | noul per action (`A`…`H`, `HOLD`) | every cycle | 3 override gates + the fallback ladder's picks |
 | `pressure_count` | score 0–3 | every cycle | `press_impacts_per_cycle` + cap heuristics |
 | `escalate_now` | noul | every cycle | restore-streak escalation rules |
 | `command_intent` | choice: takedown/recon/persistence/benign | per LLM-authored command | `_IMPACTY_WORDS` substring sniff |
@@ -49,11 +50,36 @@ execute → record → log (bundle, answer, probabilities, theta, source, chosen
 - **`score`**: the expected value over the levels is the count; the levels stay in
   the log so a recalibration can see the distribution, not just the rounded
   number. `top_prob = max(probabilities)`.
-- **`noul`**: the answer carries a single yes-probability and no probability map,
-  so `top_prob = max(p, 1-p)` is computed from that field directly (reading the
-  map first made every yes/no answer look like 0.0 confidence).
-- **`hold`** is a legitimate, high-confidence answer to `next_effect` and means:
-  nothing this cycle.
+- **`noul`**: the answer carries a single yes-probability and no probability map.
+  For an action question, **use `p_yes` directly** (0.3 is a confident no, not
+  0.7); `top_probability()` keeps the `max(p, 1-p)` meaning only for the
+  `escalate_now` / `blue_hunting` questions.
+- **`HOLD`** is a separate noul, not a choice option. Hold wins only when
+  `p_hold >= theta` and `p_hold >=` every action's `p_yes`; otherwise the highest
+  action at or above theta acts, and below theta the old degradation ladder runs.
+
+## The `next_effect` state and questions
+
+Before the action questions, `Policy.clef_state()` renders the readable state:
+`minute`, `total_minutes`, `minutes_left`, `phase`, `objective`, the priority
+team and why, each team's restore count/trend, each box's OS/access/channel/dead
+artifacts, each service's status, the recent events, and the ROE window/modes.
+It contains no credentials.
+
+Each of the top actions is one `noul` with a short key (`A`, `B`, …) and a
+natural description derived only from `effect`, `params`, `reason`, `score`,
+`high_stakes`: effect and target, team/OS, standing status, and whether it adds
+downtime now or only protects access. `HOLD` is its own noul. The short-key →
+candidate-id map is kept in `meta.option_keys`; the candidate list remains the
+authority.
+
+Measured on 40 red event logs (453 `next_effect` decisions, Oct 15–23): the old
+8-way `choice` cleared theta 15/453 (3.8%); 0/298 passed with 8 candidates plus
+hold, median top probability 0.286. On 11 known high-value cycles the expanded
+state + per-action noul chose a high-value action **11/11**, median `p_yes`
+**0.811**, **8/11** at or above 0.6. The live probe in this change returned
+`nginx p_yes=0.865` with `input_tokens=1814`. The model's probabilities are not
+guaranteed calibrated; tune theta on range data, not on one probe.
 
 ## Thresholds
 
@@ -123,7 +149,9 @@ candidate reasons: ~577 tokens, so only a deliberately tiny endpoint hits it.
 
 `pressure_count`, `escalate_now` and `blue_hunting` are each asked as their own
 tiny call rather than bundled into the decision request — bundling them spent the
-batch twice for the same information.
+batch twice for the same information. An uncertain `pressure_count` falls back
+to **0**, not the configured maximum: the old fallback fired the cap in 191/260
+low-confidence cycles even though the mean expected count was 1.37.
 
 ## Replay
 

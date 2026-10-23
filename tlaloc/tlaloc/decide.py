@@ -271,14 +271,14 @@ class Decider:
                 None, candidates, ctx, cycle=cycle, compact=compact,
                 max_options=(3 if extra_shrink else 4) if compact else 8,
                 include_escalation=include_escalation,
-                include_blue_check=include_blue_check, include_pressure=False)
+                include_blue_check=include_blue_check, include_pressure=False,
+                action_noul=True)
             overhead = tokens_needed({}, questions, ratio=ratio) + 24
             # a digest is a decision input, not a data dump; the low floor lets
             # a small batch shrink it until a compact attempt fits
             budget = int(min(max(80, ceiling - overhead - shrink),
                              DIGEST_BUDGET_CEILING))
-            digest = self.policy.frame(ctx, candidates, recent=recent,
-                                      budget_tokens=budget)
+            digest = self.policy.clef_state(ctx, recent=recent, compact=compact)
             if tokens_needed(digest, questions, ratio=ratio) <= ceiling:
                 if compact or extra_shrink:
                     self.log.emit("clef_bundle_compact", cycle=cycle,
@@ -288,6 +288,8 @@ class Decider:
         # Nothing fit: return the smallest bundle; the client's over-budget
         # refusal then degrades the chain deterministically — never a silent
         # truncated send.
+        if isinstance(digest, dict):
+            digest["_over_budget"] = True
         self.log.emit("clef_bundle_over_budget", cycle=cycle,
                       tokens=tokens_needed(digest, questions, ratio=ratio),
                       ceiling=ceiling, tokens_per_char=round(ratio, 3),
@@ -323,7 +325,7 @@ class Decider:
 
     def next_effect(self, cycle, digest, candidates, *, ctx=None, recent=None,
                     include_escalation=False, include_blue_check=False):
-        """Pick one candidate from the bounded list, log the chain; escalate_now/blue_hunting are separate tiny calls (batch budget)."""
+        """Pick one candidate from the bounded list; new shape is per-action noul."""
         if not candidates:
             return self._log(cycle, Decision("next_effect", "hold",
                                              source="deterministic",
@@ -341,46 +343,108 @@ class Decider:
                 include_blue_check=include_blue_check)
         bundle = {"state": digest, "questions": questions}
         theta = self.theta("next_effect")
-
         asked = self._ask(cycle, digest, questions, bundle, ctx=ctx,
                           candidates=candidates, recent=recent,
                           include_escalation=include_escalation,
                           include_blue_check=include_blue_check)
-        bundle = asked["bundle"]
-        meta = asked.get("meta", meta)
-        payload = asked["payload"]
+        bundle, payload = asked["bundle"], asked["payload"]
+        meta = {**meta, **(asked.get("meta") or {})}
         if payload is None:
-            # degradation ladder rung 1: clef down -> deterministic #1 acts; a
-            # model outage must not idle the run.
             chosen = candidates[0]
             return self._log(cycle, Decision(
                 "next_effect", chosen["id"], source="deterministic", bundle=bundle,
                 chosen=chosen, theta=theta,
                 note=f"clef unavailable ({asked['error']}) — deterministic pick "
                      f"{chosen['id']}",
-                meta={**meta, "fallback": chosen["id"]}))
+                meta={**meta, "fallback": chosen["id"],
+                      "chosen_key": None, "candidate_count": len(candidates),
+                      "high_stakes": self.high_stakes(candidates, chosen["id"])}))
+        answers = payload.get("answers") or {}
+        if (answers.get("next_effect", {}).get("type") == "choice"
+                or (not any(key in answers for key in ("A", "HOLD"))
+                    and answers.get("next_effect"))):
+            return self._legacy_choice(cycle, bundle, candidates, answers, meta, theta)
 
-        answer = (payload.get("answers") or {}).get("next_effect") or {}
+        keys = dict(meta.get("option_keys") or {})
+        p_yes = {}
+        for key, cid in keys.items():
+            if self._candidate_for(candidates, cid) is not None:
+                p_yes[key] = round(float(noul_of(answers.get(key) or {})[1]), 4)
+        hold_answer = answers.get("HOLD") or {}
+        p_hold = round(float(hold_answer.get("noul", 0.0) or 0.0), 4)
+        probabilities = dict(p_yes)
+        probabilities["HOLD"] = p_hold
+        top_key = max(p_yes, key=p_yes.get) if p_yes else None
+        top_action = p_yes.get(top_key, 0.0) if top_key else 0.0
+        top_id = keys.get(top_key) if top_key else None
+        common = {"shape": meta.get("shape", "action_noul_v1"),
+                  "p_yes": p_yes, "p_hold": p_hold,
+                  "option_keys": keys, "candidate_count": len(candidates),
+                  "input_tokens": getattr(self.clef, "last_input_tokens", None),
+                  "usage": {"input_tokens": getattr(self.clef, "last_input_tokens", None)},
+                  "compact": bool(meta.get("compact")),
+                  "over_budget": bool((bundle.get("state") or {}).get("_over_budget"))}
+        if p_hold >= theta and p_hold >= top_action:
+            return self._log(cycle, Decision(
+                "next_effect", "HOLD", probabilities, p_hold, theta, "clef", None,
+                bundle, note=f"hold p={p_hold:.2f} >= theta {theta:.2f}",
+                meta={**common, "chosen_key": "HOLD", "chosen_candidate": None,
+                      "high_stakes": False}))
+        if top_key and top_action >= theta:
+            chosen = self._candidate_for(candidates, top_id)
+            return self._log(cycle, Decision(
+                "next_effect", top_key, probabilities, top_action, theta, "clef",
+                chosen, bundle,
+                note=f"action {top_key} p_yes={top_action:.2f} >= theta {theta:.2f}",
+                meta={**common, "chosen_key": top_key, "chosen_candidate": top_id,
+                      "high_stakes": self.high_stakes(candidates, top_id)}))
+        note = (f"max action p_yes {top_action:.2f} and hold p={p_hold:.2f} "
+                f"below theta {theta:.2f}")
+        high_stakes = self.high_stakes(candidates, top_id)
+        if high_stakes:
+            arbitrated = self.arbitrate(candidates, bundle, note)
+            if arbitrated is not None:
+                chosen, why = arbitrated
+                return self._log(cycle, Decision(
+                    "next_effect", chosen["id"], probabilities, top_action, theta,
+                    "llm_arbiter", chosen, bundle,
+                    note=f"{note}; arbiter chose {chosen['id']}: {why}",
+                    meta={**common, "chosen_key": None,
+                          "chosen_candidate": chosen["id"],
+                          "high_stakes": True}))
+        chosen = candidates[0]
+        return self._log(cycle, Decision(
+            "next_effect", chosen["id"], probabilities, top_action, theta,
+            "deterministic", chosen, bundle,
+            note=f"{note} — deterministic pick {chosen['id']}",
+            meta={**common, "chosen_key": None, "chosen_candidate": chosen["id"],
+                  "high_stakes": high_stakes}))
+
+    @staticmethod
+    def _candidate_for(candidates, cid):
+        return next((c for c in candidates if c["id"] == cid), None)
+
+    def _legacy_choice(self, cycle, bundle, candidates, answers, meta, theta):
+        """Old recorded choice bundles remain replayable; live bundles use action_noul_v1."""
+        answer = answers.get("next_effect") or {}
         probs = _probabilities(answer)
         prob = top_probability(answer)
         picked = choice_of(answer)
-
         if prob >= theta and picked == "hold":
             return self._log(cycle, Decision(
                 "next_effect", "hold", probs, prob, theta, "clef", None, bundle,
-                note="clef chose to hold, above theta", meta=meta))
+                note="clef chose to hold, above theta",
+                meta={**meta, "shape": "choice_legacy", "chosen_key": "hold"}))
         if prob >= theta and picked:
             chosen = next((c for c in candidates if c["id"] == picked), None)
             if chosen is not None:
                 return self._log(cycle, Decision("next_effect", picked, probs, prob,
                                                  theta, "clef", chosen, bundle,
-                                                 meta=meta))
-            # clef invented an id: the candidate list is the authority
+                                                 meta={**meta, "shape": "choice_legacy"}))
             note = f"clef chose {picked!r}, which is not a candidate — falling back"
         else:
             note = (f"clef top probability {prob:.2f} < theta {theta:.2f}"
                     if picked else "clef returned no choice")
-
         if self.high_stakes(candidates, picked):
             arbitrated = self.arbitrate(candidates, bundle, note)
             if arbitrated is not None:
@@ -388,12 +452,13 @@ class Decider:
                 return self._log(cycle, Decision(
                     "next_effect", chosen["id"], probs, prob, theta, "llm_arbiter",
                     chosen, bundle,
-                    note=f"{note}; arbiter chose {chosen['id']}: {why}", meta=meta))
+                    note=f"{note}; arbiter chose {chosen['id']}: {why}",
+                    meta={**meta, "shape": "choice_legacy"}))
         chosen = candidates[0]
         return self._log(cycle, Decision(
             "next_effect", chosen["id"], probs, prob, theta, "deterministic",
             chosen, bundle, note=f"{note} — deterministic pick {chosen['id']}",
-            meta=meta))
+            meta={**meta, "shape": "choice_legacy"}))
 
     def arbitrate(self, candidates, bundle, reason):
         """One bounded LLM call: choose from the candidate list, or decline."""
@@ -421,7 +486,9 @@ class Decider:
         """How many extra takedowns this cycle (a `score` answer)."""
         budget = int((self.policy.red.get("budget") or {}).get("extra_pressure_max", 1))
         if default is None:
-            default = budget
+            # An uncertain score must not become maximum pressure; baseline low-confidence
+            # cycles fired the cap 73% of the time.
+            default = 0
         questions = {"pressure_count": {
             "type": "score",
             "instructions": (f"Additional scored services to take down this cycle "
@@ -553,7 +620,8 @@ class Decider:
                               probabilities=record["probabilities"],
                               theta=record["theta"], source=record["source"],
                               chosen=record["chosen"], ok=None,
-                              note=record["note"], top_prob=record["top_prob"])
+                              note=record["note"], top_prob=record["top_prob"],
+                              meta=record["meta"])
         return decision
 
     def record(self, cycle=None, decisions=(), *, executed=None):

@@ -650,6 +650,69 @@ class Policy:
             digest["_dropped"] = dropped
         return digest
 
+    def clef_state(self, ctx, recent=None, *, compact=False):
+        """The readable decision state: teams, boxes, services, recent pressure, ROE.
+        No credentials ever enter it; ids, IPs and service names only."""
+        teams = {}
+        for box in self.intel.boxes():
+            ip = box["ip"]
+            team = box["team"]
+            fh = self.world.foothold(ip)
+            services = [{"name": str(name),
+                         "status": "down" if self._is_down(ip, name) else "up"}
+                        for name in self.intel.services_for(ip)]
+            if compact:
+                services = [s for s in services if s["status"] == "down"][:3]                     or services[:2]
+            entry = {
+                "id": self._box_id(box),
+                "ip": ip,
+                "os": "windows" if box["windows"] else "linux",
+                "access": self._access_label(fh),
+                "channel": ("fresh" if fh and self._channel_fresh(ip)
+                            else "stale" if fh and self.world.artifacts(ip) else "none"),
+                "dead_artifacts": len(self._dead_artifacts(ip)),
+                "services": services,
+            }
+            if (not compact or entry["access"] or not teams.get(team)
+                    or any(service["status"] == "down" for service in services)):
+                teams.setdefault(team, []).append(entry)
+        if compact:
+            for team, boxes in teams.items():
+                teams[team] = boxes[:4]
+        restores = {team: self._team_restores(team, 30) for team in teams}
+        priority = max(restores, key=restores.get) if restores else self.focus_team()
+        if not restores or restores.get(priority, 0) == 0:
+            priority = self.focus_team()
+        tier = self.ladder() or {}
+        return {
+            "minute": int(self.elapsed_min()),
+            "total_minutes": int(self.red["duration_min"]),
+            "minutes_left": int(self.remaining_sec() / 60),
+            "phase": self.event_phase(),
+            "objective": ("maximize scored-service downtime while keeping access; "
+                          "prefer a standing scored service over support work"),
+            "priority_team": {
+                "name": priority,
+                "reason": (f"{restores.get(priority, 0)} blue restore(s) in the last "
+                           "30 minutes made this the team to pressure"
+                           if restores.get(priority, 0) else
+                           "focus rotation; no blue restores seen yet"),
+            },
+            "teams": [{"name": team,
+                       "blue_restores_last_30m": restores.get(team, 0),
+                       "blue_trend": self._restore_trend(team),
+                       "boxes": boxes}
+                      for team, boxes in teams.items()],
+            "recent_events": list(recent or [])[-(2 if compact else 6):],
+            "rules_of_engagement": {
+                "window": tier.get("name"),
+                "allowed_mechanisms": self.allowed_modes(),
+                "unrecoverable_allowed": self.unrecoverable_unlocked(),
+                "teardown_active": self.teardown_active(),
+                "lockout_window_open": self.window_open("lockout"),
+            },
+        }
+
     def _is_down(self, ip, service_name):
         status = {}
         if self.sensors is not None:
@@ -689,7 +752,7 @@ class Policy:
 
     def question_bundle(self, digest, candidates, ctx, *, max_options=8,
                         cycle=0, include_escalation=True, include_blue_check=False,
-                        compact=False, include_pressure=True):
+                        compact=False, include_pressure=True, action_noul=False):
         """Nothing invents an option candidates() omitted."""
         top = list(candidates)[:max_options]
         limit = 32 if compact else 160
@@ -704,7 +767,24 @@ class Policy:
 
         questions = {}
         meta = {"options": [c["id"] for c in top] + [hold], "compact": compact}
-        if criteria:
+        if action_noul:
+            keys = {chr(ord("A") + i): cand for i, cand in enumerate(top)}
+            for key, cand in keys.items():
+                questions[key] = {
+                    "type": "noul",
+                    "instructions": ("Should red do this action this cycle to maximize "
+                                     "scored-service downtime? "
+                                     + self._action_description(cand)),
+                }
+            questions["HOLD"] = {
+                "type": "noul",
+                "instructions": ("Should red hold this cycle to consolidate and keep "
+                                 "depth? It adds no scored-service downtime."),
+            }
+            meta["shape"] = "action_noul_v1"
+            meta["option_keys"] = {key: cand["id"] for key, cand in keys.items()}
+            meta["next_effect"] = {cand["id"]: cand["reason"] for cand in top}
+        elif criteria:
             questions["next_effect"] = {
                 "type": "choice",
                 "instructions": ("Best next action: max scored-service downtime, keep "
@@ -745,6 +825,39 @@ class Policy:
                                  "(restores, logins, firewall changes)?"),
             }
         return questions, meta
+
+    def _action_description(self, cand):
+        effect = cand.get("effect")
+        params = cand.get("params") or {}
+        ip = params.get("ip") or ""
+        service = params.get("service") or params.get("family") or params.get("port") or ""
+        team = self.intel.team_of(ip) or "unknown team"
+        box = self.intel.box_by_ip(ip) or {}
+        os_name = "Windows" if box.get("windows") else "Linux"
+        label = f"{service} on {team} {box.get('box') or ip} ({os_name})"
+        if effect in ("takedown", "block_port"):
+            standing = service and not self._is_down(ip, service)
+            state = ("It is a scored service currently standing; taking it down adds "
+                     "downtime now." if standing else
+                     "It is not currently standing, so this adds no new downtime.")
+            return f"Take down {label}. {state}"
+        if effect == "lockout":
+            return (f"Lock out blue's logins on {team} {box.get('box') or ip} "
+                    f"({os_name}); it does not stop a scored service but makes recovery harder.")
+        if effect in ("implant_channel", "reestablish", "spray_access", "escalate"):
+            return (f"Use {effect} on {label}. This protects or restores access but "
+                    "adds no scored-service downtime.")
+        if effect == "persist":
+            return (f"Plant {service or 'persistence'} on {label}. This protects access "
+                    "after blue removes artifacts but adds no downtime.")
+        if effect == "rotate_credlist":
+            return (f"Rotate a credential on {label}. This protects access but adds no "
+                    "scored-service downtime.")
+        if effect == "recon":
+            return (f"Recon {label}. This only gathers information and adds no downtime.")
+        if effect in ("task_channel", "improvise"):
+            return (f"{effect} on {label}. This is support work and adds no scored-service downtime.")
+        return f"{effect} on {label}. This is support work and adds no scored-service downtime."
 
     @staticmethod
     def _option_text(cand):
