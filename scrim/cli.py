@@ -199,6 +199,9 @@ def main():
     log(f"T0 — event clock starts now (red setup took {(t0 - red_setup_started) / 60:.0f} min, "
         f"outside scored time)")
     inject_sync.reanchor_injects(args, comp, creds)
+    # T0 is the event clock: starting red before this point lets its opening cycle
+    # take scored services down before blue's first turn.
+    red_link.start_red_director(args)
 
     failure = event_run.run_event_and_finish(args, creds, t0)
     test_dir = getattr(args, "test_dir", None) or run_dir

@@ -155,7 +155,7 @@ def stage_red(args, comp, creds, run_dir):
     except Exception as e:                                   # noqa: BLE001 - never fatal
         log(f"WARNING: trail wipe failed ({type(e).__name__}: {e}) — blue may be able "
             f"to read the deploy out of the box logs")
-    red_link.start_red_director(args)
+
 
 
 def verify_tlaloc_seeded(args, comp):

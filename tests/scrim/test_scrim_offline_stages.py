@@ -232,7 +232,7 @@ class StageManifest(Base):
                 run_manifest.load_manifest(manifests[0].parent).get("phases") or []]
 
     def _run_main(self, argv, on_red=None):
-        from scrim import cli, event_run, fire_test, inject_sync, red_stage, staging
+        from scrim import cli, event_run, fire_test, inject_sync, red_link, red_stage, staging
         noop = lambda *a, **k: None  # noqa: E731
         with mock.patch.object(sys, "argv", ["run-agent-scrim.py", *argv]), \
                 mock.patch.object(cli, "resolve_comp_dir", return_value=self.comp), \
@@ -243,6 +243,7 @@ class StageManifest(Base):
                 mock.patch.object(fire_test, "stage_verify", noop), \
                 mock.patch.object(blue_agent, "stage_blues", noop), \
                 mock.patch.object(red_stage, "stage_red", on_red or noop), \
+                mock.patch.object(red_link, "start_red_director", noop), \
                 mock.patch.object(inject_sync, "reanchor_injects", noop), \
                 mock.patch.object(event_run, "run_event_and_finish", noop):
             cli.main()

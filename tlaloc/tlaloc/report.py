@@ -228,7 +228,7 @@ def render_report(world, *, policy=None, sensors=None, narrative=None,
         f"(root/admin paths: {summary['root_paths']}, Windows: {summary['windows_footholds']})",
         f"- Staged/planted artifacts: **{summary['artifacts']}** "
         f"(live {summary['artifacts_live']}, dead {summary['artifacts_dead']})",
-        f"- C2 callbacks recorded: **{summary['c2_callbacks']}**",
+        f"- C2 callbacks recorded (per box): **{summary['c2_callbacks']}**",
         f"- Seeded: {summary['seeded']} ({summary['seed_boxes']} boxes)",
         "",
         "## Restore table (blue-side, secrets-free)",
