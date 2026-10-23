@@ -756,6 +756,12 @@ def _guest_grow_script():
         "    sudo -n growpart \"/dev/$DISK\" \"$NUM\" || true; "
         "  fi; "
         "  sudo -n pvresize \"$PV\" || true; "
+        "else "
+        "  DISK=$(sudo -n lsblk -no PKNAME \"$ROOT\" 2>/dev/null | head -1); "
+        "  NUM=$(cat \"/sys/class/block/$(basename \"$ROOT\")/partition\" 2>/dev/null); "
+        "  if [ -n \"$DISK\" ] && [ -n \"$NUM\" ]; then "
+        "    sudo -n growpart \"/dev/$DISK\" \"$NUM\" || true; "
+        "  fi; "
         "fi; "
         "sudo -n lvextend -l +100%FREE \"$ROOT\" || true; "
         "sudo -n resize2fs \"$ROOT\" || true; df -h /")
