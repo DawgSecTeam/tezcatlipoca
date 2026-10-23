@@ -96,7 +96,7 @@ DEFAULTS = {
         "password_env": "TLALOC_MYTHIC_PASSWORD",
         "operation": "",
         "verify_tls": False,
-        "callback_wait_sec": 120,
+        "callback_wait_sec": 240,
         "callback_max_age_sec": 120,
         # "draw" (default): one implant per box, chosen per box. "full": EVERY
         # transport on every box — for coverage/QA runs that prove each path.

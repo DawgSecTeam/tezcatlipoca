@@ -187,7 +187,11 @@ class SliverClient:
         return {record["name"]: record for record in self._records()}
 
     def record_fresh(self, record, max_age=None):
-        if not record or record.get("dead") or not record.get("seen_at"):
+        if not record or not record.get("seen_at"):
+            return False
+        # Sliver marks DNS sessions dead once UDP LastCheckin ages out, but they
+        # still accept tasks (live: dc01-160-dns answered `whoami` while dead).
+        if record.get("dead") and record.get("transport") != "dns":
             return False
         # A session is a live connection in GetSessions; LastCheckin only moves
         # on traffic, so an idle session is not a dead one. A beacon is dead
