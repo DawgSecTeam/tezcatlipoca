@@ -37,9 +37,15 @@ teams serialise on one shared LLM lock, so a short scrim affords about one per t
 `restorations` — blue answering red's takedowns. `injects` — the paperwork layer, which is real
 points, counted only for injects whose window opened inside the run. `notebook_entries` — working
 memory, not a write-only diary. `timeouts` — cycles cut at the per-cycle cap
-(`TEZ_CYCLE_TIMEOUT`, 600 s) or at the event deadline: one cut per team is expected on a shared
-endpoint, several means blue is not finishing real cycles inside its scope — raise the cap or
-give the team another endpoint — and `cycles_rc0` still fails a run that never completed a cycle.
+(`TEZ_CYCLE_TIMEOUT`, 600 s), and only those: a cycle the event window cut is reported separately
+as `window_cuts` and does not gate, because the window ending is not evidence blue is slow. A cap
+cut means the cycle needed longer than its scope — raise the cap or, where the harness supports
+it (`--blue2-base-url`), give that team another endpoint — and `cycles_rc0` still fails a run
+that never completed a cycle. A shared endpoint is announced at launch with the per-team time it
+leaves; multi-team ranges on one endpoint need a longer window or team2 on its own endpoint.
+
+`TEZ_CYCLE_TIMEOUT` and the event window are two different budgets, and the launch line states
+which one a failed run exhausted: `INTERACTION.md` carries both counts.
 
 `evictions` is deliberately not a gate: red's health checks only see SSH-class footholds, so a zero
 is an observability limit rather than a failed red. Blue's self-reported `EVICTED:` lines count

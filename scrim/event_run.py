@@ -9,7 +9,7 @@ from scrim import run_manifest
 from scrim import scoreboard_monitor
 from scrim import supervisor
 from scrim import teardown_stage
-from scrim.core import log
+from scrim.core import CYCLE_TIMEOUT, log
 
 
 def stage_run(args, creds, t0):
@@ -17,9 +17,17 @@ def stage_run(args, creds, t0):
     # One lock per distinct LLM endpoint — teams sharing an endpoint share its
     # concurrency cap; teams 3/4 used to silently inherit team1's endpoint + lock.
     endpoint_locks = {}
+    shared = {}
     for n in range(1, args.teams + 1):
         base_url, _ = endpoints.blue_ep(args, n)
         endpoint_locks.setdefault(base_url, threading.Lock())
+        shared[base_url] = shared.get(base_url, 0) + 1
+    for url, count in shared.items():
+        if count > 1:
+            log(f"blue: {count} teams share {url} — one LLM lock serialises them; "
+                f"TEZ_CYCLE_TIMEOUT={CYCLE_TIMEOUT}s over {args.duration_min} min gives "
+                f"each ~{args.duration_min // count} min. Give a team its own endpoint "
+                f"or a longer window for a full rehearsal.")
     threads = []
     for n in range(1, args.teams + 1):
         base_url, _ = endpoints.blue_ep(args, n)

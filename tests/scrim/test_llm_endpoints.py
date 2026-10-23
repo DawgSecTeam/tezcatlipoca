@@ -60,6 +60,19 @@ class ApiKey(unittest.TestCase):
         self.assertEqual("{env:%s}" % key_env, "{env:DEEPSEEK_API_KEY}")
         self.assertIn("{API_KEY_FIELD}", blue_helpers.OPENCODE_PROJECT_CFG)
 
+    def test_an_operator_gateway_key_reaches_the_config_and_the_driver(self):
+        with mock.patch.dict(os.environ, {"TEZ_SCRIM_API_KEY": "sk-gateway"}, clear=True):
+            self.assertEqual(endpoints.api_key(LLAMA), "sk-gateway")
+            self.assertEqual(endpoints.key_env_name(LLAMA), "TEZ_SCRIM_API_KEY")
+            self.assertEqual(llm_endpoints.key_env(LLAMA), "TEZ_SCRIM_API_KEY")
+
+    def test_an_operator_gateway_without_the_key_stays_local(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("TEZ_SCRIM_API_KEY", "OPENROUTER_API_KEY")}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(endpoints.api_key(LLAMA), "local")
+            self.assertEqual(endpoints.key_env_name(LLAMA), "")
+
 
 
 class RedProfileAndTunnel(unittest.TestCase):

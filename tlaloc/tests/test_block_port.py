@@ -5,7 +5,7 @@ import shlex
 
 import pytest
 
-from tests.helpers import base_cfg, make_ctx
+from tests.helpers import FakeC2, FakeSSH, base_cfg, make_ctx
 from tlaloc.effects import block_port as bp
 from tlaloc.effects import execute
 from tlaloc.policy import Policy
@@ -25,9 +25,9 @@ ADD_RE = re.compile(
     r"2>/dev/null; echo n=\$\?'")
 
 
-def ctx_for(tmp_path, ssh, clock=0.6, windows=False, dry_run=False):
+def ctx_for(tmp_path, ssh, clock=0.6, windows=False, dry_run=False, c2=None):
     """A rooted box past the 0.5-progress gate that unlocks the unrecoverable tier."""
-    ctx = make_ctx(tmp_path, cfg=base_cfg(), ssh=ssh, dry_run=dry_run)
+    ctx = make_ctx(tmp_path, cfg=base_cfg(), ssh=ssh, dry_run=dry_run, c2=c2)
     ip = WIN_IP if windows else IP
     if windows:
         ctx.world.add_foothold(ip, "Administrator", "boxpw-1", "root", windows=True)
@@ -281,3 +281,32 @@ def test_windows_rule_that_does_not_report_block_is_a_failure(tmp_path):
         ssh.calls[0]["cmd"]).group("rule")
     assert ctx.world.restore_table()[0]["recipe"][-1] == (
         f"netsh advfirewall firewall delete rule name={rule}")
+
+
+def test_windows_ssh_auth_failure_falls_back_to_the_c2_channel(tmp_path):
+    """A promoted DC refuses Administrator over SSH; red keeps the tactic through C2."""
+    ssh = FakeSSH().on(lambda call: True, rc="raise")
+    c2 = FakeC2(task_out=f"{bp.WINDOWS_MARKER}=ok")
+    ctx = ctx_for(tmp_path, ssh, windows=True, c2=c2)
+    result = execute("block_port", {"ip": WIN_IP, "port": 3389, "display": "RDP pin"}, ctx)
+
+    assert result.ok, result.detail
+    assert "via C2" in result.detail
+    assert result.impact["port"] == 3389
+    assert ctx.world.impacts()[0]["port"] == 3389
+    scripts = [task["command"] for task in c2.tasks]
+    assert len(scripts) == 2
+    assert scripts[0].startswith("netsh advfirewall firewall add rule")
+    assert bp.WINDOWS_MARKER + "=ok" in scripts[1]
+    rule = re.search(r"name=([A-Za-z0-9]+)", scripts[0]).group(1)
+    assert result.restore["recipe"][-1] == (
+        f"netsh advfirewall firewall delete rule name={rule}")
+
+
+def test_windows_ssh_auth_failure_without_c2_is_a_failure(tmp_path):
+    ssh = FakeSSH().on(lambda call: True, rc="raise")
+    ctx = ctx_for(tmp_path, ssh, windows=True)
+    result = execute("block_port", {"ip": WIN_IP, "port": 445, "display": "SMB pin"}, ctx)
+    assert result.ok is False
+    assert "no C2 layer" in result.detail
+    assert ctx.world.impacts() == []
