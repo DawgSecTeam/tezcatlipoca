@@ -32,6 +32,8 @@ INTERNAL_ENV = {
     "TEZ_TEST_OFFLINE": "tests/conftest.py -> driver .env guard",
     # Inherited by every driver child the dashboard starts, so an orphan reclaim can retire its
     # range over /api/ranges/retire.
+    # Operator-side scrim LLM gateway key; blue's opencode needs it as its provider key.
+    "TEZ_SCRIM_API_KEY": "scrim/endpoints.py operator-side LLM gateway key",
     "TEZ_DASHBOARD_HOST": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire call",
     "TEZ_DASHBOARD_PORT": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire call",
     "TEZ_DASHBOARD_TOKENS": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire bearer",
