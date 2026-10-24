@@ -1,10 +1,13 @@
 """The LLM endpoint table: what kind of endpoint a base_url names, and where its key lives."""
 
+import os
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 PUBLIC = "public"
 OPERATOR = "operator"
+# An operator-side gateway (LiteLLM, a relay in front of many models) can require a key too.
+OPERATOR_KEY_ENV = "TEZ_SCRIM_API_KEY"
 
 
 @dataclass(frozen=True)
@@ -74,9 +77,9 @@ def provider_name(base_url):
 
 def key_env(base_url):
     ep = lookup(base_url)
-    if not ep or ep.kind != PUBLIC:
-        return ""
-    return ep.key_env
+    if ep:
+        return ep.key_env if ep.kind == PUBLIC else ""
+    return OPERATOR_KEY_ENV if os.environ.get(OPERATOR_KEY_ENV) else ""
 
 
 def describe(base_url):

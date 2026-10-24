@@ -31,6 +31,9 @@ def api_key(base_url=None, local=None):
         raise RuntimeError(
             f"{ep.name}: {ep.key_env} is not set — refusing to drive {ep.base_url} without its "
             "key (set it where the driver reads env, e.g. ~/tez-engine.env on the run host)")
+    gateway = (os.environ.get("TEZ_SCRIM_API_KEY") or "").strip()
+    if gateway:
+        return gateway
     for var in ("OPENROUTER_API_KEY",):
         if os.environ.get(var):
             return os.environ[var]
