@@ -15,6 +15,7 @@ from common.windows_ops import (
     wait_for_dc_dns,
     wait_for_windows_sshd,
 )
+from common.ssh_ops import ssh_via_gateway
 from common.timing import timed
 from common.utils import PRINT_LOCK, compfile_value, run_concurrent
 from estate import config
@@ -47,10 +48,11 @@ def _dc_promoted(node, dc_vmid, domain, marker_present):
         return marker_present
 
 
-def _probe_joined(node, member_box, member_vmid, domain):
+def _probe_joined(node, member_box, member_vmid, domain, *, member_ip=None, engine_ctx=None,
+                  box_user=None):
 # Live membership probe via the guest agent; joins are not idempotent, so resumes skip joined members.
-    try:
-        if is_windows_template(member_box["template"]):
+    if is_windows_template(member_box["template"]):
+        try:
             rc, out, _ = guest_agent_exec_windows(
                 node, member_vmid,
                 "(Get-WmiObject Win32_ComputerSystem).PartOfDomain; "
@@ -58,14 +60,30 @@ def _probe_joined(node, member_box, member_vmid, domain):
             lines = [l.strip() for l in (out or "").splitlines() if l.strip()]
             return len(lines) >= 1 and lines[0].lower() == "true" \
                 and len(lines) >= 2 and lines[1].lower() == domain.lower()
+        except Exception as e:
+            print(f"      (membership probe failed, will attempt join: {e})")
+            return False
+    try:
         rc, out, _ = guest_agent_exec_root(
             node, member_vmid,
             f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
             f"&& echo JOINED || echo NOT", timeout=60)
-        return "JOINED" in (out or "")
+        if "JOINED" in (out or ""):
+            return True
     except Exception as e:
-        print(f"      (membership probe failed, will attempt join: {e})")
-        return False
+        print(f"      (membership probe via agent failed, trying SSH: {e})")
+    # SELinux confines qemu-guest-agent on RHEL-family images (Rocky 9: no realm on PATH,
+    # systemd D-Bus denied), so the agent's "NOT" is not evidence of a failed join.
+    if member_ip and engine_ctx:
+        try:
+            r = ssh_via_gateway(
+                engine_ctx, member_ip,
+                f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
+                f"&& echo JOINED || echo NOT", timeout=60, user=box_user or "ubuntu")
+            return "JOINED" in (r.stdout or "")
+        except Exception as e:
+            print(f"      (membership probe failed over SSH too: {e})")
+    return False
 
 
 def password_trips_ad_complexity(username, password, full_name=""):
@@ -282,7 +300,29 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                         print(f"  WARNING: [{team_key}] {member_box['name']} NOT joined to "
                               f"{domain} after {JOIN_ATTEMPTS} attempts")
             else:
-                if _probe_joined(node, member_box, member_vmid, domain) and not force_member_join:
+                engine_ctx = {"ssh_key_path": str(config.ssh_key_path()),
+                              "vm_username": scoring_user, "scoring_engine_ip": scoring_ip}
+                box_user = member_machine.get("user") or "ubuntu"
+                # cloud-init images ship `dns = none` in NetworkManager, so the catalog join's
+                # `nmcli connection up` succeeds without ever changing libc's resolver and
+                # realm discover reports "No such realm" while kerberos itself already works
+                # (Rocky 9.8, 2026-10-25). Pin the DC before the join runs.
+                pin = (f"sudo sh -c 'grep -qx \"nameserver {dc_ip}\" /etc/resolv.conf || "
+                       f"sed -i \"1i nameserver {dc_ip}\" /etc/resolv.conf'")
+                try:
+                    r = ssh_via_gateway(engine_ctx, member_ip, pin, timeout=60, user=box_user)
+                    if r.returncode != 0:
+                        with PRINT_LOCK:
+                            print(f"  WARNING: [{team_key}] could not pin {member_box['name']}'s "
+                                  f"resolver at {dc_ip}: "
+                                  f"{(r.stderr or r.stdout or '').strip()[:160]}")
+                except Exception as e:
+                    with PRINT_LOCK:
+                        print(f"  WARNING: [{team_key}] could not pin {member_box['name']}'s "
+                              f"resolver at {dc_ip}: {str(e)[:160]}")
+                if _probe_joined(node, member_box, member_vmid, domain, member_ip=member_ip,
+                                 engine_ctx=engine_ctx,
+                                 box_user=box_user) and not force_member_join:
                     with PRINT_LOCK:
                         print(f"  [{team_key}] Linux member {member_box['name']} already joined to "
                               f"{domain} — skipping join (resume)")
@@ -310,7 +350,8 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                         with PRINT_LOCK:
                             print(f"  WARNING: [{team_key}] {member_box['name']} domain-join failed "
                                   f"— continuing ({str(e)[:160]})")
-                    if _probe_joined(node, member_box, member_vmid, domain):
+                    if _probe_joined(node, member_box, member_vmid, domain, member_ip=member_ip,
+                                     engine_ctx=engine_ctx, box_user=box_user):
                         break
                     if attempt < JOIN_ATTEMPTS:
                         with PRINT_LOCK:
