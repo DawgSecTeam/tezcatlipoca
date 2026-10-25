@@ -61,13 +61,18 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
 
     # PVE reports `can't lock file ... got timeout` to losers of concurrent full clones;
     # the backoff must outlast the contention window, hence growing 40/80/120s waits.
+    clone_data = {"newid": vmid, "name": vm_name, "full": 1}
+    datastore = config.active().proxmox.datastore
+    if datastore:
+        # Full clone inherits the base image's storage unless told otherwise; on the realm
+        # that is the thick-reserved ssd pool, whose reservation budget cannot hold this
+        # template's 40G disk plus its conversion snapshot. The configured datastore is the
+        # operator's placement decision (hdd is sparse and has room).
+        clone_data["storage"] = datastore
     with storage_queue_lock(node):
         for attempt in range(5):
-            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{base_engine_vm_id}/clone", data={
-                "newid": vmid,
-                "name": vm_name,
-                "full": 1,
-            })["data"]
+            upid = proxmox_api("POST", f"/nodes/{node}/qemu/{base_engine_vm_id}/clone",
+                               data=clone_data)["data"]
             try:
                 wait_for_proxmox_task(node, upid)
                 break
@@ -163,7 +168,13 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
     print("    Cleaning engine template for conversion (fresh state per clone)...")
     clean_engine_for_template(build_ctx, vmid)
     stop_vm(node, vmid)
-    proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/template")["data"]
+    # qmtemplate is async and its ZFS snapshot can fail (out of space on a reserved pool):
+    # without the wait the failure was invisible, the hash got stamped on a half-converted
+    # template (volume renamed, config still vm-), and every engine clone then failed with
+    # "Linked clone feature is not supported".
+    upid = proxmox_api("POST", f"/nodes/{node}/qemu/{vmid}/template")["data"]
+    if upid:
+        wait_for_proxmox_task(node, upid)
     write_template_hash(node, vmid, hash_value,
                         extra=f"quotient_ref={quotient_ref or 'default'}")
     print(f"    {vm_name} (vmid {vmid}) is now a template")
