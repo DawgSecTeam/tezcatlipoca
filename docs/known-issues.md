@@ -13,3 +13,13 @@ probe showed low theta mostly buys holds.
 **Next action**: inspect the chosen candidate ids/descriptions on the high-p_yes
 cycles, then tune descriptions/priority and rerun a 4-box scrim; judge by
 takedowns and blue restores, not p_yes alone.
+
+### CLEF accessible over the operator gateway
+
+The 2026-10-26 2-box run (`run-1b4e13b9`) found the direct CLEF endpoint
+`10.0.0.143:8080` down for the whole event. Every red decision fell back to the
+deterministic picker, so that run could not exercise the action-noul or access-switch
+paths. The 4000 LiteLLM gateway also routes `clef-flash` to the dead 8080 backend.
+**Next action**: restore the clef server on 8080 (or make the gateway the single
+supported CLEF endpoint and configure its key), then rerun the 2-box scenario before
+judging the new access policy.

@@ -32,6 +32,7 @@ CONFIG_CONTRACT = (
     "c2.username",
     "c2.verify_tls",
     "evasion.preload_so",
+    "clef.api_key_env",
     "clef.base_url",
     "clef.enabled",
     "clef.high_stakes_effects",

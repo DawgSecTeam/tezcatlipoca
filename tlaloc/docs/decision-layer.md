@@ -174,3 +174,11 @@ recorded a deterministic pick does not.
 kept on the side (`self.last_reasoning`) and never becomes prose (the earlier
 agent put raw chain-of-thought into an engagement report's executive summary that
 way). A read timeout is terminal; the identical request is never retried.
+
+### Access-path health and C2 fallback
+
+After every cycle the loop persists the result against the foothold in `world.json`
+(`access.ssh`/`access.c2`, `last_error`, `last_cycle`). A password-SSH transport
+failure marks `access.ssh=failed`; the next candidate is offered through the live C2
+channel and `takedown` runs the stop over C2 tasking. `access_method` is a CLEF choice
+when more than one path remains, and its answer sets `access.preferred`.

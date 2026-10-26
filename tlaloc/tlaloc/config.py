@@ -63,6 +63,7 @@ DEFAULTS = {
         "base_url": "http://203.0.113.30:8080",
         "path": "/v1/systemone",
         "model": "clef-flash",
+        "api_key_env": "",
         "timeout_sec": 5,
         # Batch ceiling in tokens; the truncation cascade in state/digest.py is sized
         # against it as a guard for a smaller endpoint.

@@ -177,6 +177,7 @@ def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
     if clef_url:
         cfg.setdefault("clef", {}).update({
             "base_url": clef_url,
+            "api_key_env": "TLALOC_LLM_API_KEY",
             "model": str(block.get("clef_model") or "clef-flash")})
     if c2_url:
         cfg.setdefault("c2", {}).update({"enabled": True, "base_url": c2_url,

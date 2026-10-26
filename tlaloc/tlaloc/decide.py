@@ -1,6 +1,7 @@
 """The decision layer: clef answers typed questions; everything else is a bounded fallback."""
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ class ClefClient:
         self.base_url = (clef.get("base_url") or "").rstrip("/")
         self.path = clef.get("path") or "/v1/systemone"
         self.model = clef.get("model") or "clef-flash"
+        self.api_key_env = clef.get("api_key_env") or ""
         self.timeout = float(clef.get("timeout_sec", 5))
         self.max_request_tokens = int(clef.get("max_request_tokens", 16384))
         self.tokens_per_char = float(clef.get("tokens_per_char",
@@ -104,8 +106,12 @@ class ClefClient:
         if self._poster is not None:
             return self._poster(f"{self.base_url}{self.path}", body, self.timeout)
         import requests                                 # lazy
+        headers = {}
+        key = os.environ.get(self.api_key_env) if self.api_key_env else ""
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
         response = requests.post(f"{self.base_url}{self.path}", json=body,
-                                 timeout=self.timeout)
+                                 headers=headers, timeout=self.timeout)
         if response.status_code != 200:
             raise ClefError(f"clef HTTP {response.status_code}: "
                             f"{response.text[:200]}")
