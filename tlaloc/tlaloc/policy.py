@@ -425,7 +425,12 @@ class Policy:
                 for service in self._pressure_targets(ctx, ip, up):
                     if service.get("down") or not service.get("scored"):
                         continue
+                    access = self.access_method(ip)
+                    if not access:
+                        continue
                     mode = strongest or "stop"
+                    if access == "c2" and mode in TAKEDOWN_MODES and mode not in ("stop", "stop_mask"):
+                        mode = "stop"
                     rot, why, skip = self.pressure_rotation(ip, service["name"],
                                                             service.get("down"))
                     if skip:
@@ -439,12 +444,14 @@ class Policy:
                         continue
                     out.append(make_candidate(
                         "takedown",
-                        {"ip": ip, "service": service["name"], "mode": mode},
+                        {"ip": ip, "service": service["name"], "mode": mode,
+                         "access": access},
                         BASE_SCORE["takedown"] + rot + score_bonus - 20 * fails,
                         f"{service['name']} is a scored service on {ip}; {why}; "
-                        f"mechanism {mode}"
+                        f"mechanism {mode}; via {access}"
                         + (f"; {fails} failed attempt(s) — rotate" if fails else ""),
-                        cost="low", tag=f"{mode} {service['name']}@{ip}", high_stakes=True))
+                        cost="low", tag=f"{mode} {service['name']}@{ip}",
+                        high_stakes=True))
             elif modes and dead:
                 pass          # re-plant first: a dead box cannot be pressured
             if self.unrecoverable_unlocked():
@@ -650,6 +657,23 @@ class Policy:
             digest["_dropped"] = dropped
         return digest
 
+    def access_methods(self, ip):
+        fh = self.world.foothold(ip) or {}
+        access = fh.get("access") or {}
+        methods = []
+        if access.get("ssh") != "failed":
+            methods.append("ssh")
+        if self._channel_fresh(ip):
+            methods.append("c2")
+        return methods
+
+    def access_method(self, ip):
+        methods = self.access_methods(ip)
+        preferred = self.world.preferred_access(ip)
+        if preferred in methods:
+            return preferred
+        return methods[0] if methods else None
+
     def clef_state(self, ctx, recent=None, *, compact=False):
         """The readable decision state: teams, boxes, services, recent pressure, ROE.
         No credentials ever enter it; ids, IPs and service names only."""
@@ -668,6 +692,11 @@ class Policy:
                 "ip": ip,
                 "os": "windows" if box["windows"] else "linux",
                 "access": self._access_label(fh),
+                "access_methods": {m: ("ok" if m == "c2"
+                                        and self._channel_fresh(ip)
+                                        else ((fh or {}).get("access") or {}).get(m, "unknown"))
+                                    for m in ("ssh", "c2")},
+                "preferred_access": self.world.preferred_access(ip),
                 "channel": ("fresh" if fh and self._channel_fresh(ip)
                             else "stale" if fh and self.world.artifacts(ip) else "none"),
                 "dead_artifacts": len(self._dead_artifacts(ip)),
@@ -840,7 +869,8 @@ class Policy:
             state = ("It is a scored service currently standing; taking it down adds "
                      "downtime now." if standing else
                      "It is not currently standing, so this adds no new downtime.")
-            return f"Take down {label}. {state}"
+            via = f" Use the {params.get('access')} access path." if params.get("access") else ""
+            return f"Take down {label}. {state}{via}"
         if effect == "lockout":
             return (f"Lock out blue's logins on {team} {box.get('box') or ip} "
                     f"({os_name}); it does not stop a scored service but makes recovery harder.")

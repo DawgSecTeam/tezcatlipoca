@@ -16,6 +16,7 @@ CATALOG = {
     "command_intent": {"type": "choice", "replaces": "_IMPACTY_WORDS substring sniff"},
     "step_verified": {"type": "noul", "replaces": "ok = any(rc == 0)"},
     "blue_hunting": {"type": "noul", "replaces": "ad-hoc tempo/restore heuristics"},
+    "access_method": {"type": "choice", "replaces": "blind retry on the failed transport"},
 }
 
 DEFAULT_THETA = 0.60
@@ -538,6 +539,41 @@ class Decider:
                                              note=f"below theta — default {default}"))
         return self._log(cycle, Decision(question, value, {"no": 1 - yes, "yes": yes},
                                          prob, theta, "clef"))
+
+    def access_method(self, digest, ip, methods, *, default="ssh", cycle=None):
+        """CLEF picks the live access path after a transport failure."""
+        choices = {m: ("SSH password auth worked before and is still available"
+                       if m == "ssh" else
+                       "Live C2 callback; tasking does not use SSH")
+                   for m in methods}
+        if not choices:
+            return self._log(cycle, Decision("access_method", default,
+                                             source="deterministic",
+                                             note="no live access method"))
+        question = {"access_method": {
+            "type": "choice",
+            "instructions": (f"SSH failed on {ip}. Which access method should red "
+                             "use for the next action?"),
+            "criteria": choices,
+        }}
+        try:
+            payload = self.clef.ask(digest, question)
+        except (ClefError, AttributeError) as exc:
+            return self._log(cycle, Decision("access_method", default,
+                                             source="deterministic",
+                                             note=f"clef unavailable ({exc})"))
+        answer = (payload.get("answers") or {}).get("access_method") or {}
+        picked = choice_of(answer)
+        prob = top_probability(answer)
+        theta = self.theta("access_method")
+        if picked in methods and prob >= theta:
+            return self._log(cycle, Decision("access_method", picked, _probabilities(answer),
+                                             prob, theta, "clef",
+                                             note=f"switch to {picked}"))
+        return self._log(cycle, Decision("access_method", default,
+                                         _probabilities(answer), prob, theta,
+                                         "deterministic",
+                                         note=f"below theta/default {default}"))
 
     def classify_command(self, command, os_name="linux"):
         """command_intent: informs attribution, never a gate. The deterministic keyword read is the floor."""

@@ -17,6 +17,7 @@ from .errors import (EffectParamError, GuardrailError, PolicyError,
 from .events import EventLog
 from .exec.gate import Gate
 from .exec.ssh import SSH
+from .state.schema import now_iso
 from .intel import load_intel
 from .llm import LLM
 from .policy import Policy
@@ -179,6 +180,7 @@ class Loop:
                 if landed >= wanted:
                     break
 
+        self._update_world(executed, decision, digest)
         self.decider.record(self.cycle, executed=[e for e in executed if e])
         # the report's decision-log section reads records; an empty one silently drops it
         self.records.append({
@@ -194,6 +196,60 @@ class Loop:
         })
         return {"cycle": self.cycle, "decision": decision, "executed": executed,
                 "digest": digest, "candidates": len(candidates)}
+
+    def _update_world(self, executed, decision, digest):
+        """Persist what the last cycle actually proved about access."""
+        for entry in executed:
+            if not entry:
+                continue
+            params = entry.get("params") or {}
+            ip = params.get("ip")
+            if not ip:
+                continue
+            detail = str(entry.get("detail") or "")
+            access = entry.get("access")
+            if ("TransportError" in detail or "Bad authentication" in detail
+                    or "authentication" in detail.lower()):
+                access, ok = "ssh", False
+            else:
+                ok = bool(entry.get("ok"))
+            if access:
+                self.ctx.world.note_access(ip, access, ok, detail)
+        if self.ctx.c2 is not None:
+            try:
+                fresh = self.ctx.c2.fresh_callbacks()
+            except AttributeError:
+                fresh = self.ctx.c2.callbacks()
+            for fh in self.ctx.world.footholds():
+                box = self.ctx.intel.box_by_ip(fh["ip"]) or {}
+                box_id = f"{box.get('box')}-{box.get('identifier')}"
+                if box_id in fresh:
+                    self.ctx.world.note_access(fh["ip"], "c2", True,
+                                               "fresh C2 callback")
+        self.ctx.world.meta["last_cycle"] = {
+            "cycle": self.cycle, "at": now_iso(),
+            "results": [{"id": e.get("id"), "ok": e.get("ok"),
+                         "access": e.get("access"),
+                         "detail": (e.get("detail") or "")[:300]}
+                        for e in executed if e],
+        }
+        self.ctx.world.save()
+        # A transport failure is an access decision, not another identical takedown.
+        for entry in executed:
+            if not entry:
+                continue
+            params = entry.get("params") or {}
+            ip = params.get("ip")
+            if not ip:
+                continue
+            text = str(entry.get("detail") or "")
+            if ("TransportError" in text or "Bad authentication" in text):
+                methods = self.ctx.policy.access_methods(ip)
+                if "c2" in methods:
+                    chosen = self.ctx.decider.access_method(
+                        digest, ip, methods, default="c2", cycle=self.cycle)
+                    if chosen.answer in methods:
+                        self.ctx.world.set_preferred_access(ip, chosen.answer)
 
     def _run_candidate(self, decision, source):
         candidate = decision.chosen
@@ -215,10 +271,15 @@ class Loop:
                           candidate=candidate.get("id"), error=str(exc))
             self.recent.append(f"{candidate['effect']} unavailable")
             return {"id": candidate["id"], "effect": candidate["effect"],
-                    "ok": False, "detail": f"unavailable: {exc}"}
+                    "params": candidate["params"], "ok": False,
+                    "access": candidate["params"].get("access"),
+                    "detail": f"unavailable: {exc}"}
         self.recent.append(_short(candidate["effect"], candidate["params"], result))
         return {"id": candidate["id"], "effect": candidate["effect"],
-                "ok": result.ok, "detail": result.detail}
+                "params": candidate["params"], "ok": result.ok,
+                "access": (result.data or {}).get("access")
+                          or candidate["params"].get("access"),
+                "detail": result.detail}
 
     def _stronger_impact(self, decision, candidates, source):
         strongest = self.policy.strongest_impact_mode()

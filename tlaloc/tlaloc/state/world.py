@@ -158,6 +158,10 @@ class World:
         payload = {"user": user, "password": password, "kind": kind,
                    "windows": windows, "root_capable": kind == "root",
                    "last_ok": now_iso()}
+        access = dict((existing or {}).get("access") or {})
+        access.setdefault("ssh", "unknown")
+        access.setdefault("c2", "unknown")
+        payload["access"] = access
         if escalation is not None:
             payload["escalation"] = escalation
         if key_path:
@@ -195,6 +199,34 @@ class World:
         if fh:
             fh["last_ok"] = now_iso()
             self.save()
+
+    def note_access(self, ip, method, ok, detail=""):
+        fh = self.foothold(ip)
+        if fh is None:
+            return None
+        access = fh.setdefault("access", {})
+        access["ssh"] = access.get("ssh", "unknown")
+        access["c2"] = access.get("c2", "unknown")
+        access[method] = "ok" if ok else "failed"
+        if ok:
+            fh["last_ok"] = now_iso()
+            fh.pop("last_error", None)
+        else:
+            fh["last_error"] = str(detail)[:300]
+            fh["last_failed"] = now_iso()
+        self.save()
+        return access
+
+    def preferred_access(self, ip):
+        fh = self.foothold(ip) or {}
+        return (fh.get("access") or {}).get("preferred")
+
+    def set_preferred_access(self, ip, method):
+        fh = self.foothold(ip)
+        if fh is None:
+            return
+        fh.setdefault("access", {})["preferred"] = method
+        self.save()
 
     def add_artifact(self, ip, kind, detail, check_cmd=None, paths=None, **tags):
         """`**tags` carries the effect's identifying fields; the re-plant logic

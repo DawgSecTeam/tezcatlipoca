@@ -74,8 +74,19 @@ def restore_commands(world):
     return out
 
 
-def decision_trace(state_dir, limit=10):
-    """The last CLEF exchanges, from the event log (bundle + answer + confidence)."""
+def _fmt_ts(ts):
+    if ts is None:
+        return "?"
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).strftime(
+            "%Y-%m-%d %H:%M:%SZ")
+    except ValueError:
+        return str(ts)
+
+
+def decision_trace(state_dir, limit=None):
+    """CLEF exchanges from the event log; limit=None keeps every cycle."""
     path = Path(state_dir) / "events.jsonl"
     if not path.exists():
         return []
@@ -90,7 +101,25 @@ def decision_trace(state_dir, limit=10):
                 rows.append(event)
     except OSError:
         return []
-    return rows[-limit:]
+    return rows if limit is None else rows[-limit:]
+
+
+def action_trace(state_dir):
+    path = Path(state_dir) / "events.jsonl"
+    if not path.exists():
+        return []
+    rows = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("kind") == "action":
+                rows.append(event)
+    except OSError:
+        return []
+    return rows
 
 
 def c2_matrix(c2, comp_dir):
@@ -129,10 +158,14 @@ def c2_matrix(c2, comp_dir):
 
 def _box_caption(state):
     boxes = []
-    for box in state.get("boxes") or []:
-        svc = ", ".join(f"{name}:{status}" for name, status in box.get("svc") or [])
-        boxes.append(f"{box.get('id')}({box.get('os')},{box.get('acc')}) "
-                     f"[{svc}]")
+    for team in state.get("teams") or []:
+        for box in team.get("boxes") or []:
+            svc = ", ".join(f"{s.get('name')}:{s.get('status')}"
+                            for s in box.get("services") or [])
+            methods = box.get("access_methods") or {}
+            access = ",".join(f"{k}:{v}" for k, v in methods.items())
+            boxes.append(f"{box.get('id')}({box.get('os')}, {box.get('access')}, "
+                         f"{access}) [{svc}]")
     return "; ".join(boxes) if boxes else "no boxes"
 
 
@@ -145,13 +178,24 @@ def _render_c2(lines, rows):
     live = [r for r in planted if r["status"] == "callback"]
     lines.append(f"- planted: **{len(live)}/{len(planted)}** checked in; "
                  f"built-only: {len(rows) - len(planted)}")
+    survived = [r for r in planted if r["status"] == "callback"]
+    lines.append("- survived last round: "
+                 + (", ".join(f"{r['box']}:{r['transport']}" for r in survived)
+                    if survived else "none"))
     missing = [r for r in planted if r["status"] != "callback"]
     if missing:
         lines.append("- **no callback / not working**: "
                      + ", ".join(f"{r['box']}:{r['transport']} ({r['status']})"
                                  for r in missing))
     for r in rows:
-        seen = f" last={r['seen_at']}" if r.get("seen_at") is not None else ""
+        seen = ""
+        if r.get("seen_at") is not None:
+            try:
+                from datetime import datetime
+                seen = " last=" + _fmt_ts(
+                    datetime.utcfromtimestamp(float(r["seen_at"])).isoformat())
+            except (ValueError, TypeError):
+                seen = f" last={r['seen_at']}"
         lines.append(f"- {r['box']:<14} {r['transport']:<11} {r['kind']:<8} "
                      f"{r['status']:<12}{seen}  `{r['callback'] or ''}`")
     beacons = [r for r in rows if r["kind"] == "beacon"]
@@ -179,13 +223,16 @@ def _render_decisions(lines, trace, legacy=None):
         top = float(event.get("top_prob") or 0)
         theta = float(event.get("theta") or 0)
         source = event.get("source") or "?"
-        lines.append(f"### cycle {cycle} — {question} → `{answer}` "
-                     f"({source}, p={top:.2f}, theta={theta:.2f})")
+        lines.append(f"### {_fmt_ts(event.get('ts'))} · cycle {cycle} — {question} → "
+                     f"`{answer}` ({source}, p={top:.2f}, theta={theta:.2f})")
         bundle = event.get("bundle") or {}
         state = bundle.get("state") or {}
         if state:
-            lines.append(f"- given: T+{state.get('t', '?')} phase={state.get('phase', '?')} "
-                         f"down={state.get('down', '?')} cap={state.get('cap', '?')}; "
+            lines.append(f"- given: minute {state.get('minute', '?')}/"
+                         f"{state.get('total_minutes', '?')} "
+                         f"left {state.get('minutes_left', '?')} "
+                         f"phase={state.get('phase', '?')} "
+                         f"priority={(state.get('priority_team') or {}).get('name', '?')}; "
                          f"{_box_caption(state)}")
         questions = (bundle.get("questions") or {}).get(question) or {}
         if questions.get("instructions"):
@@ -206,8 +253,26 @@ def _render_decisions(lines, trace, legacy=None):
             lines.append(f"- note: {note}")
         lines.append("")
 
+def _render_actions(lines, actions):
+    lines += ["", "## Cycle actions (every round)"]
+    if not actions:
+        lines.append("- no action events at report time")
+        return
+    current = None
+    for event in actions:
+        cycle = event.get("cycle")
+        if cycle != current:
+            lines.append(f"### cycle {cycle}")
+            current = cycle
+        lines.append(f"- {_fmt_ts(event.get('ts'))} `{event.get('effect')}` "
+                     f"{json.dumps(event.get('params') or {}, separators=(',', ':'))} "
+                     f"→ {'ok' if event.get('ok') else 'FAILED'}: "
+                     f"{(event.get('detail') or '')[:400]}")
+
+
 def render_report(world, *, policy=None, sensors=None, narrative=None,
-                  decisions=None, summary=None, trace=None, c2_rows=None):
+                  decisions=None, summary=None, trace=None, c2_rows=None,
+                  actions=None):
     summary = summary or summarize(world, policy, sensors)
     lines = [f"# tlaloc after-action — {summary.get('comp') or 'unset competition'}",
              "",
@@ -242,6 +307,7 @@ def render_report(world, *, policy=None, sensors=None, narrative=None,
                      f"{('[' + entry['service'] + ']') if entry['service'] else ''}: "
                      + " ; ".join(str(s) for s in steps if s))
     _render_c2(lines, c2_rows or [])
+    _render_actions(lines, actions or [])
     _render_decisions(lines, trace or [], decisions)
     lines.append("")
     return "\n".join(lines)
@@ -279,6 +345,7 @@ def write_artifacts(state_dir, world, *, policy=None, sensors=None, narrative=No
     report = render_report(world, policy=policy, sensors=sensors,
                            narrative=narrative, decisions=decisions, summary=summary,
                            trace=decision_trace(state_dir),
+                           actions=action_trace(state_dir),
                            c2_rows=c2_matrix(c2, comp_dir))
     secrets = render_secrets(world, summary=summary)
     table = {"comp": summary.get("comp"), "generated_at": now_iso(),
