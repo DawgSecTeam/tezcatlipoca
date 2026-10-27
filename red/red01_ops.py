@@ -15,7 +15,7 @@ from infra.ownership import clone_marker, destroy_vm_if_exists
 
 RED_USER = "sysadmin"
 NAME = "tlaloc-red01"
-DEFAULT_TEMPLATE = "base-ubuntu24.04-fix"
+DEFAULT_TEMPLATE = "base-ubuntu24.04"
 # python3-paramiko is tlaloc's SSH transport; without it every box action fails
 # and the day-0 seed plants nothing while exiting 0. grpcio/protobuf are the
 # Sliver operator client (the generated stubs are sent with the package).
