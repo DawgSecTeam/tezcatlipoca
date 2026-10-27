@@ -13,7 +13,7 @@ import pytest
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 
-from engine import engine_identity_ops
+from engine import engine_cmd_ops, engine_identity_ops
 
 
 def _run(failures):
@@ -26,7 +26,10 @@ def _run(failures):
                 raise RuntimeError("compose up failed")
         return mock.Mock()
 
-    with mock.patch.object(engine_identity_ops, "_run_engine_cmd", side_effect=fake), \
+    # The retry lives in engine_cmd_ops.start_quotient now; the grow-root/dns steps still go
+    # through this module's binding. Both must see the fake.
+    with mock.patch.object(engine_cmd_ops, "_run_engine_cmd", side_effect=fake), \
+         mock.patch.object(engine_identity_ops, "_run_engine_cmd", side_effect=fake), \
          mock.patch.object(engine_identity_ops, "push_quotient_env"), \
          mock.patch.object(engine_identity_ops, "_install_firewall_and_healthcheck"), \
          mock.patch.object(engine_identity_ops.time, "sleep"):

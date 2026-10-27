@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from engine.template_freeze import forget_template_hashes
+from common import comp_secrets
 from common.utils import competition_name
 
 EVIDENCE = "evidence"
@@ -179,11 +180,22 @@ class RedStep(Step):
             engine_user=estate_config.active().engine.username,
             ssh_key=str(estate_config.ssh_key_path()), env=ctx.env)
         from infra import red01
-        if red01.vm_at(vmid) is not None:
+        # Ownership proof, not presence: a recycled vmid holding a FOREIGN VM is not our
+        # failure (the destroy refused it, correctly), and reporting it as one stranded the
+        # teardown. Only a VM still carrying this run's tags is an unclean red01.
+        verdict = red01.occupant_verdict(vmid, ctx.ownership.comp,
+                                         getattr(ctx.ownership, "run_id", None))
+        if verdict == "ours":
             return StepResult(self.name, "failed",
                               f"red01 vmid {vmid} is STILL PRESENT after destroy — "
                               f"the estate is not clean")
-        return StepResult(self.name, "ok", f"destroyed red01 vmid {vmid}")
+        if verdict in ("unmarked", "unknown"):
+            return StepResult(self.name, "failed",
+                              f"red01's vmid {vmid} could not be proven gone ({verdict}) — "
+                              f"check by hand")
+        detail = (f"destroyed red01 vmid {vmid}" if verdict == "absent"
+                  else f"red01 vmid {vmid} now holds another VM ({verdict}) — this run's is gone")
+        return StepResult(self.name, "ok", detail)
 
     def journal_detail(self, result):
         return {"detail": result.detail, "vmid": getattr(self, "last_vmid", None),
@@ -238,6 +250,7 @@ class EstateStep(Step):
                 ctx.placement, full=True)
         if ctx.full:
             forget_template_hashes(ctx.comp_dir)
+            comp_secrets.forget(competition_name(ctx.comp_dir))
         if kept:
             return StepResult(self.name, "warned", "; ".join(kept))
         return StepResult(self.name, "ok", f"destroyed {len(summary['destroyed'])}")

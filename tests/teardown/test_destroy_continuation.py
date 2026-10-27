@@ -12,6 +12,7 @@ sys.path.insert(0, str(_REPO))
 
 
 from golden import golden_ops  # noqa: E402
+from infra import ownership  # noqa: E402
 
 
 class GoldenDestroySkipsForeign(unittest.TestCase):
@@ -26,8 +27,9 @@ class GoldenDestroySkipsForeign(unittest.TestCase):
                 return "foreign", {"comp-other", "run-x"}, {"name": "someone"}
             return "owned", set(expect_tags), {"name": f"golden-{vmid}"}
 
-        with patch.object(golden_ops, "destroy_vm_if_exists", fake_destroy), \
-                patch.object(golden_ops, "vm_occupancy", occupancy), \
+        # The template verdict lives in infra.ownership now: patch the OWNING module.
+        with patch.object(ownership, "destroy_vm_if_exists", fake_destroy), \
+                patch.object(ownership, "vm_occupancy", occupancy), \
                 patch("builtins.print"):
             skipped = golden_ops.destroy_golden_set("proxmox", 1180, 3,
                                                     expect_tags={"tezcatlipoca"})
@@ -46,14 +48,15 @@ class GoldenDestroySkipsForeign(unittest.TestCase):
                     {"tezcatlipoca", "comp-comp", "run-other"},
                     {"name": "golden-0"})
 
-        with patch.object(golden_ops, "destroy_vm_if_exists", fake_destroy), \
-                patch.object(golden_ops, "vm_occupancy", occupancy), \
+        # The template verdict lives in infra.ownership now: patch the OWNING module.
+        with patch.object(ownership, "destroy_vm_if_exists", fake_destroy), \
+                patch.object(ownership, "vm_occupancy", occupancy), \
                 patch("builtins.print"):
             skipped = golden_ops.destroy_golden_set(
                 "proxmox", 1180, 1,
                 expect_tags={"tezcatlipoca", "comp-comp", "run-mine"})
         self.assertEqual(calls, [], "a parallel run's template must not be eaten")
-        self.assertTrue(skipped[0].startswith(golden_ops.OTHER_RUN))
+        self.assertTrue(skipped[0].startswith(ownership.OTHER_RUN))
 
 
 

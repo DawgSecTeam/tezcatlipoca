@@ -21,12 +21,17 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
     jump itself — expected, not a red sighting."""
     print(f"\n[+RED] RED IDENTITY (routed-mode source address; red01 {red_ip}, "
           f"expecting source {seg_ip})")
-    linux_ips = [b["ip"] for b in boxes
-                 if b.get("ip") and is_linux_box(b)]
-    if not linux_ips:
-        print("  SKIP  — no Linux box to observe the connection from (ss)")
-        return gate_skip("red_identity", "no Linux box to observe from")
-    box_ip = linux_ips[0]
+    if not red_ip:
+        print("  SKIP  — no red01 address recorded for this run (deploy it, or pass --red-ip)")
+        return gate_skip("red_identity", "no red01 address recorded")
+    # A satellite team's jump SNATs red to 192.168.<id>.1 by design, so observing the source
+    # there is a guaranteed false FAIL: pick a box on a slot-0 team, where red's source
+    # survives end-to-end.
+    candidates = _engine_node_linux_boxes(ctx, boxes)
+    if not candidates:
+        print("  SKIP  — no slot-0 Linux box to observe the connection from (ss)")
+        return gate_skip("red_identity", "no engine-node Linux box to observe from")
+    box_ip = candidates[0]
 
     try:
         hold = subprocess.Popen(
@@ -79,11 +84,44 @@ def check_red_identity(ctx, boxes, red_ip, seg_ip, red_user="sysadmin"):
     return gate_fail("red_identity", f"{seg_ip} never visible on {box_ip}")
 
 
+def _engine_node_linux_boxes(ctx, boxes):
+    """Linux box IPs on teams the ENGINE hosts — where red's source survives end-to-end.
+
+    A satellite team's jump SNATs red to 192.168.<id>.1 by design (docs/multi-node.md), so
+    observing the red source there is a guaranteed false FAIL.
+    """
+    from common.targets import frozen_roster
+    from common.comp_paths import resolve_comp_dir
+    from estate import state as estate_state
+    try:
+        comp_dir = resolve_comp_dir(comp_dir=(ctx or {}).get("comp_dir")) \
+            if (ctx or {}).get("comp_dir") else None
+        if comp_dir is None:
+            raise OSError("no comp_dir in the engine context")
+        placement = estate_state.EstateState.load(comp_dir).data.get("placement") or {}
+        engine_node = (placement.get("nodes", {}).get(placement.get("engine_node"))
+                       or {}).get("node")
+        targets = (frozen_roster(comp_dir) or {}).get("targets") or {}
+        engine_teams = {t["team_key"] for t in targets.values()
+                        if engine_node and t.get("node") == engine_node}
+    except Exception:                                        # noqa: BLE001 - single node/no state
+        engine_teams = None
+    if not engine_teams:
+        return [b["ip"] for b in boxes if b.get("ip") and is_linux_box(b)]
+    by_ip = {t["ip"]: t["team_key"] for t in targets.values()}
+    return [b["ip"] for b in boxes
+            if b.get("ip") and is_linux_box(b)
+            and by_ip.get(b["ip"]) in engine_teams]
+
+
 def check_red_teams(ctx, boxes, red_ip, red_user="sysadmin", timeout=12):
     """--red-teams all: every team must be reachable from red01, not just one — --red-identity
     only proves red reaches one box on its own segment. Fails closed: a team whose boxes all refuse
     the connect is a FAIL, an unreadable team list is a SKIP."""
     print(f"\n[+RED] RED REACHABILITY (red01 {red_ip} -> one box per team)")
+    if not red_ip:
+        print("  SKIP  — no red01 address recorded for this run (deploy it, or pass --red-ip)")
+        return gate_skip("red_teams", "no red01 address recorded")
     by_team = boxes_by_team(boxes)
     if not by_team:
         print("  SKIP  — no team boxes with usable IPs in the machine list")

@@ -172,5 +172,6 @@ hosts. Two traps beyond the multi-node doc:
 pre-T0 gates are the deploy's proof ([scrim-harness.md](scrim-harness.md)). **Every red failure
 aborts the deploy — there is no degraded range.** Phase 7 stages the agent through the same
 `plant_assume_breach` the scrim uses, so a scrim cannot stage a red the deploy would not. The C2
-callback is the team gateway at the engine, or the engine's transit address when an in-path
-firewall owns the gateway.
+callback is the team gateway `192.168.<id>.1` (the engine's DNAT on an engine-hosted team, the
+satellite jump's DNAT on a satellite team) — never the engine's transit address, which is
+Quotient's own.

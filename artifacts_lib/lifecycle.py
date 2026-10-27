@@ -8,7 +8,7 @@ from .constants import FAILED, REPO, SIDES, SKIPPED
 from .env import in_worktree, iso
 from .index import update_index
 from .manifest import ensure_test, load_manifest, record_paths, update_manifest
-from .paths import latest_run_key, test_dir, test_key
+from .paths import latest_run_key, test_dir
 from .plan import plan_targets
 from .report import write_report_skeleton, write_stub
 from .status import warn_summary, why_missing

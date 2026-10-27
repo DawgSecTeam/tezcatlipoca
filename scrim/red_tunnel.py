@@ -87,7 +87,9 @@ def maybe_start_red_tunnel(args):
     if mode == "on" and not local:
         log("--red-tunnel ignored for an openrouter endpoint (red01 reaches it directly)")
         return None
-    tunnel = RedTunnel(args.llm_base_url, args.red_ip, str(core.REPO / "proxmox"),
+    # A central run's engine lives in a per-run worktree with no key in it: the configured
+    # path is the only reliable source.
+    tunnel = RedTunnel(args.llm_base_url, args.red_ip, str(core.ssh_key_path()),
                        core.vm_username())
     tunnel.start()
     log(f"red LLM tunnel up: red01 localhost:{tunnel.remote_port} -> {tunnel.target}")

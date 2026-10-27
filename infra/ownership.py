@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 
-from common.constants import ownership_tags
+from common.constants import comp_tag, ownership_tags
 from infra.client import proxmox_api, wait_for_proxmox_task
 from estate import config
 
@@ -47,13 +47,15 @@ class Refusal(RuntimeError):
 
 
 def parse_vm_tags(raw):
-    """PVE joins tags with ';' in some views and ',' in others."""
+    """PVE joins tags with ';' in some views and ',' in others; the inventory stores a list."""
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        return {str(t).strip() for t in raw if str(t).strip()}
     return {t.strip() for t in str(raw or "").replace(";", ",").split(",") if t.strip()}
 
 
 def clone_marker(comp_name):
     """/clone takes no `tags` and tagging lands post-task, so the marker rides `description`."""
-    return f"tezcatlipoca-clone comp-{comp_name}"
+    return f"tezcatlipoca-clone {comp_tag(comp_name)}"
 
 
 def full_clone_data(newid, name, comp_name):
@@ -85,12 +87,13 @@ def ownership_identity(comp_dir, recorded):
 
 
 def comp_name_from_tags(expect_tags):
+    """The competition a tag set names, as the SLUG `clone_marker` keys on."""
     return next((t[len("comp-"):] for t in expect_tags if t.startswith("comp-")), None)
 
 
 def bridge_comment(comp_name, run_id, prose=""):
     """A bridge's PVE comment — the only ownership a bridge can carry (bridges have no tags)."""
-    base = f"tezcatlipoca comp-{comp_name} {run_id}"
+    base = f"tezcatlipoca {comp_tag(comp_name)} {run_id}"
     return f"{base} — {prose}" if prose else base
 
 
@@ -98,9 +101,9 @@ def bridge_owned_by(comment, comp_name, run_id):
     """No run id is no proof: an unattributable bridge is never owned, never removed."""
     if not run_id or not comp_name:
         return False
-    text = str(comment or "")
-    return all(token in text for token in
-               ("tezcatlipoca", f"comp-{comp_name}", run_id))
+    # Whole tokens: `comp-cde` must not match a `comp-cde-2026` bridge.
+    tokens = set(str(comment or "").split())
+    return {"tezcatlipoca", comp_tag(comp_name), run_id} <= tokens
 
 
 def vm_occupancy(node, vmid, expect_tags):
@@ -128,6 +131,31 @@ def ownership_verdict(node, vmid, raw_tags, expect_tags):
     if expect <= tags:
         return OWNED, set()
     return MISSING, expect - tags
+
+
+OTHER_RUN = "another run of this competition"
+
+
+def destroy_role_template(node, vmid, expect_tags):
+    """Destroy a role-tagged template this run owns; return a skip message for anything else.
+
+    A VM carrying THIS competition's tag but another run's id belongs to a concurrent range of
+    the same competition: it is reported as blocking, never destroyed and never a foreign skip.
+    """
+    verdict, tags, vm = vm_occupancy(node, vmid, expect_tags)
+    if verdict == "absent":
+        return None
+    if verdict == "unknown":
+        return f"vmid {vmid} could not be classified (unreadable) — check by hand"
+    if verdict in (OWNED, MARKER):
+        destroy_vm_if_exists(node, vmid, expect_tags=expect_tags)
+        return None
+    comp = comp_name_from_tags(expect_tags or ())
+    if verdict == MISSING and comp and comp_tag(comp) in tags:
+        return (f"{OTHER_RUN} holds vmid {vmid} "
+                f"({vm.get('name') or '?'}, tags: {';'.join(sorted(tags))}) — not touched")
+    return (f"vmid {vmid} is occupied by a foreign VM ({vm.get('name') or '?'}, "
+            f"tags: {';'.join(sorted(tags)) or 'none'}) — skipped")
 
 
 def unlock_vm(node, vmid, lock):

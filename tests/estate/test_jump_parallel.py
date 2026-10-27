@@ -47,7 +47,8 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         lock = threading.Lock()
 
         def fake_build_one(rec, sat, vmid, team_ids, ctx, comp_name, eng_ip, eng_gw,
-                           run_id=None, red_segment="", mgmt_bridge="vmbr0"):
+                           run_id=None, red_segment="", mgmt_bridge="vmbr0",
+                           callback_port=None):
             with lock:
                 seen.append((sat["name"], vmid, tuple(team_ids)))
 
@@ -69,7 +70,8 @@ class BuildJumpVmsConcurrency(unittest.TestCase):
         lock = threading.Lock()
 
         def fake_build_one(rec, sat, vmid, team_ids, ctx, comp_name, eng_ip, eng_gw,
-                           run_id=None, red_segment="", mgmt_bridge="vmbr0"):
+                           run_id=None, red_segment="", mgmt_bridge="vmbr0",
+                           callback_port=None):
             with lock:
                 seen.append(red_segment)
 

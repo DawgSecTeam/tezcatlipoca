@@ -39,7 +39,10 @@ def resync(comp_dir):
                                            previous=previous)
     for p in problems:
         print(f"  WARNING: {p}")
-    if any(tokens.get(k, {}).get("secret") != v.get("secret") for k, v in previous.items()):
+    # Iterate the MINTED tokens: a node that had no prior token (or a fresh workspace with
+    # no `previous` at all) must still trigger the reminder.
+    if any(previous.get(k, {}).get("secret") != v.get("secret")
+           for k, v in tokens.items()):
         # PVE only shows a token's secret at creation: a re-created token makes portal.json stale.
         print("  NOTE: a console token was re-created — re-run "
               f"`create-competition.py --competition {competition_name(comp_dir)} --from-phase 8 --yes` "

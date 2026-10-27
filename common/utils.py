@@ -128,26 +128,52 @@ def valid_comp_name(name):
 # A hardcoded public resolver broke every box on an uplink that filters it (live: run-fee03a45
 # could not resolve download.docker.com); TEZ_BOX_DNS lets a placement name its own resolver
 # first (the range gateway), with public ones as fallback.
-def _box_dns():
+#
+# Resolved per call, never at import: the deploy entrypoints load `.env` AFTER `common.utils`
+# is first imported, and a placement can `config.activate()` an override later still.
+DEFAULT_BOX_DNS = ("1.1.1.1", "8.8.8.8")
+
+
+def box_dns_servers():
+    """The resolvers every box is pointed at: validated, so nothing can inject shell."""
+    import ipaddress
     try:
-        value = (config.active().knobs.box_dns or "").strip()
-    except Exception:  # no config in tests/early import
-        value = ""
-    return value or "1.1.1.1 8.8.8.8"
+        raw = config.active().knobs.box_dns or ""
+    except Exception:  # no config in tests/early imports
+        raw = ""
+    servers = []
+    for token in str(raw).split():
+        try:
+            servers.append(str(ipaddress.ip_address(token)))
+        except ValueError:
+            raise SystemExit(f"  ERROR: knob box_dns has a non-address entry {token!r} — "
+                             f"set TEZ_BOX_DNS to space-separated IPv4/IPv6 addresses.")
+    return servers or list(DEFAULT_BOX_DNS)
 
 
-BOX_DNS = _box_dns()
-BOX_DNS_PRIMARY = BOX_DNS.split()[0]
-_DNS_RESOLV = "".join(f"nameserver {ns}\\n" for ns in BOX_DNS.split())
-DNS_FIX_CMD = (
-    f'printf "{_DNS_RESOLV}" | sudo tee /etc/resolv.conf; '
-    f'printf "{_DNS_RESOLV}" | sudo tee /etc/resolv.conf.head; '
-    "sudo mkdir -p /etc/systemd/resolved.conf.d; "
-    f'printf "[Resolve]\\nDNS={BOX_DNS}\\n" | sudo tee /etc/systemd/resolved.conf.d/upstream.conf; '
-    "sudo systemctl restart systemd-resolved 2>/dev/null || true"
-)
+def box_dns():
+    return " ".join(box_dns_servers())
 
-DNS_FIX_CMD_ROOT = DNS_FIX_CMD.replace("sudo ", "")
+
+def box_dns_primary():
+    return box_dns_servers()[0]
+
+
+def dns_fix_cmd():
+    servers = box_dns_servers()
+    resolv = "".join(f"nameserver {ns}\\n" for ns in servers)
+    return (
+        f'printf "{resolv}" | sudo tee /etc/resolv.conf; '
+        f'printf "{resolv}" | sudo tee /etc/resolv.conf.head; '
+        "sudo mkdir -p /etc/systemd/resolved.conf.d; "
+        f'printf "[Resolve]\\nDNS={" ".join(servers)}\\n" | '
+        "sudo tee /etc/systemd/resolved.conf.d/upstream.conf; "
+        "sudo systemctl restart systemd-resolved 2>/dev/null || true"
+    )
+
+
+def dns_fix_cmd_root():
+    return dns_fix_cmd().replace("sudo ", "")
 
 
 BOX_USERNAME_DEFAULT = "ubuntu"

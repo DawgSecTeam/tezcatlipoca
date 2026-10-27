@@ -16,7 +16,9 @@ def timings_path(comp_dir):
 
 
 def read_timings(path):
-# `ts` is the end stamp and `seconds` the duration, so every row's span is derivable.
+# `start` is a float epoch stamp: reconstructing it from a 1-second `ts` minus a
+#     millisecond duration shifted a parent's span by up to a second, which broke the
+#     containment test in top_level and double-counted nested ops.
     rows = []
     try:
         fh = open(path)
@@ -33,12 +35,19 @@ def read_timings(path):
             except (TypeError, ValueError):
                 seconds = 0.0
             try:
-                end = time.mktime(time.strptime(record["ts"], "%Y-%m-%dT%H:%M:%S"))
+                start = float(record["start"])
             except (KeyError, TypeError, ValueError):
-                end = None
+                start = None
+            if start is None:
+                # Rows written before `start` existed: the end stamp still bounds the span.
+                try:
+                    end = time.mktime(time.strptime(record["ts"], "%Y-%m-%dT%H:%M:%S"))
+                    start = end - seconds
+                except (KeyError, TypeError, ValueError):
+                    start = None
             rows.append({"phase": record.get("phase", "?"), "op": record.get("op", "?"),
                          "target": record.get("target", ""), "seconds": seconds,
-                         "start": None if end is None else end - seconds})
+                         "start": start})
     return rows
 
 
@@ -57,12 +66,14 @@ def top_level(rows):
 @contextmanager
 def timed(comp_dir, phase, op, target=""):
     start = time.monotonic()
+    started_at = time.time()
     try:
         yield
     finally:
         seconds = round(time.monotonic() - start, 3)
         record = json.dumps({
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "start": round(started_at, 3),
             "phase": str(phase),
             "op": str(op),
             "target": str(target),

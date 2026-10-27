@@ -62,28 +62,49 @@ def satellite_route_commands(routes):
     ]
 
 
-def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None):
+def _iface(name, mac):
+    """Pin the interface by MAC when the MAC is known.
+
+    `ens<N>` is positional and only holds while every NIC sits on PCI bus 0 (slots 0x12-0x1f,
+    `net0..net13`). Past that udev names the interface something else and every address in
+    this file lands on nothing — a silent loss of engine→team routing on a big range.
+    """
+    lines = [f"    {name}:"]
+    if mac:
+        lines += [f'      match:\n        macaddress: "{mac}"', f"      set-name: {name}"]
+    return lines
+
+
+def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None, macs=()):
     """The engine's team-interface netplan; addresses follow create_engine's NIC order (mgmt, teams, transit, then red_segment)."""
+    macs = list(macs or ())
     lines = ["network:", "  version: 2", "  ethernets:"]
-    for index, identifier in enumerate(team_identifiers):
-        lines.append(f'    ens{18 + index + 1}:\n      addresses: ["192.168.{identifier}.1/24"]')
-    for index, identifier in enumerate(transit_identifiers):
-        lines.append(
-            f'    ens{18 + len(team_identifiers) + index + 1}:\n'
-            f'      addresses: ["172.31.{identifier}.1/30"]')
+
+    def mac(index):
+        return macs[index] if index < len(macs) else ""
+
+    index = 0
+    for identifier in team_identifiers:
+        lines += _iface(f"ens{18 + index + 1}", mac(index))
+        lines.append(f'      addresses: ["192.168.{identifier}.1/24"]')
+        index += 1
+    for identifier in transit_identifiers:
+        lines += _iface(f"ens{18 + index + 1}", mac(index))
+        lines.append(f'      addresses: ["172.31.{identifier}.1/30"]')
+        index += 1
     if red_segment:
-        interface = 18 + len(team_identifiers) + len(transit_identifiers) + 1
-        gw = red_segment["gw"]
-        lines.append(f'    ens{interface}:\n      addresses: ["{gw}/24"]')
+        lines += _iface(f"ens{18 + index + 1}", mac(index))
+        lines.append(f'      addresses: ["{red_segment["gw"]}/24"]')
     return "\n".join(lines)
 
 
 def configure_engine_network(ctx, team_identifiers, transit_identifiers=(), satellite_routes=(),
-                             red_segment=None):
+                             red_segment=None, macs=()):
     """Address the engine's team bridges and enable forwarding over SSH; with neither teams nor a red segment there is no interface to write (an empty ethernets map is a netplan error)."""
     if team_identifiers or red_segment:
         _run(ctx, "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'\n"
-                  + netplan_yaml(team_identifiers, transit_identifiers, red_segment) + "\nEOF")
+                  + netplan_yaml(team_identifiers, transit_identifiers, red_segment, macs)
+                  + "\nEOF")
         # netplan refuses a world-readable file.
         _run(ctx, "sudo chmod 600 /etc/netplan/60-team-ifaces.yaml")
         _run(ctx, "sudo netplan apply")

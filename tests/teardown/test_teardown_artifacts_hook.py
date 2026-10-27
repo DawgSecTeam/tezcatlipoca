@@ -61,6 +61,9 @@ def _offline_api_patches(collect_log=None):
         patch.object(ownership, "proxmox_api", _OfflinePVE()),
         patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None),
         patch.object(infra.client, "live_vmids", lambda: []),
+        # red01.py binds proxmox_api itself; an unpatched binding sent the red01 verdict
+        # check LIVE and read back "unknown", which now (correctly) fails the teardown.
+        patch("infra.red01.proxmox_api", _OfflinePVE()),
         patch.object(red01_ops, "recorded_identity",
                      lambda *a, **k: {"vmid": 999, "ip": "", "node": ""}),      # known vmid; live_vmids [] proves it gone
     ]

@@ -7,7 +7,7 @@ from common.utils import competition_name
 from scrim import core
 from scrim import endpoints
 from scrim import fire_test
-from scrim import procs
+from common import procs
 from scrim import red_link
 from scrim import red_tunnel
 from scrim import staging
@@ -79,15 +79,28 @@ def _resolve_red_ip(args, comp, placement=None):
     if getattr(args, "red_ip", None):
         return args.red_ip
     placement = placement if placement is not None else read_placement(comp)
-    ip = red01_ops.red01_ip_for(comp, placement)
+    # The `red` section is where a SINGLE-NODE deploy records it (there is no placement);
+    # skipping it made a populated range look unconfigured and selected a second address.
+    recorded = (red01_ops.recorded_identity(comp) or {}).get("ip")
+    ip = recorded or red01_ops.red01_ip_for(comp, placement)
     if not ip:
-        ip, _unchecked = red01_ops.select_red_ip(comp, placement)
+        ip, _unchecked = red01_ops.select_red_ip(comp, placement,
+                                                 comp_tags=_comp_tags(args, comp))
     if not ip:
         raise RuntimeError(
             "no provably free address in the red band — pass --red-ip with an address you "
             "have checked yourself")
     args.red_ip = ip
     return ip
+
+
+def _comp_tags(args, comp):
+    """This run's ownership tags, so red01's own running VM is not read as a foreign squatter."""
+    from common.constants import ownership_tags
+    from common.utils import competition_name
+    from estate import state as estate_state
+    run_id = estate_state.load_flat(comp).get("run_id") or getattr(args, "run_id", "")
+    return ownership_tags(competition_name(Path(comp)), run_id or None)
 
 
 class _PipelineCtx:
@@ -133,13 +146,16 @@ def stage_red(args, comp, creds, run_dir):
     if tunnel:
         base_url = tunnel.red_base_url()
         args.red_tunnel = tunnel
-    ssh_key = (creds or {}).get("KEY_PATH") or core.REPO / "proxmox"
+    ssh_key = (creds or {}).get("KEY_PATH") or core.ssh_key_path()
     ctx = _PipelineCtx(comp, args, ssh_key)
     log(f"staging tlaloc on red01 {args.red_ip} (vmid {args.red_vmid}) — "
         f"Mythic via Gaia, payload freeze, day-0 seed")
+    # Idempotent by design (red01 adopts, the seed re-runs), and the deploy has already done
+    # it: this pass exists so a --skip-deploy run stages red from nothing. The loop starts
+    # in start_red_director below, never before the fire test.
     tlaloc_ops.plant_assume_breach(
         ctx, ssh_key=str(ssh_key), llm=red_llm_config(args, base_url),
-        llm_key=endpoints.api_key(args.llm_base_url))
+        llm_key=endpoints.api_key(args.llm_base_url), start_loop=False)
     test_folder.record_red_agent(args)
     verify_tlaloc_seeded(args, comp)
     if not red_link.check_red_llm(args, base_url):
@@ -150,7 +166,7 @@ def stage_red(args, comp, creds, run_dir):
     log(f"red01 reached the LLM at {base_url} — clear to start")
     verify_red_reaches_teams(args, comp, creds)
     try:
-        from scrim import clean_trails
+        from guests import clean_trails
         clean_trails.clean_trails(comp, creds)
     except Exception as e:                                   # noqa: BLE001 - never fatal
         log(f"WARNING: trail wipe failed ({type(e).__name__}: {e}) — blue may be able "

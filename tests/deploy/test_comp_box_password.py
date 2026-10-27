@@ -8,11 +8,12 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 
+from common import comp_secrets
 from deploy_lib import secrets as secrets_mod
 
 
 def _store(tmp_path, monkeypatch):
-    monkeypatch.setattr(secrets_mod, "COMP_SECRETS_DIR", tmp_path / "comp-secrets")
+    monkeypatch.setattr(comp_secrets, "CACHE_DIR", tmp_path / "comp-secrets")
 
 
 def test_a_fresh_run_of_the_same_competition_carries_the_same_password(tmp_path, monkeypatch):

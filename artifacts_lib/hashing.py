@@ -2,7 +2,6 @@
 
 import hashlib
 import os
-import shutil
 from pathlib import Path
 
 
@@ -20,16 +19,21 @@ def file_facts(path):
 
 
 def seal_local_file(src, dest):
-# Copy `src` to `dest` with 0600 at creation and return its facts.
-#
-#     0600-at-creation rather than chmod-after: these files quote credentials and flags, and the
-#     repo's own atomic writer documents why that window matters (config_ops.write_text_atomic).
+    """Copy `src` to `dest` at 0600-at-creation and return its facts.
+
+    0600-at-creation rather than chmod-after: these files quote credentials and flags.
+    """
     src, dest = Path(src), Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        dest.unlink()
-    shutil.copyfile(src, dest)
-    os.chmod(dest, 0o600)
+    if src.resolve() == dest.resolve():
+        # A scrim run's evidence/engine IS the collector's target. The old order unlinked
+        # the destination first, which deleted `src` and then failed the copy — silently
+        # losing final-scoreboard.json on every default scrim run.
+        os.chmod(dest, 0o600)
+        facts = file_facts(dest)
+        facts["source"] = str(src)
+        return facts
+    write_bytes_atomic(dest, src.read_bytes())
     facts = file_facts(dest)
     facts["source"] = str(src)
     return facts

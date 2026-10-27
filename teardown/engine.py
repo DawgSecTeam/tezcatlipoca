@@ -151,12 +151,16 @@ class TeardownEngine:
                 from infra import red01
                 try:
                     verdict = red01.occupant_verdict(
-                        vmid, competition_name(self.ctx.comp_dir))
+                        vmid, competition_name(self.ctx.comp_dir),
+                        getattr(self.ctx.ownership, "run_id", None))
                 except Exception:            # noqa: BLE001 - unverifiable is not clean
                     verdict = None
                 if verdict == "ours":
                     problems.append("red01 is STILL PRESENT — it holds the agent's "
                                     "state and its C2 credentials")
+                elif verdict == "comp":
+                    notes.append(f"vmid {vmid} now holds another RUN of this competition's "
+                                 f"red01 ({red01.occupant_label(vmid)}) — this run's is gone")
                 elif verdict == "foreign":
                     notes.append(f"vmid {vmid} now holds another competition's VM "
                                  f"({red01.occupant_label(vmid)}) — this range's red01 is gone")
@@ -164,8 +168,8 @@ class TeardownEngine:
                     problems.append(f"a VM occupies red01's vmid {vmid} with no ownership "
                                     f"tags ({red01.occupant_label(vmid)}) — it is not "
                                     f"proven gone")
-                elif verdict is None and (deployed
-                                          or (red01_done and red01_done.get("status") != "skipped")):
+                elif verdict in (None, "unknown") and (
+                        deployed or (red01_done and red01_done.get("status") != "skipped")):
                     problems.append("red01's vmid could not be verified gone — check by hand")
 
         done = self._journal_done(plan)

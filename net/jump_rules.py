@@ -1,14 +1,13 @@
 """Jump VM firewall/sysctl content: pure rule generation (golden-filed in tests)."""
 
 from ipaddress import ip_network
-from estate import config
 
 JUMP_TAGS_EXTRA = "jump"
 APT_CACHER_PORT = 3142
 
 
 def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
-               red_segment=""):
+               red_segment="", callback_port=None, red_ip=None):
     # Without red_segment's accepts + SNAT, red's source falls off the FORWARD DROP.
     # TCPMSS clamps stop a sub-1500 inter-node path black-holing large replies.
     teams = [str(i) for i in team_identifiers]
@@ -46,6 +45,22 @@ def jump_rules(team_identifiers, engine_mgmt_ip, mgmt_cidr="10.0.0.0/24",
     for t in teams:
         lines.append(f"-A PREROUTING -d 192.168.{t}.1/32 -p tcp --dport {APT_CACHER_PORT} "
                      f"-j DNAT --to-destination {engine_mgmt_ip}:{APT_CACHER_PORT}")
+    if red and callback_port and red_ip:
+        # On a satellite team the gateway IS this jump, so a payload dialling
+        # 192.168.<id>.1:<port> reaches the jump, not the engine: without this DNAT the
+        # callback is dropped and red never checks in from a satellite team.
+        for t in teams:
+            for proto in ("tcp", "udp"):
+                lines.append(
+                    f"-A PREROUTING -d 192.168.{t}.1/32 -p {proto} "
+                    f"--dport {int(callback_port)} -j DNAT "
+                    f"--to-destination {red_ip}:{int(callback_port)}")
+                # The jump is the last hop to red: masquerade the team's flow so red's reply
+                # comes back through this conntrack entry (red's source identity survives
+                # only on engine-node teams — docs/multi-node.md).
+                lines.append(
+                    f"-A POSTROUTING -s 192.168.{t}.0/24 -d {red_ip} -p {proto} "
+                    f"--dport {int(callback_port)} -j MASQUERADE")
     for t in teams:
         # Boxes trust SSH only from 192.168.<id>.1, so engine->box traffic SNATs to the gateway IP.
         lines.append(f"-A POSTROUTING -s {engine} -d 192.168.{t}.0/24 "

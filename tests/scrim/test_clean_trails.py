@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from scrim import clean_trails
+from guests import clean_trails
 from estate import state as estate_state
 
 

@@ -73,10 +73,11 @@ def ensure_alpine_services(comp_dir, targets, ctx):
             return missing
 
         # Root via the guest agent: the pre-domain writable-sudoers pin makes `sudo sh -c` demand a password.
-        node = config.active().proxmox.node
+        default_node = config.active().proxmox.node
         vmid = t.get("vmid")
         if vmid is not None:
             try:
+                node = t.get("node") or default_node
                 wait_for_guest_agent(node, vmid, timeout=120)
                 rc, out, err = guest_agent_exec_root(node, vmid, script, timeout=180)
                 missing = _markers_ok(out)

@@ -1,6 +1,5 @@
 """run_terminal_teardown: the shared executor behind both terminal-teardown surfaces."""
 
-import json
 import os
 from pathlib import Path
 

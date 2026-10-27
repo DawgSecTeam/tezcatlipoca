@@ -8,7 +8,7 @@ import string
 from pathlib import Path
 
 from common.constants import (ENGINE_TEMPLATE_VMID_OFFSET, GOLDEN_VMID_OFFSET,
-                       MAX_BOXES_PER_TEAM, SCORING_ENGINE_VMID)
+                              JUMP_VMID_OFFSET_LOW, MAX_BOXES_PER_TEAM, SCORING_ENGINE_VMID)
 from common.comp_paths import comps_root
 from estate import config
 
@@ -54,9 +54,16 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
     # shared node need different blocks.
     override = (team_identifiers or config.active().knobs.team_identifiers or "").strip()
     if override:
-        ids = [s.strip() for s in override.split(",")]
+        ids = [s.strip() for s in override.split(",") if s.strip()]
         if len(ids) < number_of_teams:
-            ids += [str(100 + i) for i in range(len(ids) + 1, number_of_teams + 1)]
+            # Padding must skip what the operator already named: `--team-identifiers 102`
+            # with two teams appended "102" again and refused as a duplicate.
+            candidate = 101
+            while len(ids) < number_of_teams:
+                value = str(candidate)
+                if value not in ids:
+                    ids.append(value)
+                candidate += 1
     else:
         ids = [str(value) for value in (identifier_defaults or [])[:number_of_teams]]
         candidate = 101
@@ -81,11 +88,16 @@ def collect_teams(number_of_teams, engine_vmid=SCORING_ENGINE_VMID,
         # A team's vmid block must clear the engine's DERIVED slots too (engine template at
         # +140, goldens at +150..+159): checking the engine alone put team2's first box vmid
         # exactly on the engine template slot. Phase 1 treats all 10 slots per block.
+        # Jumps sit just below the engine template; red01 is one golden stride past the
+        # slot-0 band. Missing red01's slot let a team block land exactly on red01.
         reserved = ({engine_vmid}
+                    | set(range(engine_vmid + JUMP_VMID_OFFSET_LOW,
+                                engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET))
                     | set(range(engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET,
                                 engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET + MAX_BOXES_PER_TEAM))
                     | set(range(engine_vmid + GOLDEN_VMID_OFFSET,
-                                engine_vmid + GOLDEN_VMID_OFFSET + MAX_BOXES_PER_TEAM)))
+                                engine_vmid + GOLDEN_VMID_OFFSET + MAX_BOXES_PER_TEAM))
+                    | {engine_vmid + GOLDEN_VMID_OFFSET + MAX_BOXES_PER_TEAM})
         block = set(range(base, base + MAX_BOXES_PER_TEAM))
         if block & reserved:
             raise SystemExit(

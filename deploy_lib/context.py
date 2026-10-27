@@ -11,31 +11,21 @@ from estate import state as estate_state
 def persist_state(ctx):
     # Holds the only copy of the generated passwords: a torn write bricks resume
     # and redeploy. The module-level seam is deliberate — tests stub persistence through it.
-    document = ctx.document()
-    # no comp_dir -> nowhere to persist (partial contexts in tests)
-    if document is None:
+    if ctx.comp_dir is None:
         return
+    # Always reload: `templates`, `roster`, `placement`, `red` and the resource inventory are
+    # written straight to the file by their owning modules, and a cached document here would
+    # overwrite them with a stale copy (the lost-update bug this replaced).
+    document = estate_state.EstateState.load(ctx.comp_dir)
     document.absorb(ctx.state)
-    # placement bypasses the flat state (the planner and the plant-time red01 selection write
-    # it to the file directly): on-disk wins, re-deriving a deployed red01 address is forbidden.
-    placement = estate_state.EstateState.load(ctx.comp_dir).data.get("placement")
-    if placement is not None:
-        document.data["placement"] = placement
-    # Same lost-update hazard for red01: record_identity() writes the `red` section after
-    # this context loaded its document copy, and the final save dropped it — teardown then
-    # said "this run recorded no red01" and only the tag sweep removed the VM.
-    red = estate_state.EstateState.load(ctx.comp_dir).data.get("red")
-    if red:
-        document.data["red"] = red
     document.save()
+
 
 @dataclass
 class DeployContext:
     comp_dir: Optional[Path] = None
     comp_name: str = ""
     state_path: Optional[Path] = None
-    # the state document; `state` below is its flat view
-    estate: object = None
     from_phase: int = 1
     resuming: bool = False
     assume_yes: bool = False
@@ -76,6 +66,8 @@ class DeployContext:
     final_config_path: Optional[Path] = None
     late_config_path: Optional[Path] = None
     golden_inputs: dict = field(default_factory=dict)
+    # MAC of each engine NIC after net0, in create order: the netplan pins interfaces by it.
+    engine_nic_macs: list = field(default_factory=list)
     golden_hashes: dict = field(default_factory=dict)
     ssh_key_abs: str = ""
     all_targets: list = field(default_factory=list)
@@ -92,13 +84,11 @@ class DeployContext:
     reclaim_run_id: str = ""
 
     def document(self):
-        # contexts built outside prepare() bind their document on first use; no comp_dir -> none
-        if self.estate is None:
-            if self.comp_dir is None:
-                return None
-            self.estate = estate_state.EstateState.load(self.comp_dir)
-            self.state_path = estate_state.state_path(self.comp_dir)
-        return self.estate
+        """A fresh handle on the state document: load, mutate, save. Never cached."""
+        if self.comp_dir is None:
+            return None
+        self.state_path = estate_state.state_path(self.comp_dir)
+        return estate_state.EstateState.load(self.comp_dir)
 
     def save_state(self):
         persist_state(self)

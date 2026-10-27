@@ -2,11 +2,10 @@
 
 import base64
 import json
-import subprocess
 import toml
 
 from quotient.setup import build_event_conf
-from common.ssh_ops import engine_ssh_opts
+from engine.engine_cmd_ops import _run_engine_cmd
 
 
 def read_event_conf(ctx):
@@ -15,17 +14,9 @@ def read_event_conf(ctx):
 # recoverable here.
     import tomllib
 
-    key = ctx["ssh_key_path"]
-    scoring_ip = ctx["scoring_engine_ip"]
-    scoring_user = ctx["vm_username"]
-
     def _read(path):
-        r = subprocess.run(
-            ["ssh", "-i", key, *engine_ssh_opts(ctx),
-             f"{scoring_user}@{scoring_ip}", f"sudo cat {path}"],
-            capture_output=True, text=True, check=True, timeout=30,
-        )
-        return r.stdout
+        return _run_engine_cmd(ctx, f"sudo cat {path}", step=f"read {path}",
+                               capture=True, timeout=30).stdout
 
     secrets = {}
     event = tomllib.loads(_read("/opt/quotient/config/event.conf"))
@@ -49,11 +40,9 @@ def read_event_conf(ctx):
         secrets["box_creds"] = box_creds
 
     extra = {}
-    listing = subprocess.run(
-        ["ssh", "-i", key, *engine_ssh_opts(ctx),
-         f"{scoring_user}@{scoring_ip}",
-         "ls /opt/quotient/config/credlists/ 2>/dev/null || true"],
-        capture_output=True, text=True, check=False, timeout=30).stdout
+    listing = _run_engine_cmd(ctx, "ls /opt/quotient/config/credlists/ 2>/dev/null || true",
+                              step="list credlists", check=False, capture=True,
+                              timeout=30).stdout
     for fname in listing.split():
         if fname == "linux.credlist" or not fname.endswith(".credlist"):
             continue
@@ -102,44 +91,34 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
     event_conf_toml = toml.dumps(event_conf)
 
     event_conf_b64 = base64.b64encode(event_conf_toml.encode()).decode()
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            f"sudo mkdir -p /opt/quotient/config && "
-            f"echo '{event_conf_b64}' | base64 -d | sudo tee /opt/quotient/config/event.conf > /dev/null && "
-            "sudo chmod 600 /opt/quotient/config/event.conf",
-        ],
-        check=True, timeout=30,
-    )
+    _run_engine_cmd(
+        ctx,
+        f"sudo mkdir -p /opt/quotient/config && "
+        f"echo '{event_conf_b64}' | base64 -d | "
+        f"sudo tee /opt/quotient/config/event.conf > /dev/null && "
+        "sudo chmod 600 /opt/quotient/config/event.conf",
+        timeout=30, step="push event.conf")
 
     credlist = "".join(f"{user},{pw}\n" for user, pw in box_creds.items())
     credlist_b64 = base64.b64encode(credlist.encode()).decode()
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            f"sudo mkdir -p /opt/quotient/config/credlists && echo '{credlist_b64}' | base64 -d | sudo tee /opt/quotient/config/credlists/linux.credlist > /dev/null && "
-            "sudo chmod 600 /opt/quotient/config/credlists/linux.credlist",
-        ],
-        check=True, timeout=30,
-    )
+    _run_engine_cmd(
+        ctx,
+        f"sudo mkdir -p /opt/quotient/config/credlists && "
+        f"echo '{credlist_b64}' | base64 -d | "
+        f"sudo tee /opt/quotient/config/credlists/linux.credlist > /dev/null && "
+        "sudo chmod 600 /opt/quotient/config/credlists/linux.credlist",
+        timeout=30, step="push linux.credlist")
 
     for list_name, pairs in (extra_credlists or {}).items():
         content = "".join(f"{user},{pw}\n" for user, pw in pairs.items())
         content_b64 = base64.b64encode(content.encode()).decode()
-        subprocess.run(
-            [
-                "ssh", "-i", key,
-                *engine_ssh_opts(ctx),
-                f"{scoring_user}@{scoring_ip}",
-                f"sudo mkdir -p /opt/quotient/config/credlists && echo '{content_b64}' | base64 -d | sudo tee /opt/quotient/config/credlists/{list_name}.credlist > /dev/null && "
-                f"sudo chmod 600 /opt/quotient/config/credlists/{list_name}.credlist",
-            ],
-            check=True, timeout=30,
-        )
+        _run_engine_cmd(
+            ctx,
+            f"sudo mkdir -p /opt/quotient/config/credlists && "
+            f"echo '{content_b64}' | base64 -d | "
+            f"sudo tee /opt/quotient/config/credlists/{list_name}.credlist > /dev/null && "
+            f"sudo chmod 600 /opt/quotient/config/credlists/{list_name}.credlist",
+            timeout=30, step=f"push {list_name}.credlist")
         print(f"  Pushed credlist {list_name}.credlist ({len(pairs)} account(s))")
 
     env_content = (
@@ -150,26 +129,16 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
         f"REDIS_PASSWORD={redis_password}\n"
     )
     env_b64 = base64.b64encode(env_content.encode()).decode()
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env > /dev/null && "
-            "sudo chmod 600 /opt/quotient/.env",
-        ],
-        check=True, timeout=30,
-    )
+    _run_engine_cmd(
+        ctx,
+        f"echo '{env_b64}' | base64 -d | sudo tee /opt/quotient/.env > /dev/null && "
+        "sudo chmod 600 /opt/quotient/.env",
+        timeout=30, step="push quotient .env")
 
-    subprocess.run(
-        [
-            "ssh", "-i", key,
-            *engine_ssh_opts(ctx),
-            f"{scoring_user}@{scoring_ip}",
-            "cd /opt/quotient && sudo docker compose restart",
-        ],
-        # The postgres stop+start alone can run past a minute on a loaded node, outliving the 60s default.
-        check=True, timeout=300,
-    )
+    # Restart only `quotient`: restarting the postgres/redis services too makes Quotient come
+    # up while Postgres is still in recovery, which is the boot race the template path retries.
+    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose restart quotient",
+                    # A container restart can run past a minute on a loaded node.
+                    timeout=300, step="restart quotient")
 
     print("  Event configuration pushed to scoring engine")

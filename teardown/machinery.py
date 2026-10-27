@@ -164,9 +164,14 @@ def collect_box_logs(ctx, out_dir):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
-    for node, vm in ctx.inventory.owned(ctx.ownership):
-        if vm.get("status") != "running":
-            continue
+    # An Alpine jump VM has no journalctl and its 180 s timeout would stall the whole
+    # collection; the guest-agent channel is also independent, so collect concurrently.
+    targets = [(node, vm) for node, vm in ctx.inventory.owned(ctx.ownership)
+               if vm.get("status") == "running"
+               and not str(vm.get("name") or "").startswith("jump-")]
+
+    def _one(item):
+        node, vm = item
         vmid = int(vm["vmid"])
         name = vm.get("name") or f"vm{vmid}"
         try:
@@ -185,8 +190,13 @@ def collect_box_logs(ctx, out_dir):
             text = f"log collection failed: {type(exc).__name__}: {exc}"
         target = out_dir / f"{name}-{vmid}.log"
         target.write_text(text)
-        written.append(str(target))
         print(f"  logs        : {name} (vmid {vmid}) -> {target.name}")
+        return str(target)
+
+    with ThreadPoolExecutor(max_workers=TEARDOWN_WORKERS) as pool:
+        for path in pool.map(_one, targets):
+            if path:
+                written.append(path)
     return written
 
 

@@ -15,7 +15,7 @@ from scrim import event_run
 from scrim import fire_test
 from scrim import inject_sync
 from scrim import lock_ops
-from scrim import procs
+from common import procs
 from scrim import red_link
 from scrim import red_stage
 from scrim import run_manifest
@@ -180,10 +180,10 @@ def main():
         log("packet.md missing — generating")
         procs.run([core.local_python(), "generate-packet.py", str(comp)], cwd=core.REPO, timeout=120)
 
-    # --skip-deploy reuses a range whose red loop is still attacking; the pre-T0 fire test
-    # must see a quiet range, and stage_red restarts the loop below.
-    if args.skip_deploy:
-        red_link.stop_red_director(args)
+    # The pre-T0 fire test must see a quiet range: a freshly deployed range's phase 7 starts
+    # the red loop, and a reused one (--skip-deploy) is still attacking. stage_red restarts
+    # it at T0.
+    red_link.stop_red_director(args)
     run_manifest.record_phase(run_dir, args, "verify")
     fire_test.stage_verify(args, comp, creds)
     run_manifest.record_phase(run_dir, args, "blues")

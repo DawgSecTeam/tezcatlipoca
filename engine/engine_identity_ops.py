@@ -2,8 +2,8 @@
 
 import time
 
-from engine.engine_cmd_ops import _run_engine_cmd
-from common.utils import DNS_FIX_CMD
+from engine.engine_cmd_ops import _run_engine_cmd, start_quotient
+from common.utils import dns_fix_cmd
 from engine.engine_bootstrap_ops import _install_firewall_and_healthcheck, push_quotient_env
 
 
@@ -57,52 +57,18 @@ def assert_engine_build_identity(ctx, vmid):
             f"TEZ_ENGINE_MGMT_IP, or stop the other range, then retry.")
 
 
-# The create path sizes the engine disk 40 GB but nothing grew the partition/PV/LV/fs, so
-# the engine ran on the base image's 10 GB root and filled it within one deploy. growpart
-# exits nonzero ("NOCHANGE") once the partition already fills the disk.
-_GROW_ROOT_CMD = (
-    "ROOT=$(findmnt -no SOURCE /); "
-    "if sudo lvs \"$ROOT\" >/dev/null 2>&1; then "
-    "PV=$(sudo pvs --noheadings -o pv_name | head -1 | xargs); "
-    "DISK=/dev/$(lsblk -no pkname \"$PV\" | head -1); "
-    "PART=$(cat /sys/class/block/$(basename \"$PV\")/partition); "
-    "sudo growpart \"$DISK\" \"$PART\" >/dev/null; "
-    "sudo pvresize \"$PV\" >/dev/null && sudo lvextend -r -l +100%FREE \"$ROOT\" >/dev/null 2>&1; "
-    "else "
-    "DISK=/dev/$(lsblk -no pkname \"$ROOT\" | head -1); "
-    "PART=$(cat /sys/class/block/$(basename \"$ROOT\")/partition); "
-    "sudo growpart \"$DISK\" \"$PART\" >/dev/null && sudo resize2fs \"$ROOT\" >/dev/null 2>&1; "
-    "fi; "
-    "echo \"  engine root: $(df -h / | awk 'NR==2 {print $2\" total, \"$4\" free\"}')\""
-)
-
-
 def prepare_engine_from_template(ctx, postgres_password, redis_password):
 # .env goes down BEFORE compose up: the fresh postgres volume must initialize with this
 # competition's credentials — up-then-rewrite leaves it initialized with an empty password.
     print("  Preparing engine from template (.env + fresh-volume compose up)...")
-    _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120,
+    from guests.root_disk_ops import grow_root_command
+    _run_engine_cmd(ctx, grow_root_command(), check=False, timeout=120,
                     step="grow engine root filesystem")
     # Same baked-in 8.8.8.8 as the build path: the clone inherits the image's resolved drop-in,
     # so the placement list must be written before anything resolves a name.
-    _run_engine_cmd(ctx, DNS_FIX_CMD, timeout=60, step="fix engine DNS")
+    _run_engine_cmd(ctx, dns_fix_cmd(), timeout=60, step="fix engine DNS")
     push_quotient_env(ctx, postgres_password, redis_password)
-    # Same race as the build path (bootstrap_scoring_engine): a fresh volume's Postgres can
-    # miss compose's health window and the server exits 2 once, so one failure is not a dead
-    # engine (live: run-e5fe9b87 failed here; the same command succeeded a minute later).
-    last = None
-    for attempt in range(3):
-        try:
-            _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d",
-                            timeout=600, step="compose up")
-            last = None
-            break
-        except Exception as e:  # noqa: BLE001 - the DB health window is a race
-            last = e
-            print(f"    compose up attempt {attempt + 1} failed ({e}); retrying")
-            time.sleep(15)
-    if last is not None:
-        raise last
+    start_quotient(ctx)
     _run_engine_cmd(ctx, (
         "ss -ltn | grep -q ':3142 ' && echo '  apt-cacher-ng listening on 3142' "
         "|| sudo systemctl enable --now apt-cacher-ng"

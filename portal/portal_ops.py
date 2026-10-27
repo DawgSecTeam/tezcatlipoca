@@ -32,6 +32,7 @@ from engine.engine_cmd_ops import _run_engine_cmd
 from infra.console import (mint_console_tokens, node_targets, revoke_console_tokens,
                              team_node_key)
 from common.timing import timed
+from estate import config
 from common.utils import compfile_flag, compfile_value, is_in_path_fw, is_unmanaged, record_degradation
 from common.windows_ops import is_windows_template
 
@@ -154,10 +155,18 @@ def deploy_portal(ctx, env=os.environ):
         ctx.save_state()
 
 
+def _setting(env, knob, key):
+    """A portal/headscale knob: the explicit `env` override wins, then the process config."""
+    value = env.get(key)
+    if value not in (None, ""):
+        return str(value)
+    return str(getattr(getattr(config.active(), knob[0], None), knob[1], "") or "")
+
+
 def vpn_config(comp_dir, teams, env):
 # keys.json is keyed by identifier (its "team" is the identifier string); None hides the
 # dashboard's VPN section.
-    server_url = env.get("TEZ_HEADSCALE_URL", "")
+    server_url = _setting(env, ("headscale", "url"), "TEZ_HEADSCALE_URL")
     keys_path = Path(comp_dir) / "remote-access" / "keys.json"
     if not (keys_path.exists() and server_url):
         return None
@@ -188,8 +197,10 @@ def _deploy_portal(ctx, env):
         print("    WARNING: no console token on any node — the portal runs with logins and "
               "box lists only (docs/portal.md → Operating it)")
 
-    hostname = env.get("TEZ_PORTAL_HOSTNAME", "")
-    tunnel_token = env.get("TEZ_PORTAL_TUNNEL_TOKEN", "")
+    # tezcatlipoca.toml's [portal] section is the operator's surface; reading only os.environ
+    # meant a configured hostname/token was silently ignored.
+    hostname = _setting(env, ("portal", "hostname"), "TEZ_PORTAL_HOSTNAME")
+    tunnel_token = _setting(env, ("portal", "tunnel_token"), "TEZ_PORTAL_TUNNEL_TOKEN")
     verdict, why = tunnel_decision(hostname, ctx.comp_name, ctx.run_id, tunnel_token)
     print(f"    tunnel: {verdict} ({why})")
     if verdict == "skip" and tunnel_token:
@@ -209,8 +220,9 @@ def _deploy_portal(ctx, env):
         public_host=hostname if use_tunnel else "", vpn=vpn)
     write_text_atomic(ctx.comp_dir / "portal.json", json.dumps(config, indent=2))
 
+    gate_open = _setting(env, ("portal", "open"), "TEZ_PORTAL_OPEN") in ("1", "true", "True")
     tar = bundle(config, _env_file(ctx.state["portal_session_secret"],
-                                   env.get("TEZ_PORTAL_OPEN") == "1",
+                                   gate_open,
                                    tunnel_token if use_tunnel else "",
                                    cookie_secure=use_tunnel,
                                    ops_url=env.get("TEZ_OPS_URL", ""),
@@ -245,7 +257,7 @@ def _deploy_portal(ctx, env):
                    if b["node"] in config["nodes"])
     print(f"    portal up: {ctx.state['portal_url']} "
           f"({consoles} console-capable box(es), gate "
-          f"{'OPEN' if env.get('TEZ_PORTAL_OPEN') == '1' else 'closed until an admin opens it'})")
+          f"{'OPEN' if gate_open else 'closed until an admin opens it'})")
 
 
 

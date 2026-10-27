@@ -59,6 +59,66 @@ _SERVICE_TO_CHECK = {
     # 53, the AD SYSVOL share on 445): no nakon plant, no catalog-check entry.
 }
 
+# Per-slice defaults a `score/<slice>` pin starts from. Without these, every slice except Tcp
+# emitted an INVALID Quotient stanza (a Web check with no Url, a Dns check with no Record, an
+# Ssh/Ftp/Smtp/Imap/Sql check with no CredLists, a Sql check with no Kind).
+_SLICE_DEFAULTS = {
+    "Web": {"Display": "score", "Port": 80, "Scheme": "http",
+            "Url": [{"Path": "/", "Status": 200}]},
+    "Dns": {"Display": "score", "Port": 53,
+            "Record": [{"Kind": "A", "Domain": "localhost", "Answer": ["127.0.0.1"]}]},
+    "Ssh": {"Display": "score", "Port": 22, "CredLists": ["linux.credlist"]},
+    "Ftp": {"Display": "score", "Port": 21, "CredLists": ["linux.credlist"]},
+    "Smtp": {"Display": "score", "Port": 25, "CredLists": ["linux.credlist"]},
+    "Imap": {"Display": "score", "Port": 143, "CredLists": ["linux.credlist"]},
+    "Sql": {"Display": "score", "Port": 3306, "Kind": "mysql",
+            "CredLists": ["linux.credlist"]},
+    "Tcp": {"Display": "score", "Port": 1},
+}
+
+
+def _pin_overrides(pin, cfg, svc_name, *, score_only=False):
+    """Apply a pin's check overrides onto its slice's base config.
+
+    One implementation for planted and score-only pins: a `score/web` pin must accept the
+    same path/status/scheme overrides a planted web check does, or it emits a check Quotient
+    cannot validate.
+    """
+    if not isinstance(pin, dict):
+        return {}
+    out = {}
+    for key, target in (("display", "Display"), ("port", "Port"), ("scheme", "Scheme")):
+        if pin.get(key) is not None:
+            out[target] = pin[key]
+    if "path" in pin or "status" in pin:
+        if not cfg.get("Url"):
+            raise SystemExit(
+                f"[event.conf] pin {pin!r} sets path/status but '{svc_name}' checks are not "
+                "URL-based — drop the override")
+        url = dict(cfg["Url"][0])
+        if "path" in pin:
+            url["Path"] = pin["path"]
+        if "status" in pin:
+            url["Status"] = pin["status"]
+        out["Url"] = [url]
+    if "credlist" in pin:
+        if not cfg.get("CredLists"):
+            raise SystemExit(
+                f"[event.conf] pin {pin!r} sets credlist but '{svc_name}' checks don't "
+                "authenticate — drop the override")
+        out["CredLists"] = [f"{pin['credlist']}.credlist"]
+    return out
+
+
+def _warn_unknown_pin_keys(pin):
+    if not isinstance(pin, dict):
+        return
+    unknown = set(pin) - {"name", "vars", "score_only", "plant_only", "check",
+                          *PIN_CHECK_OVERRIDES}
+    if unknown:
+        print(f"[event.conf] WARNING: ignoring unknown key(s) {sorted(unknown)} in pin "
+              f"{pin!r} — did you mean one of {PIN_CHECK_OVERRIDES}?")
+
 
 def _resolve_pin(pin):
     svc_name = pin if isinstance(pin, str) else pin.get("name")
@@ -67,50 +127,30 @@ def _resolve_pin(pin):
         # emits no scored check — a separate score-only pin scores the service.
         return svc_name, None, None
     if isinstance(pin, dict) and pin.get("score_only"):
-        check_key = pin.get("check") or "Tcp"
+        # `score/<slice>` names the slice; an explicit `check` overrides it. Defaulting a
+        # `score/dns` pin to Tcp scored a port-open check and silently dropped the record.
+        named = (str(svc_name or "")[len("score/"):].capitalize()
+                 if str(svc_name or "").startswith("score/") else "")
+        check_key = pin.get("check") or (named if named in _CHECK_SLICES else "Tcp")
         if check_key not in _CHECK_SLICES:
             raise SystemExit(
                 f"[event.conf] score-only pin {pin!r}: check must be one of "
                 f"{sorted(_CHECK_SLICES)}")
-        if not pin.get("port"):
-            raise SystemExit(f"[event.conf] score-only pin {pin!r} must set a port")
-        return svc_name, check_key, {"Display": pin.get("display") or "score",
-                                     "Port": pin["port"]}
+        cfg = dict(_SLICE_DEFAULTS[check_key])
+        if pin.get("port") is not None:
+            cfg["Port"] = pin["port"]
+        cfg.update(_pin_overrides(pin, cfg, svc_name, score_only=True))
+        _warn_unknown_pin_keys(pin)
+        return svc_name, check_key, cfg
     check_key, base_cfg = _SERVICE_TO_CHECK.get(svc_name, (None, None))
     if check_key is None:
         return svc_name, None, None
     cfg = dict(base_cfg)
-    if isinstance(pin, dict):
-        for key in ("display", "port", "scheme"):
-            if key in pin:
-                cfg[{"display": "Display", "port": "Port", "scheme": "Scheme"}[key]] = pin[key]
-        if "path" in pin or "status" in pin:
-            if not cfg.get("Url"):
-                raise SystemExit(
-                    f"[event.conf] pin {pin!r} sets path/status but '{svc_name}' checks are not "
-                    "URL-based — drop the override")
-            url = dict(cfg["Url"][0])
-            if "path" in pin:
-                url["Path"] = pin["path"]
-            if "status" in pin:
-                url["Status"] = pin["status"]
-            cfg["Url"] = [url]
-        if "credlist" in pin:
-            if not cfg.get("CredLists"):
-                raise SystemExit(
-                    f"[event.conf] pin {pin!r} sets credlist but '{svc_name}' checks don't "
-                    "authenticate — drop the override")
-            cfg["CredLists"] = [f"{pin['credlist']}.credlist"]
-        unknown = set(pin) - {"name", "vars", "score_only", "plant_only", "check",
-                              *PIN_CHECK_OVERRIDES}
-        if unknown:
-            print(f"[event.conf] WARNING: ignoring unknown key(s) {sorted(unknown)} in pin "
-                  f"{pin!r} — did you mean one of {PIN_CHECK_OVERRIDES}?")
+    cfg.update(_pin_overrides(pin, cfg, svc_name))
+    _warn_unknown_pin_keys(pin)
     return svc_name, check_key, cfg
 
 
-# Quotient registers every emitted check (Box.Web etc. are slices); these names are its
-# global uniqueness domain, so verify gates the live set against this
 def expected_service_names(box_services: dict, boxes: list) -> set:
     names = set()
     for box in boxes:

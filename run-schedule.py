@@ -7,14 +7,10 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import requests
 import urllib3
 from dotenv import load_dotenv
 
 from common.comp_paths import resolve_comp_dir
-from estate import state as estate_state
-from estate.engine_setup import engine_ctx as estate_engine_ctx
-from quotient.event_capture import end_event
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -32,28 +28,6 @@ def load_profile(profile_arg):
         sys.exit(f"ERROR: no packet profile at {profile_arg} "
                  "(path, comp-dir/comps-root relative, or an event name)")
     return load_profile(resolved)
-
-
-def engine_ctx(args, comp_dir):
-    ip = args.engine_ip
-    if not ip:
-        ip = estate_engine_ctx(comp_dir)["scoring_engine_ip"]
-        if not ip:
-            sys.exit(f"ERROR: no engine management IP recorded in "
-                     f"{estate_state.state_path(comp_dir)} — pass --engine-ip")
-    password = args.admin_password
-    if not password:
-        creds = comp_dir / "credentials.txt"
-        if creds.exists():
-            for line in creds.read_text().splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[0] == "admin":
-                    password = parts[1]
-                    break
-    if not password:
-        sys.exit("ERROR: no admin password (credentials.txt missing or empty) — "
-                 "pass --admin-password")
-    return f"http://{ip}", password
 
 
 def print_plan(schedule, t0):
@@ -78,7 +52,6 @@ def main():
     parser.add_argument("--competition", default=None,
                         help="competitions/<id> (default: profile event.comp_id)")
     parser.add_argument("--engine-ip", default=None, help="override scoring-engine IP")
-    parser.add_argument("--admin-password", default=None)
     parser.add_argument("--t0", default=None, dest="t0",
                         help="competition start, local time 'YYYY-MM-DD HH:MM' (default: now)")
     parser.add_argument("--execute", choices=ACTIONS, default=None,
@@ -98,32 +71,18 @@ def main():
 
     if not args.execute:
         return 0
+    # Delegate to the one lifecycle driver: it logs in as `scoring` (so the operator's admin
+    # cookie survives), treats "already in that state" as success, creates the packet's
+    # injects with the event clock anchored at now, and records the run's flags in state.
+    # This file only owns the schedule PLAN.
+    from quotient.lifecycle_ops import cmd_end, cmd_freeze, cmd_start
 
-    base_url, password = engine_ctx(args, comp_dir)
-    session = requests.Session()
-    r = session.post(f"{base_url}/api/login",
-                     json={"username": "admin", "password": password}, timeout=10)
-    r.raise_for_status()
-    action = args.execute
-    if action == "start":
-        r1 = session.post(f"{base_url}/api/competition/start",
-                          json={"started": True}, timeout=10)
-        r2 = session.post(f"{base_url}/api/engine/pause",
-                          json={"pause": False}, timeout=10)
-        print(f"  START: competition/start={r1.status_code} engine/pause(unpause)={r2.status_code}")
-        if r1.status_code >= 400 or r2.status_code >= 400:
-            return 1
-    elif action in ("freeze", "resume"):
-        r = session.post(f"{base_url}/api/engine/pause",
-                         json={"pause": action == "freeze"}, timeout=10)
-        print(f"  {action.upper()}: engine/pause={r.status_code}")
-        if r.status_code >= 400:
-            return 1
-    elif action == "end":
-        # Capture before the pause: the round loop stopping freezes the scoreboard's last
-        # round. end_event never raises, so the pause below always runs.
-        return end_event(base_url, session, comp_dir)
-    return 0
+    ns = argparse.Namespace(engine_ip=args.engine_ip, scoring_password=None)
+    if args.execute == "start":
+        return cmd_start(ns, comp_dir)
+    if args.execute in ("freeze", "resume"):
+        return cmd_freeze(ns, comp_dir, pause=args.execute == "freeze")
+    return cmd_end(ns, comp_dir)
 
 
 if __name__ == "__main__":

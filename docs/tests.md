@@ -46,7 +46,8 @@ python3 -m pytest tlaloc/tests -q      # equivalent, from the repo root
 process and stays there), so an activation in one test would silently re-target every later one —
 it is reset around each test. And `load_dotenv` writes the real estate identity into `os.environ`
 and never removes it, so a test driving a driver's `main()` would hand every later test the LIVE
-endpoint — the ambient `TEZ_*` set is stripped at collection and restored around each test. It also
+endpoint — the ambient `TEZ_*` set is stripped at collection and re-stripped after each
+test (it is never restored: a test must not inherit a live estate). It also
 puts `tests/` on `sys.path` so subdirectory suites can import `_deploy_patch`, and redirects
 `Path.home` so a test exercising a locked path can't contend with a real deploy on the same host.
 

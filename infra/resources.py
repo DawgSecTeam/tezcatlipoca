@@ -7,6 +7,10 @@ from estate import config
 
 _CLOUDINIT_DISK_RE = re.compile(r"^(?:ide|scsi|sata)\d+$")
 
+# Same numbers the creators size those VMs to (estate/apply.py, red/red01_ops.py).
+ENGINE_TEMPLATE_GB = 40
+RED01_DISK_GB = 60
+
 
 def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_name=None):
     # The storage LIST zeroes/omits free on some pools; the per-store STATUS avail is the
@@ -21,20 +25,28 @@ def check_datastore_headroom(node, datastore, boxes, num_teams, label="", node_n
     free_gb = free / 1024 ** 3
     # disk_gb unset means "template's own disk", unknowable here; 40 GB is a conservative
     # stand-in across the base templates.
-    need_gb = num_teams * sum(b.get("disk_gb") or 40 for b in boxes)
+    team_gb = num_teams * sum(b.get("disk_gb") or 40 for b in boxes)
+    # Full-clone artifacts that live on the SAME datastore and are not thin: one golden per
+    # box type, the engine template, the engine itself and red01. Omitting them made a small
+    # range pass the gate and then fill the pool mid-deploy.
+    golden_gb = sum(b.get("disk_gb") or 40 for b in boxes)
+    fixed_gb = golden_gb + ENGINE_TEMPLATE_GB + ENGINE_TEMPLATE_GB + RED01_DISK_GB
+    need_gb = team_gb + fixed_gb
     # Thin-provisioned pools only allocate written blocks, so TEZ_THIN_HEADROOM scales down
     # the provisioned math.
     thin = config.active().knobs.thin_headroom
     if not 0 < thin <= 1:
         raise SystemExit(f"  ERROR: TEZ_THIN_HEADROOM must be in (0, 1], got {thin}")
-    counted_gb = need_gb * thin
+    # Only the team clones are thin-provisioned; the full-clone artifacts are not.
+    counted_gb = team_gb * thin + fixed_gb
     on = f" on '{node_name}'" if node_name else ""
     if free_gb < counted_gb:
         raise SystemExit(
             f"  ERROR: datastore '{datastore}'{on} has {free_gb:.0f} GB free; this deploy "
-            f"needs ~{need_gb:.0f} GB ({num_teams} teams x {len(boxes)} boxes, unset disk "
-            f"sizes counted as 40 GB"
-            + (f", x{thin} thin factor" if thin != 1.0 else "")
+            f"needs ~{counted_gb:.0f} GB ({num_teams} teams x {len(boxes)} boxes, unset disk "
+            f"sizes counted as 40 GB, plus the golden set, engine template, engine and "
+            f"red01"
+            + (f"; team clones x{thin} thin factor" if thin != 1.0 else "")
             + "). Free space or trim the competition first.")
     print(f"  Preflight{label}: datastore '{datastore}' {free_gb:.0f} GB free vs "
           f"~{counted_gb:.0f} GB needed"

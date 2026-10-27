@@ -7,6 +7,7 @@ from dataclasses import dataclass, fields, asdict
 from pathlib import Path
 from urllib.parse import urlparse
 
+from common.constants import JUMP_VMID_OFFSET_LOW
 from estate import config
 
 NODES_CONFIG_PATH = Path("nodes.json")
@@ -14,9 +15,10 @@ NODES_CONFIG_PATH = Path("nodes.json")
 MAX_SATELLITES = 4
 # Jump/router VM per satellite: engine_vmid + 130 + slot (slot 0 is the engine, no jump),
 # below the engine-template slot (+140) so one preflight scan covers the reserved span.
-JUMP_VMID_OFFSET = 130
-# Jump mgmt IPs walk down from .249, clear of the engine's default .250 and the red01 slots.
-JUMP_MGMT_IP_BASE = "10.0.0.249"
+JUMP_VMID_OFFSET = JUMP_VMID_OFFSET_LOW
+# Jump mgmt IPs walk DOWN from .239: red01 owns .240-.249 and the engine's default is .250,
+# so starting at .249 put a jump and red01 on the same address (they share the mgmt L2).
+JUMP_MGMT_IP_BASE = "10.0.0.239"
 
 PLACEMENT_VERSION = 2
 JUMP_RESERVE_MB = 512
@@ -86,11 +88,14 @@ def load_nodes_config(path=None):
             mgmt_bridge=str(raw.get("mgmt_bridge") or ""),
             ssh_host=str(raw.get("ssh_host") or ""),
             jump_template=str(raw.get("jump_template") or ""),
-            weight=float(raw.get("weight") or 1.0),
-            max_teams=int(raw.get("max_teams") or 8),
+            # `or` would turn an explicit 0 into the default: 0 teams is how an
+            # engine-only node is declared.
+            weight=float(raw["weight"]) if raw.get("weight") is not None else 1.0,
+            max_teams=int(raw["max_teams"]) if raw.get("max_teams") is not None else 8,
             tls_fingerprint=str(raw.get("tls_fingerprint") or ""),
         )
         _require(rec.weight > 0, f"node '{rec.name}': weight must be > 0")
+        _require(rec.max_teams >= 0, f"node '{rec.name}': max_teams must be >= 0")
         _require(rec.endpoint.startswith(("http://", "https://")),
                  f"node '{rec.name}': endpoint must be an http(s) URL")
         records.append(rec)
@@ -127,9 +132,12 @@ def apply_node_env(record):
         "proxmox.node": record.node,
         "proxmox.datastore": record.datastore,
         "proxmox.template_vm_id": record.engine_base_vmid,
+        # Set unconditionally: a node with no pin of its own must not inherit the previous
+        # node's fingerprint (they are different hosts).
+        "proxmox.tls_fingerprint": record.tls_fingerprint or "",
     }
-    if record.tls_fingerprint:
-        values["proxmox.tls_fingerprint"] = record.tls_fingerprint
+    if record.mgmt_bridge:
+        values["proxmox.mgmt_bridge"] = record.mgmt_bridge
     return config.active().activate(values)
 
 

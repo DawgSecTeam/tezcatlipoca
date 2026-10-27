@@ -1,10 +1,12 @@
 """Per-competition template lifecycle: hashes, the engine template, reuse/rebuild, freeze state."""
 
+import ast
 import hashlib
 import inspect
 import json
 import re
 import subprocess
+import textwrap
 import time
 from pathlib import Path
 
@@ -66,10 +68,36 @@ def canonical_json(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
+def _normalized_source(function):
+    """A callable's source with comments, formatting and docstrings stripped.
+
+    Hashing raw source made a comment edit rebuild every template (~30-60 min); the hash
+    exists to catch changes that alter the DISK, not changes to prose.
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
+            body = node.body
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                node.body = body[1:] or [ast.Pass()]
+    return ast.unparse(ast.fix_missing_locations(tree))
+
+
+def _source(function):
+    try:
+        return _normalized_source(function)
+    except (OSError, TypeError, SyntaxError):
+        # A frozen/embedded callable has no retrievable source; its repr still changes with a
+        # real edit, and refusing to hash at all would block every deploy.
+        return f"{function.__module__}.{getattr(function, '__qualname__', function)}"
+
+
 def code_hash(*functions):
     parts = []
     for f in functions:
-        parts.append(inspect.getsource(f) if callable(f) else str(f))
+        parts.append(_source(f) if callable(f) else str(f))
     return sha256_text("\n\x00\n".join(parts))
 
 
@@ -121,7 +149,7 @@ def template_stamp_current(node, vmid, expected_hash):
     return bool(expected_hash) and stored_template_hash(node, vmid) == expected_hash
 
 
-def engine_hash_inputs(base_engine_vm_id, quotient_ref, engine_shape, bootstrap_func):
+def engine_hash_inputs(base_engine_vm_id, quotient_ref, bootstrap_func):
     return _split_inputs(
         {
             "base_engine_vm_id": int(base_engine_vm_id),
@@ -130,8 +158,6 @@ def engine_hash_inputs(base_engine_vm_id, quotient_ref, engine_shape, bootstrap_
         {
             # The clean step shapes the template disk as much as bootstrap does.
             "bootstrap_scoring_engine": code_hash(bootstrap_func, _clean_func()),
-            # Only the engine's own shape counts: the whole deploy path rebuilt on any team-box edit.
-            "estate.apply:create_engine": code_hash(engine_shape),
         },
     )
 

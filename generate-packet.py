@@ -6,28 +6,33 @@ import json
 import sys
 from pathlib import Path
 
-from common.utils import compfile_flag, compfile_value, load_compfile, load_users_config
+from common.constants import WINDOWS_ADMIN_USER
+from common.utils import (compfile_flag, compfile_value, is_unmanaged, load_compfile,
+                          load_users_config)
+from common.windows_ops import is_windows_template
 
 REPO_ROOT = Path(__file__).resolve().parent
 
-_SERVICE_DISPLAY = {
-    "apache": "http", "nginx": "http", "httpd": "http", "splunk": "splunk", "roundcube": "roundcube",
-    "bind": "dns", "named": "dns",
-    "ssh": "ssh", "openssh": "ssh", "sshd": "ssh",
-    "vsftpd": "ftp", "ftpd": "ftp", "ftp": "ftp",
-    "postfix": "smtp", "sendmail": "smtp", "exim": "smtp", "exim4": "smtp",
-    "dovecot": "imap", "cyrus": "imap",
-    "mariadb": "sql", "mysql": "sql", "mysqld": "sql",
-    "telnet-service": "telnet",
-}
-
 
 def _service_display(pin):
-    if not isinstance(pin, str):
-        if pin.get("display"):
-            return pin["display"]
-        pin = pin.get("name")
-    return _SERVICE_DISPLAY.get(pin, pin)
+    """The scoreboard display name Quotient will use — one resolution, shared with setup.py."""
+    from quotient.setup import _resolve_pin
+    _name, check_key, cfg = _resolve_pin(pin)
+    if check_key is None:
+        return None
+    return cfg["Display"]
+
+
+def _scored_services(pins):
+    """Only pins that produce a scored check: a `plant_only` (scored: false) pin is not one."""
+    out = set()
+    for pin in pins or []:
+        if isinstance(pin, dict) and pin.get("plant_only"):
+            continue
+        display = _service_display(pin)
+        if display:
+            out.add(display)
+    return out
 
 
 def load_inject_schedule(comp_dir):
@@ -141,17 +146,28 @@ def build_packet(comp_dir):
     lines.append("| Hostname | Services |")
     lines.append("|---|---|")
     for b in boxes:
-        svcs = box_services.get(b["name"], [])
-        display = ", ".join(sorted({_service_display(s) for s in svcs})) if svcs else "—"
+        displays = sorted(_scored_services(box_services.get(b["name"], [])))
+        display = ", ".join(displays) if displays else "—"
         lines.append(f"| {b['name']} | {display} |")
     lines.append("")
 
     lines.append("## System access")
     lines.append("")
+    linux_boxes = [b["name"] for b in boxes
+                   if not is_unmanaged(b) and not is_windows_template(b.get("template", ""))]
+    windows_boxes = [b["name"] for b in boxes
+                     if not is_unmanaged(b) and is_windows_template(b.get("template", ""))]
+    if linux_boxes:
+        lines.append(
+            f"Linux box login account: **`{box_username}`** "
+            f"({', '.join(linux_boxes)}).")
+    if windows_boxes:
+        lines.append(
+            f"Windows box login account: **`{WINDOWS_ADMIN_USER}`** "
+            f"({', '.join(windows_boxes)}).")
     lines.append(
-        f"Every box's login account is **`{box_username}`**. Its password, and the separate "
-        f"accounts the scoring checks authenticate with, are issued at competition start — "
-        f"not in this packet."
+        "Their passwords, and the separate accounts the scoring checks authenticate with, "
+        "are issued at competition start — not in this packet."
     )
     lines.append("")
     if compfile_flag(comp_dir / "Compfile", "portal", 0):

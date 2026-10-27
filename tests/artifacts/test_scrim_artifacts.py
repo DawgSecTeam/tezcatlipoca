@@ -28,7 +28,8 @@ def _load(name, filename):
     return mod
 
 
-from scrim import fire_test, quotient_api, blue_agent, blue_prompt, core, endpoints, event_run, evidence, procs, red_link, red_stage, run_manifest, teardown_stage, test_folder
+from common import procs
+from scrim import fire_test, quotient_api, blue_agent, blue_prompt, core, endpoints, event_run, evidence, red_link, red_stage, run_manifest, teardown_stage, test_folder
 
 RUN_ID = "run-1a2b3c4d"
 BOXES = [{"name": "dc01", "last_octet": 2, "template": "base-windows-server"},
@@ -282,7 +283,7 @@ class AgentIdentity(TmpCase):
                                                    "engine_mgmt_ip": "203.0.113.20"}), \
                 mock.patch.object(red_stage, "verify_tlaloc_seeded",
                                   lambda *a, **k: ["192.168.101.2", "192.168.102.2"]), \
-                mock.patch("scrim.clean_trails.clean_trails", lambda *a, **k: None), \
+                mock.patch("guests.clean_trails.clean_trails", lambda *a, **k: None), \
                 mock.patch.object(red_link, "start_red_director", lambda *a, **k: None):
             # creds must be real-shaped: the pre-T0 reachability gate reads ENGINE_IP/ADMIN_PW
             red_stage.stage_red(args, self.comp, {"ENGINE_IP": "203.0.113.20",

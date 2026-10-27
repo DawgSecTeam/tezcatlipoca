@@ -1,10 +1,21 @@
+"""Supervised child processes: own session, whole-tree kill, stdin feeding.
+
+Shared by the deploy (trail wipe) and the scrim harness; it used to live under scrim/, which
+made a production deploy import the test harness.
+"""
+
 import contextlib
 import os
 import signal
 import subprocess
 import threading
 
-from scrim.core import log
+
+
+
+def _log(msg):
+    import time
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 # Grace between the SIGINT that lets a child release its resources and the SIGKILL that sweeps it.
@@ -54,7 +65,7 @@ def _kill_tree(proc, grace=TREE_STOP_GRACE):
 def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
              stdin_text=None, grace=TREE_STOP_GRACE):
     cmd = [str(c) for c in cmd]
-    log("$ " + " ".join(cmd[:6]) + (" ..." if len(cmd) > 6 else ""))
+    _log("$ " + " ".join(cmd[:6]) + (" ..." if len(cmd) > 6 else ""))
     proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True,
                             stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,

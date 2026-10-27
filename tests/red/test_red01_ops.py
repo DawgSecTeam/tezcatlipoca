@@ -85,25 +85,30 @@ class Rules(unittest.TestCase):
         for dst in ("192.168.101.1", "192.168.102.1", "172.31.101.1"):
             self.assertIn(f"-d {dst} --dport 80", s)
         self.assertIn("--to-destination 10.200.0.10:80", s)
-        self.assertIn("PREROUTING -p tcp", s)
-        self.assertIn("PREROUTING -p udp", s)
-        self.assertIn("-I PREROUTING 1", s)
-        self.assertNotIn("-A PREROUTING", s)
+        self.assertIn("RANGE-RED-DNAT -p tcp", s)
+        self.assertIn("RANGE-RED-DNAT -p udp", s)
 
     def test_the_c2_flow_is_exempted_from_the_team_snat(self):
         s = self._script()
-        self.assertIn("-t nat -I POSTROUTING 1 -s 192.168.0.0/16 -d 10.200.0.10", s)
+        self.assertIn("-t nat -A RANGE-RED-SNAT -s 192.168.0.0/16 -d 10.200.0.10", s)
 
-    def test_the_c2_dnat_is_inserted_before_dockers_local_addrtype_jump(self):
-        # Appending put it after `--dst-type LOCAL -j DOCKER`; the engine's own
-        # published :80 answered the team box with a 404 and the DNAT counter
-        # stayed at 0 (live run-b0bd41fe).
+    def test_our_chains_are_hooked_first_so_docker_cannot_shadow_the_dnat(self):
+        # An appended DNAT sits after `--dst-type LOCAL -j DOCKER`: the engine's own
+        # published :80 answered a team box with a 404 and the DNAT counter stayed at 0
+        # (live run-b0bd41fe). Our chain is hooked at position 1, never appended.
         s = self._script()
-        self.assertIn("-t nat -D PREROUTING -p tcp", s)
-        self.assertIn("-t nat -I PREROUTING 1 -p tcp", s)
-        self.assertIn("-t nat -D PREROUTING -p udp", s)
-        self.assertIn("-t nat -I PREROUTING 1 -p udp", s)
-        self.assertNotIn("-t nat -A PREROUTING -p", s)
+        self.assertIn("-I PREROUTING 1 -j RANGE-RED-DNAT", s)
+        self.assertIn("-I FORWARD 1 -j RANGE-RED-FWD", s)
+        self.assertNotIn("-t nat -A PREROUTING", s)
+        self.assertNotIn("-A FORWARD", s)
+
+    def test_the_script_is_idempotent_without_positional_rule_checks(self):
+        # A 30 s timer re-runs this: the old "is it at head -1?" check deleted and
+        # re-inserted every DNAT rule on every tick. Our own chains are rebuilt instead.
+        s = self._script()
+        self.assertIn("-F RANGE-RED-DNAT", s)
+        self.assertNotIn("head -1", s)
+        self.assertNotIn("-D PREROUTING", s)
 
     def test_without_a_port_only_the_segment_rules_exist(self):
         s = self._script(callback_port=None)

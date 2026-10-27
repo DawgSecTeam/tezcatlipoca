@@ -56,3 +56,9 @@ competitions/
 # nakon is delivered as an install (bundle clone + .env), not a gitlink:
 # a submodule checkout here is host state, never tracked.
 /vendor/
+
+# Local tooling caches and binaries (analysis scratch, downloaded toolchains): host state,
+# never tracked.
+/.cache/
+/.tailscale-local/
+/plugins/

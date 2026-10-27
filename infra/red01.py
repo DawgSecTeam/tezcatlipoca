@@ -108,8 +108,14 @@ def vm_at(vmid):
     return next((v for v in vms if int(v.get("vmid") or -1) == int(vmid)), None)
 
 
-def occupant_verdict(vmid, comp_name=None):
-    """Who holds `vmid`: absent/ours/foreign/unmarked/unknown; 'unmarked' and 'unknown' never read as clean."""
+def occupant_verdict(vmid, comp_name=None, run_id=None):
+    """Who holds `vmid`: absent/ours/comp/foreign/unmarked/unknown.
+
+    `ours` means the FULL ownership set (comp tag + this run's id). A VM carrying only this
+    competition's tag is `comp` — a concurrent run of the same competition, which is not this
+    run's to judge and must not read as "still present". `unmarked` and `unknown` never read
+    as clean.
+    """
     try:
         vms = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
     except Exception:                                       # noqa: BLE001 - reported as unknown
@@ -122,6 +128,8 @@ def occupant_verdict(vmid, comp_name=None):
         return "unmarked"
     if comp_name and comp_tag(comp_name) not in tags:
         return "foreign"
+    if run_id and run_id not in tags:
+        return "comp"
     return "ours"
 
 

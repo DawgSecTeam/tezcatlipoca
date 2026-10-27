@@ -24,9 +24,9 @@ import requests  # noqa: E402
 
 from estate import state as estate_state  # noqa: E402
 
-spec = importlib.util.spec_from_file_location("competition_ops", _REPO / "competition-ops.py")
-ops = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(ops)
+# The driver lives in quotient/lifecycle_ops.py (run-schedule.py shares it); the
+# hyphenated file is only its CLI.
+from quotient import lifecycle_ops as ops  # noqa: E402
 
 BASE = "http://10.0.0.9"
 

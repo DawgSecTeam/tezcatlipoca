@@ -37,7 +37,8 @@ def phase5_firewall_bootstrap(ctx):
         # the day-0 seed with nowhere to reach the boxes.
         red_segment = ({"subnet": RED_SEGMENT_SUBNET, "gw": RED_SEGMENT_GW}
                        if stages_red(ctx.comp_dir) else None)
-        cut_over_engine(ctx.tf_ctx, ctx.teams, red_segment=red_segment)
+        cut_over_engine(ctx.tf_ctx, ctx.teams, red_segment=red_segment,
+                        macs=getattr(ctx, "engine_nic_macs", ()))
     # The first managed box of each team (boxes.json order) proves the routed path a
     # plant/scoring step will take — probe it through the firewall.
     first_box = {}

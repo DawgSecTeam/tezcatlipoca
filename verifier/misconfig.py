@@ -54,15 +54,22 @@ def _target_vmid(comp_dir, box):
 
 def misconfig_via_guest_agent(comp_dir, box, verifiable):
 # SSH-dead fallback: the guest agent (virtio-serial, no network) reaches the box anyway.
+#     Returns the set of configs it CONFIRMED present (so the caller can record them as
+#     verified instead of leaving them "unreachable").
     vmid = _target_vmid(comp_dir, box)
     if vmid is None:
         print("  (guest-agent fallback unavailable: could not resolve the box's vmid)")
-        return False
-    node = estate_config.active().proxmox.node
+        return set()
+    from common.targets import target_nodes
+    identifier = str(box.get("ip", "")).split(".")[2]
+    base_name = str(box.get("name", "")).rsplit("-team", 1)[0]
+    node = (target_nodes(comp_dir).get((f"team{identifier}", base_name))
+            or estate_config.active().proxmox.node)
     if not node:
         print("  (guest-agent fallback unavailable: TEZ_PROXMOX_NODE not set)")
-        return False
+        return set()
     print(f"  SSH unavailable — falling back to guest-agent exec on vmid {vmid}...")
+    verified = set()
     for config in verifiable:
         cmd, predicate = MISCONFIG_CHECKS[config]
         try:
@@ -74,10 +81,11 @@ def misconfig_via_guest_agent(comp_dir, box, verifiable):
             print(f"  ....  '{config}': guest rc={rc}: {(err or '').strip()[:80]}")
             continue
         if predicate(out):
+            verified.add(config)
             print(f"  PASS  confirmed '{config}' via guest agent — `{cmd}` -> {out.strip()[:80]}")
-            return True
-        print(f"  ....  '{config}' not present: {out.strip()[:80]}")
-    return False
+        else:
+            print(f"  ....  '{config}' not present: {out.strip()[:80]}")
+    return verified
 
 
 def comp_is_clean(comp_dir, boxes):
@@ -153,7 +161,10 @@ def check_misconfig(ctx, boxes, comp_dir):
     confirmed = any(r == "present" for r in outcome.values())
     for box, verifiable in candidates:
         if all(outcome[(box["ip"], c)] == "unreachable" for c in verifiable):
-            if misconfig_via_guest_agent(comp_dir, box, verifiable):
+            # Record every config the guest agent proved: leaving them "unreachable" made a
+            # working fallback read as an unprovable range.
+            for config in misconfig_via_guest_agent(comp_dir, box, verifiable):
+                outcome[(box["ip"], config)] = "present"
                 confirmed = True
 
     groups = {}

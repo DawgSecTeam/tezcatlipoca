@@ -275,9 +275,6 @@ class PrepareTest(unittest.TestCase):
 
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class ResumedInstall(unittest.TestCase):
     def test_a_healthy_c2_skips_the_installer(self):
         class HealthyRunner(Runner):
@@ -379,3 +376,7 @@ class LockedPrepareTest(unittest.TestCase):
                                    lock, lambda *a, **k: False)
         assert result["ok"] is False
         assert lock.state["exited"] == 1 and lock.state["locked"] is False
+
+
+if __name__ == "__main__":
+    unittest.main()

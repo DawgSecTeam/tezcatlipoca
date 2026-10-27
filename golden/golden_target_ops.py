@@ -5,12 +5,7 @@ import json
 from common.constants import GOLDEN_IP_BASE
 from infra.client import cluster_vms_for, proxmox_api
 from multinode.placement_record import golden_vmid_for_slot
-from common.ssh_ops import quote_sshkeys
 from common.utils import is_unmanaged
-
-
-# Single definition lives in ssh_ops (redeploy rebuilds use it too).
-_quote_sshkeys = quote_sshkeys
 
 
 # Golden boxes sit just above the engine's slot; preflight gates the span for collisions with team vmid space.

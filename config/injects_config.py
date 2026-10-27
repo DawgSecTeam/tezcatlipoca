@@ -1,6 +1,7 @@
 """Per-competition injects: load, anchor to wall-clock, fingerprint for the phase-7 marker."""
 
 import json
+from pathlib import Path
 
 
 def load_injects(comp_dir):
@@ -61,9 +62,11 @@ def injects_fingerprint(injects):
             "open_offset_min": inj.get("open_offset_min", 0),
             "due_offset_min": inj.get("due_offset_min", 60),
             "close_offset_min": inj.get("close_offset_min", 90),
-            "attachments": sorted(
-                (a.get("name") if isinstance(a, dict) else str(a)) or ""
-                for a in (inj.get("attachments") or [])),
+            # `load_injects` fills `files`, not `attachments`: a typo'd key made adding or
+            # renaming an attachment invisible to the fingerprint, so a re-run skipped
+            # inject creation it should have redone.
+            "files": sorted(Path(f).name for f in (inj.get("files") or [])),
+            "description": inj.get("description") or "",
         })
     blob = json.dumps(items, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode()).hexdigest()[:16]

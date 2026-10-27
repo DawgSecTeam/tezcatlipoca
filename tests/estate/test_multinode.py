@@ -158,7 +158,7 @@ class PlacementComputeTest(unittest.TestCase):
         sats = placement["satellites"]
         self.assertEqual(len(sats), 1)
         self.assertEqual(sats[0]["name"], "n2")
-        self.assertEqual(sats[0]["jump_mgmt_ip"], "10.0.0.249")  # slot 1 default (.249, .248, ...)
+        self.assertEqual(sats[0]["jump_mgmt_ip"], "10.0.0.239")  # slot 1 default: walks down from .239, clear of red01
         self.assertTrue(sats[0]["anchor_identifier"])  # first local team's subnet
 
 
@@ -474,7 +474,7 @@ class ActivatePlacementTest(unittest.TestCase):
             try:
                 self.assertEqual(set(_NODE_ROUTES), {"proxmox", "pve"})
                 self.assertEqual(_NODE_ROUTES["pve"],
-                                 ("https://zfs-193.lab:8006", "t2"))
+                                 ("https://zfs-193.lab:8006", "t2", ""))
             finally:
                 placement_record.deactivate_placement(restore)
         self.assertEqual(_NODE_ROUTES, {})

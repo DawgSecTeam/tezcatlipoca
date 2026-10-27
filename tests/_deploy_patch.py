@@ -17,13 +17,17 @@ _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-import deploy_lib  # noqa: E402
-import infra  # noqa: E402
+# Every package a deploy phase can bind a step name from. `estate`, `guests`, `engine`,
+# `golden`, `nakonops`, `multinode` and `net` hold most of the real implementations now; walking
+# only deploy_lib/infra silently missed them.
+_PACKAGES = ("deploy_lib", "infra", "estate", "golden", "engine", "guests", "nakonops",
+             "multinode", "net", "red", "portal")
 
 
 def _modules():
     mods = [importlib.import_module("deploy")]
-    for pkg in (deploy_lib, infra):
+    for name in _PACKAGES:
+        pkg = importlib.import_module(name)
         for info in pkgutil.walk_packages(pkg.__path__, f"{pkg.__name__}."):
             mods.append(importlib.import_module(info.name))
         mods.append(pkg)
@@ -60,3 +64,23 @@ class dpatch:  # noqa: N801 - reads like patch.object at the call site
     def __exit__(self, *exc):
         self.stop()
         return False
+
+
+class FakeNakonResult:
+    """The shape a nakon run returns: `.failed` lines plus per-machine failed configs.
+
+    `record_stage` reads `failed_configs()`, so a bare SimpleNamespace/MagicMock fake makes
+    the coverage bookkeeping raise (or silently record nonsense).
+    """
+
+    def __init__(self, failed=(), failed_configs_map=None):
+        self.failed = list(failed)
+        self.machines = []
+        self._failed_configs = dict(failed_configs_map or {})
+
+    def failed_configs(self):
+        return dict(self._failed_configs)
+
+
+def fake_nakon_result(failed=(), failed_configs_map=None):
+    return FakeNakonResult(failed, failed_configs_map)

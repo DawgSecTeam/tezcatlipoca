@@ -125,32 +125,6 @@ class MemberTrustedTests(unittest.TestCase):
         self.assertIs(vc._member_trusted(self._job(role="dc"), {"HOST": "DC1"}, pcs), None)
 
 
-class ReconcileStateTests(unittest.TestCase):
-    def _target(self, vm_name, vmid, slot=0):
-        return {"vm_name": vm_name, "vmid": vmid, "slot": slot}
-
-    def test_records_every_rebuilt_box_against_its_new_vmid(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            comp_dir = Path(tmp)
-            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}):
-                redeploy.reconcile_estate_state(
-                    [self._target("team1-db01", 1503), self._target("130-web01", 1504, slot=2)],
-                    _rctx(comp_dir, {}, []))
-            recorded = {r["name"]: r["vmid"]
-                        for r in estate_state.EstateState.load(comp_dir).resources("team_box")}
-        self.assertEqual(recorded, {"team1-db01": 1503, "130-web01": 1504})
-
-    def test_reconciling_is_idempotent(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            comp_dir = Path(tmp)
-            with patch.dict(os.environ, {"TEZ_PROXMOX_NODE": "pve"}):
-                for _ in range(2):
-                    redeploy.reconcile_estate_state([self._target("team1-db01", 1503)],
-                                                    _rctx(comp_dir, {}, []))
-            rows = estate_state.EstateState.load(comp_dir).resources("team_box")
-        self.assertEqual([r["vmid"] for r in rows], [1503])
-
-
 class EnvSummaryTests(unittest.TestCase):
 
 

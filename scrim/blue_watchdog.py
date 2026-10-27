@@ -7,7 +7,7 @@ from pathlib import Path
 from common.comp_paths import resolve_comp_dir
 from scrim import compworld
 from scrim import core
-from scrim import procs
+from common import procs
 from scrim.core import log
 
 

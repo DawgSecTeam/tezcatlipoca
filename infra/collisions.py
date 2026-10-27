@@ -225,8 +225,13 @@ RED01_LEGACY_IPS = ("10.0.0.196", "10.0.0.197", "10.0.0.198", "10.0.0.199")
 
 def select_red_ip(vms, claimed=(), skip_vmids=(), ours_tags=None):
     """The lowest red-band address nothing answers and no claimant holds, or (None, unchecked).
-    `claimed` is everything this placement already takes on the L2 (engine, gateway, jumps)."""
+    `claimed` is everything this placement already takes on the L2 (engine, gateway, jumps).
+
+    An unverifiable guest makes every candidate a guess, so an incomplete scan selects nothing
+    (the caller refuses or asks the operator) — the same contract as `select_engine_ip`."""
     takers, unchecked = running_guest_ips(vms, set(skip_vmids), ours_tags)
+    if unchecked:
+        return None, unchecked
     taken = set(takers) | set(claimed) | set(RED01_LEGACY_IPS)
     prefix, lo = RED01_IP_BAND[0].rsplit(".", 1)
     hi = int(RED01_IP_BAND[1].rsplit(".", 1)[1])
@@ -351,6 +356,7 @@ def jump_mgmt_ip_gate(plan):
     jump_ips = [s["jump_mgmt_ip"] for s in placement["satellites"]]
     if not jump_ips:
         return
+    from multinode.placement_record import record_of
     skip = {plan.engine_vmid} | {s["jump_vmid"] for s in placement["satellites"]}
     vms = [vm for share in plan.shares for vm in share.raw_vms if vm.get("node") == share.node]
     takers, unchecked = running_guest_ips(vms, skip, plan.our_tags)
@@ -359,5 +365,12 @@ def jump_mgmt_ip_gate(plan):
         raise SystemExit(
             f"  ERROR: jump mgmt IP(s) {dupes} already answered by a running guest "
             "on the mgmt LAN — set explicit jump_mgmt_ip values in nodes.json.")
+    if unchecked and not all(
+            record_of(placement, s["name"]).jump_mgmt_ip for s in placement["satellites"]):
+        listing = ", ".join(sorted(f"{u['node']}/{u['vmid']}" for u in unchecked))
+        raise SystemExit(
+            f"  ERROR: jump mgmt IP(s) {jump_ips} could not be verified — {len(unchecked)} "
+            f"running guest(s) have no guest agent ({listing}). Set explicit jump_mgmt_ip "
+            f"values in nodes.json, or restore the agent channel.")
     note = (f" ({len(unchecked)} guest(s) unverifiable — agent down)" if unchecked else "")
     print(f"  Preflight: jump mgmt IP(s) {jump_ips} free{note}")

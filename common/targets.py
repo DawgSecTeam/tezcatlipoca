@@ -24,7 +24,10 @@ def persist_targets(comp_dir, targets, boxes):
                 "box_name": t["box_name"],
                 "vmid": t["vmid"],
                 "ip": t["ip"],
-                **({"node": t["node"]} if t.get("node") else {}),
+                # The hosting node is frozen too: a multi-node range's box is only reachable
+                # through the host it lives on, and re-deriving it needs the placement.
+                "node": t.get("node") or "",
+                "slot": t.get("slot") or 0,
             }
             for t in targets
         },
@@ -40,13 +43,23 @@ def frozen_roster(comp_dir):
     return {"box_order": roster.get("box_order") or [], "targets": roster["targets"]}
 
 
+def target_nodes(comp_dir):
+    """The hosting node of every frozen (team, box), for callers that have no target dict."""
+    data = frozen_roster(comp_dir) or {"targets": {}}
+    return {(t["team_key"], t["box_name"]): (t.get("node") or "")
+            for t in data["targets"].values()}
+
+
 def load_targets(comp_dir, teams, boxes):
 # Refuses when boxes.json was reordered since deploy: vmid is positional, so a reorder
 # silently retargets a different VM.
+    from estate import config, state
+    placement = state.EstateState.load(comp_dir).data.get("placement")
+    default_node = config.active().proxmox.node
     data = frozen_roster(comp_dir)
     if data is None:
         print("  (no frozen roster yet — deriving vmids from boxes.json order)")
-        return enumerate_targets(teams, boxes)
+        return enumerate_targets(teams, boxes, placement=placement, default_node=default_node)
     current = [b["name"] for b in boxes]
     frozen_order = data.get("box_order") or []
     # Append-only is safe (vmid is positional, added boxes land after every frozen index); a
@@ -59,10 +72,14 @@ def load_targets(comp_dir, teams, boxes):
         )
     frozen = data.get("targets", {})
     result = []
-    for t in enumerate_targets(teams, boxes):
+    for t in enumerate_targets(teams, boxes, placement=placement, default_node=default_node):
         f = frozen.get(t["vm_name"])
         if f is not None:
-            t = {**t, "vmid": f["vmid"], "ip": f.get("ip", t["ip"])}
+            t = {**t, "vmid": f["vmid"], "ip": f.get("ip", t["ip"]),
+                 # Dropping these sent every satellite box's snapshot/guest-agent call to the
+                 # engine's host.
+                 "node": f.get("node") or t["node"],
+                 "slot": f.get("slot", t["slot"])}
         result.append(t)
     return result
 

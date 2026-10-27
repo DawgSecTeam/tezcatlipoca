@@ -31,10 +31,13 @@ def _load(name, filename):
     return mod
 
 
-from scrim import blue_agent, blue_prompt, compworld, core, endpoints, event_run, evidence, inject_sync, llm_probe, procs, quotient_api, red_link, red_stage, run_manifest, staging, supervisor, teardown_stage
+from common import procs
+from scrim import blue_agent, blue_prompt, compworld, core, endpoints, event_run, evidence, inject_sync, llm_probe, quotient_api, red_link, red_stage, run_manifest, staging, supervisor, teardown_stage
 from scrim_report import blue_side, host_labels, loaders, red_side, render, timefmt
 from quotient import event_capture as event_capture
-sched = _load("run_schedule_defects", "run-schedule.py")
+# end_event/start/freeze live in the shared lifecycle driver; run-schedule.py is the
+# schedule PLAN plus a delegation to it.
+sched = _load("run_schedule_defects", "quotient/lifecycle_ops.py")
 
 
 def _pid_alive(pid):
@@ -584,9 +587,6 @@ class RedReachabilityGate(unittest.TestCase):
 
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 
 
@@ -618,3 +618,7 @@ class InjectPrompt(unittest.TestCase):
         self.assertIn("closed", text)
         self.assertIn("CLOSED (missed)", text)
         self.assertNotIn("TASK #1", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

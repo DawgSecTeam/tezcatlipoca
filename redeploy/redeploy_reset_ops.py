@@ -93,6 +93,7 @@ def _capture_pam_bundle(comp_dir, node, t, detail, *, run_id=None, teams=None, b
 
 def probe_box_health(ctx, t, ports, node):
     # The SSH leg catches the planted-box trap: it dies at SSH preauth with its ports still listening.
+    node = t.get("node") or node
     windows = box_platform(t["box"]) == "windows"
     detail = "no attempt"
     for attempt in range(1, RESET_PROBE_ATTEMPTS + 1):

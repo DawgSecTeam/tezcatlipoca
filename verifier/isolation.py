@@ -37,23 +37,49 @@ _ISOLATION_RULE_RE = re.compile(
     r"(?:^|\s)-([sd])\s+(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})(?=\s|$)")
 
 
+_DROP_RE = re.compile(r"-j\s+DROP")
+_ACCEPT_RE = re.compile(r"-j\s+ACCEPT")
+
+
+def _rule_sides(line):
+    sides = {}
+    for m in _ISOLATION_RULE_RE.finditer(line):
+        sides[m.group(1)] = m.group(2)
+    return sides
+
+
 def _has_isolation_rule(stdout, subnet_ips):
-# A FORWARD DROP whose -s AND -d each cover every team subnet.
+# A FORWARD DROP whose -s AND -d each cover every team subnet, reachable before any ACCEPT
+#     that covers the same pair.
 #
 #     The subnets are DERIVED from the team identifiers, not the hardcoded 192.168.0.0/16 the old
 #     match required: a range renumbered off that supernet must not read PASS off the stale literal.
-    for line in stdout.splitlines():
-        if "-j DROP" not in line:
+#     iptables is first-match, so a DROP below a broad ACCEPT is decorative — the old presence
+#     check passed a range whose teams could still route to each other.
+    lines = stdout.splitlines()
+    for index, line in enumerate(lines):
+        if not _DROP_RE.search(line):
             continue
-        sides = {}
-        for m in _ISOLATION_RULE_RE.finditer(line):
-            sides[m.group(1)] = m.group(2)
+        sides = _rule_sides(line)
         if "s" not in sides or "d" not in sides:
             continue
-        if not subnet_ips:
-            return True
-        if all(_cidr_covers(sides["s"], ip) and _cidr_covers(sides["d"], ip)
-               for ip in subnet_ips):
+        if subnet_ips and not all(
+                _cidr_covers(sides["s"], ip) and _cidr_covers(sides["d"], ip)
+                for ip in subnet_ips):
+            continue
+        shadowed = False
+        for earlier in lines[:index]:
+            if not _ACCEPT_RE.search(earlier):
+                continue
+            e = _rule_sides(earlier)
+            if "s" not in e or "d" not in e:
+                continue
+            if all(not subnet_ips
+                   or (_cidr_covers(e["s"], ip) and _cidr_covers(e["d"], ip))
+                   for ip in subnet_ips):
+                shadowed = True
+                break
+        if not shadowed:
             return True
     return False
 

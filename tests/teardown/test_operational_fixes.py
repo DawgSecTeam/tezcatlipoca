@@ -19,7 +19,7 @@ sys.path.insert(0, str(_REPO))
 
 class TemplateOwnership(unittest.TestCase):
     def test_another_runs_template_is_a_note_and_untouched(self):
-        from golden.golden_ops import OTHER_RUN
+        from infra.ownership import OTHER_RUN
         from teardown import machinery
         with mock.patch.object(
                 machinery, "destroy_golden_set",
@@ -115,7 +115,7 @@ class BoxLogs(unittest.TestCase):
 
 class WindowsTrailWipe(unittest.TestCase):
     def test_event_logs_are_always_cleared(self):
-        from scrim import clean_trails
+        from guests import clean_trails
         self.assertIn("wevtutil cl Security", clean_trails.WINDOWS_PS)
         self.assertNotIn("SCRIM_CLEAR_WIN_EVENTLOGS", clean_trails.WINDOWS_PS)
 

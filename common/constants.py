@@ -113,6 +113,9 @@ KNOWN_BROKEN_CONFIGS = {
         "phase 4.",
 }
 
+# Jump VMs sit immediately below the engine template (`engine_vmid + 130 + slot`).
+JUMP_VMID_OFFSET_LOW = 130
+
 # Just below the golden block so one preflight scan covers both; per-competition, dies with a full teardown.
 ENGINE_TEMPLATE_VMID_OFFSET = 140
 ENGINE_TEMPLATE_NAME = "engine-template"
@@ -133,14 +136,24 @@ RED_SEGMENT_IP = "10.200.0.10"
 
 def red_bridge_name(run_id):
     """This run's private red-segment bridge. PVE cap: 15 chars; `vmbrR` + 8 hex fits."""
-    hex_id = "".join(c for c in (run_id or "").lower() if c in "0123456789abcdef")[:8]
+    hex_id = "".join(c for c in str(run_id or "").lower().removeprefix("run-")
+                     if c in "0123456789abcdef")[:8]
     return f"vmbrR{hex_id}"
 
+
+def comp_slug(comp_name):
+    """One slug for every place a competition name becomes an identifier.
+
+    Tags, clone markers, bridge comments, PVE user ids and headscale users all go through
+    this: a raw f-string against a slugged tag missed every competition whose name carries a
+    space or case ("CDE 2026"), and PVE/headscale reject those identifiers anyway.
+    """
+    return re.sub(r"[^a-z0-9-]+", "-", str(comp_name).lower()).strip("-")
+
+
 def comp_tag(comp_name):
-    """The slugged comp tag ownership_tags writes. Comparing a raw f-string against stored
-    tags missed every competition whose name carries a space or case ("CDE 2026")."""
-    slug = re.sub(r"[^a-z0-9-]+", "-", str(comp_name).lower()).strip("-")
-    return f"comp-{slug}"
+    """The ownership tag every destruction guard compares against."""
+    return f"comp-{comp_slug(comp_name)}"
 
 def ownership_tags(comp_name, run_id=None, *extra):
     # Every destruction guard requires this full set; the comp tag is shared by concurrent

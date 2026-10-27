@@ -63,7 +63,7 @@ class EstateStateTest(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("estate-state.json", message)
         self.assertIn("v99", message)
-        self.assertIn("v1", message)
+        self.assertIn("v2", message)
 
 
 

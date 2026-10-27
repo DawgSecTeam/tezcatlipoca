@@ -103,6 +103,9 @@ class LoginLimiter:
             cutoff = self.clock() - self.window
             while q and q[0] < cutoff:
                 q.popleft()
+            if not q:
+                # A forged CF-Connecting-IP per request otherwise grows this dict forever.
+                self._fails.pop(key, None)
             return len(q) >= self.max_fails
 
     def fail(self, key):
@@ -206,6 +209,15 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
         # reads exactly that key.
         return JSONResponse({"detail": msg}, status_code=status)
 
+    def client_ip(request):
+        # CF-Connecting-IP is only trustworthy when the request actually came through the
+        # tunnel; on an operator's `ssh -L` any client can set it, so trusting it there
+        # either bypasses the limiter or lets one client lock another out.
+        forwarded = str(request.headers.get("cf-connecting-ip") or "").strip()
+        if config.get("public_host") and forwarded:
+            return forwarded
+        return request.client.host if request.client else "?"
+
     def same_origin(request):
         # SameSite=Lax already stops cross-site POSTs carrying the cookie; this is the belt to that pair
         # of braces for browsers that treat top-level POSTs leniently.
@@ -245,10 +257,7 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
     async def login(request: Request):
         if not same_origin(request):
             return err(403, "cross-origin request refused")
-        # The portal listens on 127.0.0.1 only: every request arrives via cloudflared (which sets
-        # CF-Connecting-IP) or an operator's ssh -L, so nothing else can forge the header.
-        ip = (request.headers.get("cf-connecting-ip")
-              or (request.client.host if request.client else "?"))
+        ip = client_ip(request)
         if limiter.blocked(ip):
             log.write("login_blocked", ip=ip)
             return err(429, "too many failed logins — wait a few minutes")
@@ -275,6 +284,8 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
 
     @app.post("/api/logout")
     async def logout(request: Request):
+        if not same_origin(request):
+            return err(403, "cross-origin request refused")
         s = session(request)
         if s:
             log.write("logout", user=s["user"], display=s.get("display"))
@@ -342,8 +353,15 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
 
     @app.websocket("/console/ws/{relay_id}")
     async def console_ws(websocket: WebSocket, relay_id: str):
-        s = websocket.session
-        valid = (s.get("role") and time.time() - s.get("iat", 0) <= SESSION_MAX_AGE)
+        if not same_origin(websocket):
+            await websocket.close(code=4403)
+            return
+        s = websocket.session or {}
+        # The same validity rule as an HTTP request: role present, session fresh, team still
+        # in this competition, and the gate open for a team session.
+        valid = (s.get("role") and time.time() - s.get("iat", 0) <= SESSION_MAX_AGE
+                 and (s.get("role") != "team"
+                      or (s.get("team") in teams and gate.get()["open"])))
         entry = broker.take(relay_id, f"{s.get('user')}:{s.get('iat')}") if valid else None
         if entry is None:
             await websocket.close(code=4403)
@@ -409,7 +427,16 @@ def create_app(config_path, event_conf_path, state_dir, secret_key, *, broker=No
             lines = log.path.read_text().splitlines()[-200:]
         except OSError:
             lines = []
-        return {"entries": [json.loads(x) for x in lines if x.strip()]}
+        entries = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                entries.append(json.loads(line))
+            except ValueError:
+                # One truncated line (a crash mid-write) must not 500 the whole audit view.
+                entries.append({"malformed": True, "raw": line[:200]})
+        return {"entries": entries}
 
     @app.post("/api/requests")
     async def request_reset(request: Request):

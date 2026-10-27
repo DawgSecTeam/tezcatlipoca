@@ -48,7 +48,8 @@ the earlier phases complete (`--force-from-phase` overrides).
    marker, resets `.nakon-domain-*` / `.postclone-swept`, and clears the previous teardown's journal.
    Skipped when `--from-phase > 1`.
 2. **Engine template + engine create** — compute the engine template hash (base image vmid, pinned
-   `quotient_ref`, `bootstrap_scoring_engine` and `estate.apply.create_engine` code); reuse on match,
+   `quotient_ref`, the `bootstrap_scoring_engine` + clean-step code, normalized so comments are not
+   drift); reuse on match,
    rebuild on drift (never when frozen: config drift fails, code drift warns). Rebuild = full-clone
    base, bootstrap, clean (containers, volumes, `.env`, host keys, machine-id, cloud-init),
    `qm template`. Then `estate.apply.create_bridge` builds each team bridge and `create_engine` clones
@@ -137,7 +138,7 @@ Each rebooting step is its own single-machine nakon pass. A missing `domain_role
 
 ## Network and isolation
 
-- Team bridges `vmbr<identifier>` have no physical ports. The engine has a virtio NIC per bridge plus `vmbr0`; team NICs are configured via `/etc/netplan/60-team-ifaces.yaml` (`ens19`+, `192.168.<id>.1/24`) after a cold boot so new NICs enumerate.
+- Team bridges `vmbr<identifier>` have no physical ports. The engine has a virtio NIC per bridge plus `vmbr0`; team NICs are configured via `/etc/netplan/60-team-ifaces.yaml` (`192.168.<id>.1/24`) after a cold boot so new NICs enumerate, and each stanza is pinned by the NIC's MAC (`match: macaddress`) — positional `ens<N>` names hold only up to `net13`.
 - Engine iptables: `FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP` (inserted at line 1); `POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE`.
 - Docker wipes `FORWARD` on every restart, so `bootstrap_scoring_engine` installs `range-firewall.{sh,service,timer}` (after `docker.service`; 30 s) to re-assert both rules, and `range-healthcheck.{sh,service,timer}` (60 s, offset from :00/:30) logging to `/var/log/range-healthcheck.log`. `ensure_nat_forwarding` re-asserts at phase 3 and on redeploy.
 
@@ -213,9 +214,10 @@ credentials. Everything per-run is gitignored:
 
 | File | Owns | Key fields |
 |---|---|---|
-| `estate-state.json` | Everything the run records: identity, secrets, roster, template records and the frozen flag, the multi-node placement, teardown progress, deploy bookkeeping, and the resource inventory | sections `identity`, `secrets`, `roster`, `templates`, `placement`, `run`, `external`, `teardown`, plus `resources`, `schema_version`, `updated_at`; API and section map in [internals.md](internals.md#estate) |
+| `estate-state.json` | Everything the run records: identity, secrets, roster, template records and the frozen flag, the multi-node placement, the red01 identity, teardown progress, deploy bookkeeping, and the resource inventory | sections `identity`, `secrets`, `roster`, `templates`, `placement`, `red`, `run`, `teardown`, plus `resources`, `schema_version`, `updated_at`; API and section map in [internals.md](internals.md#estate) |
 | `teams.json` | Generated credentials handoff for the tools that read files rather than the document (verifier, scrim) | `{<team>: {identifier, password}}` |
 | `credentials.txt` | The human-readable secret sheet | same secrets, for an operator |
+| `.deploy_state.json` | Staged INPUT for `tlaloc`'s intel contract on red01 (the agent has no access to the state document) — three fields only, not a second copy of state | `box_password`, `box_creds`, `admin_password` |
 
 `deployed_endpoint` + `scoring_vm_id` (the document's `run`/`identity` sections) are the stale-state
 guard. Marker files: `.postclone-swept` (removed by phase 1 and phase 4, written only after a clean

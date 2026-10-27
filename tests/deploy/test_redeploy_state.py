@@ -12,9 +12,11 @@ from unittest.mock import MagicMock, patch
 
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
+from tests._deploy_patch import fake_nakon_result  # noqa: E402
 
 from config import config_ops  # noqa: E402
 import pipeline_api  # noqa: E402
+from guests import converge_ops  # noqa: E402
 from estate import state as estate_state  # noqa: E402
 from redeploy import redeploy_engine_ops  # noqa: E402
 from redeploy import redeploy_light_ops  # noqa: E402
@@ -132,10 +134,11 @@ class HardeningOrderTests(unittest.TestCase):
             comp_dir = Path(tmp)
             with patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
                  patch.object(pipeline_api, "setup_ubuntu_auth") as p_auth, \
+                 patch.object(pipeline_api, "prep_apt_on_boxes"), \
                  patch.object(pipeline_api, "fix_dns_on_boxes") as p_dns, \
                  patch.object(pipeline_api, "ensure_nat_forwarding"), \
-                 patch.object(pipeline_api, "run_nakon",
-                              return_value=MagicMock(failed=[])), \
+                 patch.object(converge_ops, "run_nakon",
+                              return_value=fake_nakon_result()), \
                  patch.object(pipeline_api, "fix_services_on_boxes"):
                 p_auth.side_effect = lambda *a, **k: order.append("auth")
                 p_dns.side_effect = lambda *a, **k: order.append("dns")

@@ -1,10 +1,11 @@
 """Per-satellite jump/router VM: build, configure, verify."""
 
 import secrets
+import shlex
 import subprocess
 import time
 
-from common.constants import DEFAULT_ENGINE_MGMT_GW, ownership_tags
+from common.constants import (DEFAULT_ENGINE_MGMT_GW, RED_SEGMENT_IP, ownership_tags)
 from net.jump_rules import (APT_CACHER_PORT, JUMP_TAGS_EXTRA, jump_rules, jump_sysctl_script,  # noqa: F401
                         red_segment_from_env)
 from infra.guest_exec import wait_for_guest_agent
@@ -90,9 +91,10 @@ def wait_jump_ready(node, vmid, ip, user, key_path, expected_key, timeout=900):
 
 
 def configure_jump(ip, user, key_path, team_identifiers, engine_mgmt_ip,
-                   red_segment=""):
-    rules = jump_rules(team_identifiers, engine_mgmt_ip, red_segment=red_segment)
-    quoted = subprocess.list2cmdline([rules]).replace("'", "'\\''")
+                   red_segment="", callback_port=None):
+    rules = jump_rules(team_identifiers, engine_mgmt_ip, red_segment=red_segment,
+                       callback_port=callback_port, red_ip=RED_SEGMENT_IP)
+    quoted = shlex.quote(rules)
     probe = _jump_ssh(ip, user, key_path,
                       "command -v apk >/dev/null 2>&1 && echo alpine || echo debian",
                       timeout=30)
@@ -140,7 +142,7 @@ def _log(*args, **kwargs):
 
 def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
                    engine_mgmt_gw=DEFAULT_ENGINE_MGMT_GW, engine_node_name=None,
-                   run_id=None, red_segment=""):
+                   run_id=None, red_segment="", callback_port=None):
     # Bounded at 4: each worker is a full clone onto a datastore.
     from multinode.placement_record import record_of
     sats = list(placement["satellites"])
@@ -154,7 +156,8 @@ def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
         team_ids = sorted({placement["team_identifiers"][k] for k in sat["teams"]}, key=int)
         _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_mgmt_gw,
                    run_id=run_id, red_segment=red_segment,
-                   mgmt_bridge=resolved_mgmt_bridge(placement))
+                   mgmt_bridge=resolved_mgmt_bridge(placement),
+                   callback_port=callback_port)
 
     results = run_concurrent(sats, _one, max_workers=4)
     # run_concurrent captures exceptions per slot; one dead satellite aborts the deploy.
@@ -165,7 +168,7 @@ def build_jump_vms(placement, engine_vmid, ctx, comp_name, engine_mgmt_ip,
 
 
 def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_mgmt_gw,
-               run_id=None, red_segment="", mgmt_bridge="vmbr0"):
+               run_id=None, red_segment="", mgmt_bridge="vmbr0", callback_port=None):
     node = rec.node
     ownership = ownership_tags(comp_name, run_id, JUMP_TAGS_EXTRA)
     vm_name = f"jump-{comp_name}-{sat['slot']}"
@@ -195,9 +198,12 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
 
         destroy_vm_if_exists(node, vmid, expect_tags=ownership)
         gc_orphan_volumes(node, vmid)
-        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data={
-            "newid": vmid, "name": vm_name, "full": 1,
-            "description": clone_marker(comp_name)})["data"]
+        data = {"newid": vmid, "name": vm_name, "full": 1,
+                "description": clone_marker(comp_name)}
+        if rec.datastore:
+            # Without `storage` a full clone lands on the source template's pool.
+            data["storage"] = rec.datastore
+        upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone", data=data)["data"]
         wait_for_proxmox_task(node, upid)
 
         nics = {"net0": f"virtio,bridge={rec.mgmt_bridge or mgmt_bridge}"}
@@ -239,7 +245,7 @@ def _build_one(rec, sat, vmid, team_ids, ctx, comp_name, engine_mgmt_ip, engine_
         raise RuntimeError(f"jump {vm_name} on '{node}' never came up on SSH at "
                            f"{sat['jump_mgmt_ip']} — check its console")
     configure_jump(sat["jump_mgmt_ip"], user, ctx["ssh_key_path"], team_ids, engine_mgmt_ip,
-                   red_segment=red_segment)
+                   red_segment=red_segment, callback_port=callback_port)
     _log(f"    jump-{comp_name}-{sat['slot']} configured and forwarding "
           f"(teams {', '.join(team_ids)})")
 

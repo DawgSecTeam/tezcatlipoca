@@ -43,6 +43,24 @@ def has_in_path_firewall(ctx):
     return any(box.get("in_path") for box in ctx.boxes)
 
 
+def _team_bridges(ctx, document, node, identifiers, in_path):
+    from estate import apply as estate_apply
+    from infra.ownership import bridge_comment
+    for identifier in identifiers:
+        estate_apply.create_bridge(
+            document, node, f"vmbr{identifier}",
+            comment=bridge_comment(ctx.comp_name, ctx.run_id,
+                                   f"Quotient team {identifier} — isolated, no uplink"),
+            comp_name=ctx.comp_name, run_id=ctx.run_id)
+        if in_path:
+            estate_apply.create_bridge(
+                document, node, f"vmbrW{identifier}",
+                comment=bridge_comment(ctx.comp_name, ctx.run_id,
+                                       f"Quotient team {identifier} — transit to in-path "
+                                       f"firewall"),
+                comp_name=ctx.comp_name, run_id=ctx.run_id)
+
+
 def create_engine_and_bridges(ctx):
     # Bridges before the engine; the cold boot surfaces the engine's team NICs.
     from estate import apply as estate_apply, engine_setup
@@ -54,22 +72,23 @@ def create_engine_and_bridges(ctx):
     ownership = Ownership(ctx.comp_name, ctx.run_id)
     teams = slot_team_identifiers(ctx)
     transit = teams if has_in_path_firewall(ctx) else []
-    for identifier in teams:
-        estate_apply.create_bridge(
-            document, ctx.node, f"vmbr{identifier}",
-            comment=bridge_comment(ctx.comp_name, ctx.run_id,
-                                   f"Quotient team {identifier} — isolated, no uplink"))
-    for identifier in transit:
-        estate_apply.create_bridge(
-            document, ctx.node, f"vmbrW{identifier}",
-            comment=bridge_comment(ctx.comp_name, ctx.run_id,
-                                   f"Quotient team {identifier} — transit to in-path firewall"))
+    in_path = has_in_path_firewall(ctx)
+    _team_bridges(ctx, document, ctx.node, teams, in_path)
+    # A satellite's team boxes live on ITS host: vmbr<id> must exist there or the clone's
+    # NIC cannot attach (qmstart: "bridge does not exist"). Preflight already requires the
+    # name to be free on that host.
+    from multinode.placement_record import record_of
+    for sat in (ctx.placement or {}).get("satellites", []):
+        sat_node = record_of(ctx.placement, sat["name"]).node
+        sat_ids = [ctx.teams[key]["identifier"] for key in sat.get("teams") or []]
+        _team_bridges(ctx, document, sat_node, sat_ids, in_path)
     red_bridge = red_bridge_name(ctx.run_id) if stages_red(ctx.comp_dir) else None
     if red_bridge:
         estate_apply.create_bridge(
             document, ctx.node, red_bridge,
             comment=bridge_comment(ctx.comp_name, ctx.run_id,
-                                   "Quotient red segment — engine + red01 only, no uplink"))
+                                   "Quotient red segment — engine + red01 only, no uplink"),
+            comp_name=ctx.comp_name, run_id=ctx.run_id)
     estate_apply.create_engine(
         document, ownership, ctx.node, vmid=ctx.engine_vmid,
         template_vmid=int(ctx.state["engine_template_vmid"]),
@@ -81,6 +100,9 @@ def create_engine_and_bridges(ctx):
         ssh_public_key=cfg.ssh.public_key,
         red_bridge=red_bridge)
     engine_setup.cold_boot(ctx.node, ctx.engine_vmid)
+    # Read back after the cold boot: the NICs exist in the config from the PUT, but the
+    # MAC list is what the netplan pins, and it must match the guests the boot surfaces.
+    ctx.engine_nic_macs = estate_apply.engine_nic_macs(ctx.node, ctx.engine_vmid)
 
 
 def create_team_boxes(ctx, sources):
@@ -104,4 +126,5 @@ def configure_engine_network(ctx, engine_ctx):
         engine_ctx, teams, teams if has_in_path_firewall(ctx) else [],
         satellite_routes_for(ctx.placement) if ctx.placement else [],
         red_segment=({"subnet": RED_SEGMENT_SUBNET, "gw": RED_SEGMENT_GW}
-                     if stages_red(ctx.comp_dir) else None))
+                     if stages_red(ctx.comp_dir) else None),
+        macs=getattr(ctx, "engine_nic_macs", ()))

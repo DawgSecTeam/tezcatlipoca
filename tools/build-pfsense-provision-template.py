@@ -50,7 +50,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-load_dotenv(".env")
+import os
+
+if not os.environ.get("TEZ_TEST_OFFLINE"):
+    load_dotenv(".env")
 
 from infra.client import proxmox_api, wait_for_proxmox_task  # noqa: E402
 from estate import config

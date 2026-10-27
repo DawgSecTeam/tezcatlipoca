@@ -14,8 +14,8 @@ from infra.ownership import full_clone_data
 from infra.client import proxmox_api, storage_queue_lock, wait_for_proxmox_task
 from infra.lifecycle import (delete_snapshot, list_snapshots, rollback_snapshot, start_vm, stop_vm, take_snapshot,)
 from infra.ownership import (MARKER, MISSING, OWNED, clone_marker, comp_name_from_tags,
-                             destroy_vm_if_exists, gc_orphan_volumes, retag_ownership,
-                             vm_occupancy,)
+                             destroy_role_template, destroy_vm_if_exists, gc_orphan_volumes,
+                             retag_ownership, vm_occupancy,)
 from multinode.placement_record import golden_vmid_for_slot
 from common.ssh_ops import ssh_via_gateway, wait_for_boxes_ssh, wait_for_cloud_init
 from engine.template_freeze import (
@@ -23,8 +23,8 @@ from engine.template_freeze import (
 )
 from common.utils import PRINT_LOCK, compfile_flag, competition_name, run_concurrent
 from common.windows_ops import bootstrap_windows_box, is_windows_template
+from common.ssh_ops import quote_sshkeys
 from golden.golden_target_ops import (
-    _quote_sshkeys,
     _is_template,
     _vm_exists,
     _template_vmid_map,
@@ -140,7 +140,7 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
             "tags": ownership_tag_str,
             "ciuser": ctx.get("box_username", "ubuntu"),
             "cipassword": box_password,
-            "sshkeys": _quote_sshkeys(config.active().ssh.public_key),
+            "sshkeys": quote_sshkeys(config.active().ssh.public_key),
         })
         ensure_golden_disk_size(node, t["vmid"], t["box"].get("disk_gb"))
         print(f"    {t['box']['template']} -> {t['vm_name']} (vmid {t['vmid']})")
@@ -449,27 +449,9 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     return {t["box"]["name"]: t["vmid"] for t in targets_all}
 
 
-# Destroy AFTER the linked clones, which depend on the template's base disk.
-OTHER_RUN = "another run of this competition"
-
-
-def _destroy_template(node, vmid, expect_tags):
-    """A VM carrying THIS competition's tag but another run's id is never touched — the caller
-    reports it as blocking, not a foreign skip."""
-    verdict, tags, vm = vm_occupancy(node, vmid, expect_tags)
-    if verdict == "absent":
-        return None
-    if verdict == "unknown":
-        return f"vmid {vmid} could not be classified (unreadable) — check by hand"
-    if verdict in (OWNED, MARKER):
-        destroy_vm_if_exists(node, vmid, expect_tags=expect_tags)
-        return None
-    comp = comp_name_from_tags(expect_tags or ())
-    if verdict == MISSING and comp and f"comp-{comp}" in tags:
-        return (f"{OTHER_RUN} holds vmid {vmid} "
-                f"({vm.get('name') or '?'}, tags: {';'.join(sorted(tags))}) — not touched")
-    return (f"vmid {vmid} is occupied by a foreign VM ({vm.get('name') or '?'}, "
-            f"tags: {';'.join(sorted(tags)) or 'none'}) — skipped")
+# Destroy AFTER the linked clones, which depend on the template's base disk. The verdict
+# logic itself is shared with the engine template's destroy.
+_destroy_template = destroy_role_template
 
 
 def destroy_golden_set(node, engine_vmid, num_box_types, expect_tags=None, slot=0):

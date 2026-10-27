@@ -133,7 +133,12 @@ def multinode_plan(comp_dir, boxes, teams, engine_vmid, placement, engine_mgmt_i
                          engine_mgmt_ip=engine_mgmt_ip, placement=placement,
                          red01_vmid=red.get("vmid")
                          or red01_ops.red01_vmid_for(comp_dir, engine_vmid, placement),
-                         red01_ip=red.get("ip") or "",
-                         # A recorded address was typed or proven free when selected; not re-litigated.
-                         red01_ip_explicit=bool(red.get("ip")),
+                         # A Compfile red01_ip is a pin preflight must still check; it is not
+                         # in the placement until red01 is recorded.
+                         red01_ip=(red.get("ip")
+                                   or red01_ops.red01_ip_for(comp_dir, placement) or ""),
+                         # Only an operator-typed address skips the free-address liveness gate
+                         # (`explicit_ip`), never one this tool auto-selected.
+                         red01_ip_explicit=bool(red.get("explicit_ip")
+                                                or red01_ops.red01_ip_is_explicit(comp_dir)),
                          resuming=not check_free)

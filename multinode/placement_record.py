@@ -108,8 +108,12 @@ def write_red01_ip(comp_dir, placement, ip):
 def reserved_vmids(placement):
     from red.red01_ops import default_red_vmid
     engine_vmid = int(placement["engine_vmid"])
+    # The RECORDED red01 wins: a Compfile red01_vmid is not the derived default, and missing
+    # it let a team block collide with a red01 reserve preflight had already honoured.
+    recorded_red = (placement.get("red01") or {}).get("vmid")
     reserved = {engine_vmid, engine_template_vmid(engine_vmid),
-                default_red_vmid(engine_vmid, len(placement.get("satellites") or []))}
+                int(recorded_red) if recorded_red
+                else default_red_vmid(engine_vmid, len(placement.get("satellites") or []))}
     for slot in set((placement.get("slots") or {}).values()):
         reserved.update(golden_slot_span(engine_vmid, slot))
     for sat in placement.get("satellites") or []:
@@ -169,14 +173,15 @@ def activate_placement(placement):
     # Keyed by PVE host name, not the nodes.json record name: every node-scoped API path
     # uses /nodes/<pve-name>/...
     routes = {}
-    for rec in placement["nodes"].values():
-        token = os.environ.get(rec["token_env"])
+    for raw in placement["nodes"].values():
+        rec = NodeRecord.from_json(raw)
+        token = os.environ.get(rec.token_env)
         if not token:
             raise SystemExit(
-                f"  ERROR: nodes.json node '{rec['name']}' points at token_env "
-                f"'{rec['token_env']}' but that env var is empty/absent — set the token in "
+                f"  ERROR: nodes.json node '{rec.name}' points at token_env "
+                f"'{rec.token_env}' but that env var is empty/absent — set the token in "
                 f"the environment (never in nodes.json, which is committed).")
-        routes[rec["node"]] = (rec["endpoint"], token)
+        routes[rec.node] = (rec.endpoint, token, rec.tls_fingerprint or "")
     register_node_routes(routes)
     return restore
 

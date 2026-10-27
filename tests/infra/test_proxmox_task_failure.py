@@ -133,7 +133,7 @@ class EngineTemplateCloneRetry(unittest.TestCase):
     def _run(self, cluster, wait):
         stack = ExitStack()
         stack.enter_context(patch.object(client, "_route_for_path",
-                                        lambda path: ("https://h:8006", "tok")))
+                                        lambda path: ("https://h:8006", "tok", "")))
         stack.enter_context(patch.object(client, "proxmox_api_for", cluster.fake_api_for))
         stack.enter_context(patch.object(engine_template_ops, "wait_for_proxmox_task", wait))
         stack.enter_context(patch.object(engine_template_ops.time, "sleep", lambda *_: None))
@@ -172,7 +172,7 @@ class EngineTemplateCloneRetry(unittest.TestCase):
 
         stack = ExitStack()
         stack.enter_context(patch.object(client, "_route_for_path",
-                                         lambda path: ("https://h:8006", "tok")))
+                                         lambda path: ("https://h:8006", "tok", "")))
         stack.enter_context(patch.object(client, "proxmox_api_for", cluster.fake_api_for))
         stack.enter_context(patch.object(engine_template_ops, "wait_for_proxmox_task", wait))
         stack.enter_context(patch.object(engine_template_ops.time, "sleep", slept.append))
@@ -233,7 +233,7 @@ class GoldenCloneQueueRetry(unittest.TestCase):
                     "box": {"template": "web-tpl", "name": "web01"}}]
         stack = ExitStack()
         stack.enter_context(patch.object(client, "_route_for_path",
-                                         lambda path: ("https://h:8006", "tok")))
+                                         lambda path: ("https://h:8006", "tok", "")))
         stack.enter_context(patch.object(client, "proxmox_api_for", fake))
         stack.enter_context(patch.object(golden_ops, "wait_for_proxmox_task", wait))
         stack.enter_context(patch.object(golden_ops.time, "sleep", lambda *_: None))

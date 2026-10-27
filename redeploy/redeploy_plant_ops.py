@@ -1,80 +1,178 @@
-"""The configure half shared by every redeploy mode: scoped nakon plant, hardening, domain re-run."""
+"""The configure half shared by every redeploy mode: scoped nakon plant, hardening, domain
+re-run, and the one post-`tz-base` convergence sequence.
+
+Every mode that resets a box's disk (rollback-base, rebuild, reset's later rungs) must run the
+SAME sequence the deploy runs, in the same order — planting the disruptive final stage before
+the AD joins is the brick hazard the stage split exists to prevent, and taking `tz-ready`
+before the account-file pins bakes a half-planted box in as "as delivered".
+"""
 
 import json
+from pathlib import Path
+
 import pipeline_api
 
-from estate import state as estate_state
-
+from common.constants import SNAP_BASE, SNAP_READY
 from common.utils import compfile_flag
-from pathlib import Path
-from redeploy.redeploy_select_ops import box_platform
 from estate import config
+from estate import state as estate_state
+from guests import clean_trails
+from guests.converge_ops import record_stage, run_stage, stage_machines
+from redeploy.redeploy_select_ops import box_platform
+
+
+def _nakon_jobs(comp_dir):
+    return max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
+
+
+def _stage_pass(name, path, targets, rctx, *, strict=False, bundle=None):
+    """One scoped nakon stage over `targets`; no-op when the stage file has nothing for them."""
+    if not path.exists():
+        print(f"  ({name} stage file missing — skipping)")
+        return None
+    machines = stage_machines(path)
+    wanted = {t["machine"] for t in targets}
+    selected = [m for m in machines if m["name"] in wanted]
+    if not selected:
+        print(f"  (no {name}-stage configs for the selected boxes — skipping)")
+        return None
+    print(f"  {name.capitalize()}-stage pass on {len(selected)} machine(s)...")
+    result = run_stage(path, selected, ssh_key=Path(rctx.ctx["ssh_key_path"]),
+                       scoring_user=config.active().engine.username,
+                       scoring_ip=rctx.ctx["scoring_engine_ip"], jobs=_nakon_jobs(rctx.comp_dir),
+                       strict=strict, label=name, comp_dir=rctx.comp_dir, bundle=bundle)
+    record_stage(rctx.state, selected, result, lambda: estate_state.write_flat(
+        rctx.comp_dir, rctx.state), name)
+    return result
+
+
+def linux_base_ready(targets, rctx):
+    """The Linux trio every plant path needs, in the order that avoids retry ladders.
+
+    Order matters: the NOPASSWD sudoers grant must land BEFORE the DNS fix, whose sudo calls
+    soft-fail until it does — re-inverted, fix_dns burns its full 8x15s retry ladder first.
+    """
+    linux_targets = [t for t in targets if box_platform(t["box"]) == "linux"]
+    pipeline_api.setup_ubuntu_auth(linux_targets, rctx.ctx)
+    pipeline_api.fix_dns_on_boxes(linux_targets, rctx.ctx)
+    pipeline_api.prep_apt_on_boxes(linux_targets, rctx.ctx,
+                                   use_proxy=_apt_cache(rctx.comp_dir))
+    pipeline_api.ensure_nat_forwarding(rctx.ctx)
+    return linux_targets
 
 
 def run_nakon_and_harden(targets, rctx, nakon_config_path, nakon_bundle):
-    ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
-    key = Path(ctx["ssh_key_path"])
-    scoring_user = config.active().engine.username
-    scoring_ip = ctx["scoring_engine_ip"]
+    """Auth/DNS/apt + the post-clone plant + hardening + the late pass (the light modes)."""
+    comp_dir, state = rctx.comp_dir, rctx.state
+    linux_targets = linux_base_ready(targets, rctx)
 
-    linux_targets = [t for t in targets if box_platform(t["box"]) == "linux"]
-    # Order matters: the NOPASSWD sudoers grant must land BEFORE the DNS fix, whose sudo calls
-    # soft-fail until it does — re-inverted, fix_dns burns its full 8x15s retry ladder first.
-    pipeline_api.setup_ubuntu_auth(linux_targets, ctx)
-    pipeline_api.fix_dns_on_boxes(linux_targets, ctx)
-
-    pipeline_api.ensure_nat_forwarding(ctx)
-
-    machines = [t["machine"] for t in targets]
-    if nakon_bundle is not None and nakon_config_path is not None:
-        # `nakon --only` on an absent box errors "matched no machine", which the retry loop misreads as dead SSH.
-        staged = {m["name"] for m in json.loads(Path(nakon_config_path).read_text())["machines"]}
-        machines = [m for m in machines if m in staged]
-    if nakon_bundle is None or nakon_config_path is None or not machines:
+    wanted = {t["machine"] for t in targets}
+    if nakon_bundle is None or nakon_config_path is None:
         print("  (no nakon replant stage for the selected box(es) — skipping the plant pass)")
     else:
-        print(f"  Running Nakon on {len(machines)} machine(s): {', '.join(machines)}")
-        # strict=False mirrors phase 6: one flaky pin must not abort a mid-event pre-domain pass.
-        nakon_jobs = max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4))
-        result = pipeline_api.run_nakon(
-            key, scoring_user, scoring_ip, nakon_bundle, nakon_config_path,
-            only=machines,
-            timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
-            strict=False, jobs=nakon_jobs,
-        )
-        # Append, never replace: verify's plant-integrity line reads this.
-        state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
-            f"redeploy: {line}" for line in result.failed[:20]]
-        # The document holds the only copy of the box passwords; write_flat is the atomic writer.
-        estate_state.write_flat(comp_dir, state)
+        # `nakon --only` on an absent box errors "matched no machine", which the retry loop
+        # misreads as dead SSH — so filter to the staged machines ourselves.
+        selected = [m for m in stage_machines(nakon_config_path) if m["name"] in wanted]
+        if not selected:
+            print("  (no nakon replant stage for the selected box(es) — skipping the plant pass)")
+        else:
+            print(f"  Running Nakon on {len(selected)} machine(s): "
+                  f"{', '.join(m['name'] for m in selected)}")
+            # strict=False mirrors phase 6: one flaky pin must not abort a pre-domain pass.
+            result = run_stage(nakon_config_path, selected,
+                               ssh_key=Path(rctx.ctx["ssh_key_path"]),
+                               scoring_user=config.active().engine.username,
+                               scoring_ip=rctx.ctx["scoring_engine_ip"],
+                               jobs=_nakon_jobs(comp_dir), strict=False, label="redeploy",
+                               comp_dir=comp_dir, bundle=nakon_bundle)
+            record_stage(state, selected, result,
+                         lambda: estate_state.write_flat(comp_dir, state), "redeploy")
 
-    pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, ctx, box_creds=state.get("box_creds"))
+    pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, rctx.ctx,
+                                       box_creds=state.get("box_creds"))
     run_late_pass(targets, rctx)
+
+
+def _box_username(rctx):
+    from common.utils import load_users_config
+    return load_users_config(rctx.comp_dir)[0]
+
+
+def _apt_cache(comp_dir):
+    return bool(compfile_flag(comp_dir / "Compfile", "apt_cache", 1))
+
+
+def post_base_converge(targets, rctx, *, take_base=False):
+    """The full post-`tz-base` sequence a disk-resetting mode must run.
+
+    predomain -> fix_services -> domains -> final -> late -> trail wipe -> tz-ready.
+    Returns False when the domain chain could not run (the caller must NOT take `tz-ready`).
+    """
+    comp_dir, node = rctx.comp_dir, rctx.node
+    linux_targets = linux_base_ready(targets, rctx)
+
+    if take_base:
+        print(f"  Snapshotting rebuilt boxes as '{SNAP_BASE}'...")
+        for t in targets:
+            pipeline_api.take_snapshot(t.get("node") or node, t["vmid"], SNAP_BASE,
+                                       description="tezcatlipoca: reset to base, pre-Nakon")
+
+    _stage_pass("predomain", comp_dir / ".nakon-predomain.json", targets, rctx)
+    pipeline_api.fix_services_on_boxes(comp_dir, linux_targets, rctx.ctx,
+                                       box_creds=rctx.state.get("box_creds"))
+    try:
+        domain_settled = rerun_domain_configs(targets, rctx, comp_dir / ".nakon-postclone.json")
+    except Exception:
+        print("  tz-ready NOT re-taken — the domain chain failed above, so the boxes are "
+              "not in an 'as delivered' state.")
+        raise
+    _stage_pass("final", comp_dir / ".nakon-final.json", targets, rctx)
+    # After every account writer above, so the packet's promised modes reach the box.
+    run_late_pass(targets, rctx)
+
+    try:
+        clean_trails.clean_trails(
+            comp_dir,
+            clean_trails.creds_for(rctx.ctx["ssh_key_path"],
+                                   rctx.ctx["scoring_engine_ip"],
+                                   _box_username(rctx), rctx.state.get("box_password")),
+            targets=clean_trails.targets_from(targets))
+    except Exception as e:                                   # noqa: BLE001 - never fatal
+        print(f"  WARNING: trail wipe failed ({type(e).__name__}: {e}) — box logs still "
+              f"hold the deploy")
+
+    if not domain_settled:
+        print("  tz-ready NOT re-taken — domain configuration could not run (see above); "
+              "snapshotting now would bake a broken state in as 'delivered'.")
+        return False
+    print(f"  Snapshotting boxes as '{SNAP_READY}'...")
+    for t in targets:
+        pipeline_api.take_snapshot(t.get("node") or node, t["vmid"], SNAP_READY,
+                                   description="tezcatlipoca: as delivered (re-taken by redeploy)")
+    return True
 
 
 def run_late_pass(targets, rctx):
 # fix_services_on_boxes' credlist useradd recreates /etc/passwd, /etc/shadow and /etc/group at
 #     default modes, so this last pass re-applies the mode pins after every account writer.
-    ctx, comp_dir, state = rctx.ctx, rctx.comp_dir, rctx.state
+    comp_dir = rctx.comp_dir
     path = comp_dir / ".nakon-late.json"
     if not path.exists():
         print("  (.nakon-late.json is missing — no account-file mode pins to replay; "
               "the range predates the last pass)")
         return
-    staged = {m["name"] for m in json.loads(path.read_text())["machines"]}
-    machines = [t["machine"] for t in targets if t["machine"] in staged]
-    if not machines:
+    wanted = {t["machine"] for t in targets}
+    selected = [m for m in stage_machines(path) if m["name"] in wanted]
+    if not selected:
         return
-    print(f"  Account-file mode pass on {len(machines)} machine(s) (after hardening)...")
-    result = pipeline_api.run_nakon(
-        Path(ctx["ssh_key_path"]), config.active().engine.username, ctx["scoring_engine_ip"],
-        pipeline_api.build_nakon_bundle(path), path, only=machines,
-        timeout=max(2400, pipeline_api.PER_MACHINE_NAKON_BUDGET * len(machines)),
-        strict=False, jobs=max(1, compfile_flag(comp_dir / "Compfile", "nakon_jobs", 4)))
-    if result.failed:
-        state["nakon_failed_steps"] = list(state.get("nakon_failed_steps") or []) + [
-            f"redeploy late-stage: {line}" for line in result.failed[:20]]
-        estate_state.write_flat(comp_dir, state)
+    print(f"  Account-file mode pass on {len(selected)} machine(s) (after hardening)...")
+    result = run_stage(path, selected, ssh_key=Path(rctx.ctx["ssh_key_path"]),
+                       scoring_user=config.active().engine.username,
+                       scoring_ip=rctx.ctx["scoring_engine_ip"],
+                       jobs=_nakon_jobs(comp_dir), strict=False, label="late",
+                       comp_dir=comp_dir)
+    record_stage(rctx.state, selected, result,
+                 lambda: estate_state.write_flat(comp_dir, rctx.state), "late")
 
 
 def _domain_config_path(comp_dir, fallback):
@@ -134,7 +232,7 @@ def prepare_nakon_assets(comp_dir, boxes):
 # Pre-domain re-plants run the post-clone stage only; golden-stage installs ride the linked clone.
     postclone = comp_dir / ".nakon-postclone.json"
     if postclone.exists():
-        if not json.loads(postclone.read_text()).get("machines"):
+        if not stage_machines(postclone):
             print("  (postclone stage is empty — every plant rides the golden clone; "
                   "nakon has nothing to re-plant. Auth/DNS/hardening still re-runs.)")
             return None, None

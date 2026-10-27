@@ -39,8 +39,8 @@ points, counted only for injects whose window opened inside the run. `notebook_e
 memory, not a write-only diary. `timeouts` — cycles cut at the per-cycle cap
 (`TEZ_CYCLE_TIMEOUT`, 600 s), and only those: a cycle the event window cut is reported separately
 as `window_cuts` and does not gate, because the window ending is not evidence blue is slow. A cap
-cut means the cycle needed longer than its scope — raise the cap or, where the harness supports
-it (`--blue2-base-url`), give that team another endpoint — and `cycles_rc0` still fails a run
+cut means the cycle needed longer than its scope — raise the cap, or give that team another
+endpoint if the harness supports it (`--blue2-base-url`) — and `cycles_rc0` still fails a run
 that never completed a cycle. A shared endpoint is announced at launch with the per-team time it
 leaves; multi-team ranges on one endpoint need a longer window or team2 on its own endpoint.
 
@@ -52,9 +52,9 @@ is an observability limit rather than a failed red. Blue's self-reported `EVICTE
 separately as blue activity, never as red evidence. Time-to-restore is reported against
 `RESTORE_TTR_GATE_MIN` but does not gate the run on its own.
 
-Per-team LLM endpoints were considered and declined: blue already serialises on one lock per base
-URL (`stage_run` builds one lock per distinct endpoint), and an endpoint that cannot take
-concurrent load cannot serve an extra team either.
+Per-team LLM endpoints exist but are opt-in and per-team (`--blue2-base-url`/`--blue2-model`
+only; every other team shares the default). Blue serialises on one lock per base URL
+(`stage_run` builds one lock per distinct endpoint), so this splits load rather than adding it.
 
 A gate whose underlying data the run dir lacks prints `n/a` and does not fail the run — everything
 scoreboard-derived needs `scoreboard-state.jsonl` — so the honest red-side numbers carry the

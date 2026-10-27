@@ -127,13 +127,15 @@ function VpnSetup({ vpn }) {
       <p className="mt-2 text-sm text-muted">
         To reach your boxes over the network (SSH, RDP) and the scoreboard, install Tailscale
         and enroll your device: find your name below, run its command once, one device per key.
+        <code>--accept-routes</code> is required — without it the range router is visible in
+        Tailscale but no box answers.
       </p>
       <div className="mt-4 space-y-2">
         {vpn.people.map((p) => (
           <div key={p.person} className="flex items-baseline gap-3">
             <span className="w-28 shrink-0 truncate text-right font-mono text-xs text-faint">{p.person}</span>
             <code className="block min-w-0 flex-1 overflow-x-auto rounded-xl bg-sunken px-3 py-2 font-mono text-[12px] shadow-inset">
-              tailscale up --login-server {vpn.server_url} --authkey {p.key}
+              tailscale up --login-server {vpn.server_url} --authkey {p.key} --accept-routes
             </code>
           </div>
         ))}

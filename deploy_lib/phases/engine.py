@@ -7,7 +7,7 @@ from engine.engine_bootstrap_ops import bootstrap_scoring_engine
 from engine.engine_event_ops import push_event_conf
 from engine.engine_health_ops import ensure_nat_forwarding
 from engine.engine_identity_ops import prepare_engine_from_template
-from golden.golden_target_ops import _quote_sshkeys
+from common.ssh_ops import quote_sshkeys
 from net.jump_ops import build_jump_vms, red_segment_from_env
 from infra.ownership import destroy_vm_if_exists, retag_ownership
 from multinode.placement_record import record_of, resolved_mgmt_bridge
@@ -30,16 +30,15 @@ def engine_build_ctx(ctx):
     return {
         "ssh_key_path": ctx.ssh_key_abs,
         "vm_username": config.active().engine.username,
-        "ssh_public_key_quoted": _quote_sshkeys(config.active().ssh.public_key),
+        "ssh_public_key_quoted": quote_sshkeys(config.active().ssh.public_key),
     }
 
 
 def ensure_engine_template(ctx):
-    from estate import apply as estate_apply
     quotient_ref = compfile_value(ctx.comp_dir / "Compfile", "quotient_ref")
     engine_inputs = engine_hash_inputs(
         int(config.active().require("proxmox.template_vm_id")), quotient_ref,
-        estate_apply.create_engine, bootstrap_scoring_engine)
+        bootstrap_scoring_engine)
     engine_hash = hash_from_inputs(engine_inputs)
     stored = load_template_hashes(ctx.comp_dir)
     tmpl = find_engine_template(ctx.node, ctx.engine_vmid)
@@ -104,13 +103,18 @@ def ensure_engine_template(ctx):
 
 def build_satellite_jumps(ctx, apply_ctx):
 # fail-loud: nothing downstream (golden plants, nakon, scoring) works without the engine -> jump -> satellite-bridge paths.
+    # A satellite team's gateway is its jump, so the jump needs the C2 callback DNAT to carry
+    # a payload's check-in to red01 (phase 7 would otherwise install it only on the engine).
+    from red import gaia_ops
+    callback_port = gaia_ops.c2_plan(ctx.comp_dir)["callback_port"]
     with timed(ctx.comp_dir, 2, "jump_vms", f"x{len(ctx.placement['satellites'])}"):
         build_jump_vms(ctx.placement, ctx.engine_vmid, engine_build_ctx(ctx), ctx.comp_name,
                        ctx.engine_mgmt_ip,
                        engine_mgmt_gw=(config.active().engine.mgmt_gw
                                        or DEFAULT_ENGINE_MGMT_GW),
                        run_id=ctx.run_id,
-                       red_segment=red_segment_from_env())
+                       red_segment=red_segment_from_env(),
+                       callback_port=callback_port)
     with timed(ctx.comp_dir, 2, "routing_converge"):
         verify_satellite_routing(ctx.placement, apply_ctx)
     document = ctx.document()

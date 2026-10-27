@@ -13,8 +13,10 @@ from unittest.mock import MagicMock, patch
 
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
+from tests._deploy_patch import fake_nakon_result  # noqa: E402
 
 from deploy_lib.phases import final, finish  # noqa: E402
+from guests import converge_ops  # noqa: E402
 
 TEAMS = {"team1": {"identifier": "101", "password": "p1"},
          "team2": {"identifier": "102", "password": "p2"}}
@@ -58,14 +60,16 @@ class Tail(unittest.TestCase):
         ctx = _ctx(self.comp, **kw)
         mocks = {}
         with patch.object(final, "deploy_domain_configs") as mocks["domains"], \
-                patch.object(final, "build_nakon_bundle", return_value="bundle") as mocks["bundle"], \
-                patch.object(final, "run_nakon",
-                             return_value=SimpleNamespace(failed=["x: boom"], machines=machines)) \
+                patch.object(converge_ops, "build_nakon_bundle", return_value="bundle"), \
+                patch.object(converge_ops, "run_nakon",
+                             return_value=fake_nakon_result(["x: boom"])) \
                 as mocks["nakon"], \
                 patch.object(final, "reensure_mysql_credlist_users") as mocks["mysql"], \
-                patch.object(final.tlaloc_ops, "plant_assume_breach") as mocks["red"], \
+                patch.object(final.tlaloc_ops, "plant_assume_breach",
+                             return_value={"red_ip": "10.0.0.240"}) as mocks["red"], \
+                patch.object(final.tlaloc_ops, "start_director") as mocks["red_start"], \
                 patch.object(final, "run_concurrent") as mocks["snap"], \
-                patch.object(final, "record_stage_coverage") as mocks["cov"]:
+                patch.object(final, "record_stage") as mocks["cov"]:
             final.phase7_domains_and_final(ctx)
         return ctx, mocks
 
@@ -77,8 +81,12 @@ class Tail(unittest.TestCase):
         ctx, m = self._p7([{"name": "web01-team101"}], late=[{"name": "web01-team101"}])
         self.assertEqual(m["nakon"].call_count, 2)
         self.assertEqual(m["cov"].call_count, 2)
-        self.assertEqual(m["nakon"].call_args_list[1].args[4], ctx.late_config_path)
-        self.assertIn("late: x: boom", ctx.state["nakon_failed_steps"])
+        # The loop starts only after the last stage, the wipe and the snapshot.
+        m["red_start"].assert_called_once()
+        # run_stage(ssh_key, user, ip, bundle, path, ...): args[4] is the stage file.
+        self.assertEqual([c.args[4] for c in m["nakon"].call_args_list],
+                         [ctx.final_config_path, ctx.late_config_path])
+        self.assertEqual([c.args[4] for c in m["cov"].call_args_list], ["final", "late"])
 
 
     def test_phase7_normal_path_prints_the_banner(self):

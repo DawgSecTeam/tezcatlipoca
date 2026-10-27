@@ -45,9 +45,16 @@ def orphan_reclaim(args):
         print(f"  '{run_tag}' is not a run tag — pass the tag itself (run-<8hex>), "
               f"not the bare id.")
         return 1
+    # A orphaned range can span every node its deploy reached: reclaiming only the ambient
+    # node left the satellite VMs and their jump behind, and reported a clean result.
     node = config.active().proxmox.node
+    # A range spans every node its deploy reached (nodes.json); reclaiming only the ambient
+    # node left the satellite VMs and their jump behind and reported a clean result.
+    from multinode.nodes_config import load_nodes_config
+    records, _problems = load_nodes_config()
+    nodes = list(dict.fromkeys([node] + [r.node for r in records or []]))
     print("─── Orphan reclaim " + "─" * 43)
-    print(f"  Node        : {node}")
+    print(f"  Node(s)     : {', '.join(nodes)}")
     print(f"  Ownership   : tezcatlipoca + comp-{args.orphan_comp} + {run_tag}")
     print("  Templates   : " + ("destroyed too" if args.allow_templates
                                 else "kept (--allow-templates to include)"))
@@ -60,14 +67,14 @@ def orphan_reclaim(args):
                 print("Cancelled — nothing was destroyed.")
                 return 0
         result = orphan_ops.reclaim(args.orphan_comp, run_tag, node=node,
-                                    allow_templates=args.allow_templates)
+                                    nodes=nodes, allow_templates=args.allow_templates)
     except Refusal as r:
         print(f"\n  REFUSED — {r}")
         return 1
 
     print("\n─── Result " + "─" * 52)
     # `scanned` tells "nothing matched" from "wrong node": a no-op must not read as a clean estate.
-    print(f"  scanned      : {result['scanned']} guest(s) on {node}")
+    print(f"  scanned      : {result['scanned']} guest(s) on {', '.join(result['nodes'])}")
     for row in result["destroyed"]:
         print(f"  destroyed    : vmid {row['vmid']} ({row['name']}) — {row['role']}")
     for row in result["kept_templates"]:

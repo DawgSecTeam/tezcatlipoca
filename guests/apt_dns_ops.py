@@ -4,7 +4,8 @@ import shlex
 
 from infra.guest_exec import (diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent,)
 from common.ssh_ops import box_ssh_retry
-from common.utils import DNS_FIX_CMD, DNS_FIX_CMD_ROOT, PRINT_LOCK, record_degradation, run_concurrent
+from common.utils import (PRINT_LOCK, dns_fix_cmd, dns_fix_cmd_root, record_degradation,
+                          run_concurrent)
 from guests.box_settle_ops import wait_boxes_settled, _box_settled_via_ssh
 from estate import config
 
@@ -51,10 +52,10 @@ def _apt_prep_script(gateway=None):
 def prep_apt_on_boxes(targets, ctx, use_proxy=True):
 # SSH+sudo is primary: the guest agent is unreliable in the minute after a tz-base rollback/reboot. Non-fatal per box.
     box_username = ctx.get("box_username", "ubuntu")
-    node = config.active().proxmox.node
+    default_node = config.active().proxmox.node
     print("  Prepping apt on Linux boxes (disable apt-daily/unattended-upgrades, refresh index)...")
     # On agentless-data nodes (realm) the settle check falls back to SSH.
-    unsettled = wait_boxes_settled(targets, node, timeout=240,
+    unsettled = wait_boxes_settled(targets, default_node, timeout=240,
                                    ssh_fallback=lambda t: _box_settled_via_ssh(ctx, t),
                                    cloud_init_ctx=ctx)
     if unsettled:
@@ -67,7 +68,8 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
         gateway = f"192.168.{t['identifier']}.1" if use_proxy else None
         script = _apt_prep_script(gateway)
         remote_cmd = f"sudo bash -c {shlex.quote(script)}"
-        wait_for_guest_agent(node, t["vmid"], timeout=120)
+        box_node = t.get("node") or default_node
+        wait_for_guest_agent(box_node, t["vmid"], timeout=120)
         ok, _ = box_ssh_retry(ctx, ip, box_username, remote_cmd,
                               timeout=240, attempts=5, what="apt prep")
         if ok:
@@ -75,7 +77,7 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
                 print(f"    apt prepped on {ip}")
             return True
         try:
-            rc, _out, err = guest_agent_exec_root(node, t["vmid"], script, timeout=240)
+            rc, _out, err = guest_agent_exec_root(box_node, t["vmid"], script, timeout=240)
             if rc == 0:
                 with PRINT_LOCK:
                     print(f"    apt prepped on {ip} (via guest agent)")
@@ -94,12 +96,12 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
 
 def fix_dns_on_boxes(targets, ctx):
     box_username = ctx.get("box_username", "ubuntu")
-    node = config.active().proxmox.node
+    default_node = config.active().proxmox.node
     print("  Fixing DNS on all team boxes...")
 
     def _fix(t):
         ip = t["ip"]
-        ok, _ = box_ssh_retry(ctx, ip, box_username, DNS_FIX_CMD,
+        ok, _ = box_ssh_retry(ctx, ip, box_username, dns_fix_cmd(),
                               timeout=40, attempts=8, what="DNS fix")
         if ok:
             with PRINT_LOCK:
@@ -107,7 +109,7 @@ def fix_dns_on_boxes(targets, ctx):
             return True
         try:
             rc, _out, err = guest_agent_exec_root(
-                node, t["vmid"], DNS_FIX_CMD_ROOT, timeout=40)
+                t.get("node") or default_node, t["vmid"], dns_fix_cmd_root(), timeout=40)
             if rc == 0:
                 with PRINT_LOCK:
                     print(f"    DNS fixed on {ip} (via guest agent)")
@@ -118,7 +120,7 @@ def fix_dns_on_boxes(targets, ctx):
                 print(f"  WARNING: DNS fix failed for {ip} after 8 attempts "
                       f"and guest-agent fallback ({agent_exc}) — proceeding anyway")
                 record_degradation("DNS fix failed", f"{ip}: {agent_exc}")
-                print(diagnose_unreachable_box(node, t["vmid"]))
+                print(diagnose_unreachable_box(t.get("node") or default_node, t["vmid"]))
             return False
 
     results = run_concurrent(targets, _fix)

@@ -34,7 +34,19 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
         m["name"].rsplit("-golden", 1)[0]: m
         for m in json.loads(ctx.golden_config_path.read_text())["machines"]
     }
-    base_template_ids = _template_vmid_map(node)
+    # A multi-node range's box templates may exist only on the hosting satellite; resolve the
+    # id from whichever node in the placement actually has it (the value feeds the golden
+    # hash, and its host-specific vmid is what makes a template swap rebuild).
+    template_nodes = {node}
+    if ctx.placement:
+        template_nodes |= {rec["node"] for rec in ctx.placement["nodes"].values()}
+    maps = {name: _template_vmid_map(name) for name in sorted(template_nodes)}
+    base_template_ids = {}
+    for box in ctx.boxes:
+        for host in sorted(maps):
+            if box["template"] in maps[host]:
+                base_template_ids[box["template"]] = maps[host][box["template"]]
+                break
     ctx.golden_inputs, ctx.golden_hashes = golden_hash_entries(
         ctx.boxes, base_template_ids, golden_machines_by_box, golden_bundle,
         ctx.box_password, ctx.box_username, config.active().ssh.public_key,

@@ -4,6 +4,7 @@ import os
 
 import requests
 
+from common.constants import comp_slug
 from infra.client import proxmox_api_for, proxmox_request
 from estate import config
 
@@ -17,7 +18,7 @@ def console_user(comp_name, run_id):
     """The one PVE userid this run's portal owns (deterministic: teardown recomputes it)."""
     if not comp_name or not run_id:
         raise ValueError("console user needs both a competition name and a run id")
-    return f"tezcon-{comp_name}-{run_id}@pve"
+    return f"tezcon-{comp_slug(comp_name)}-{run_id}@pve"
 
 
 def _http_detail(e):

@@ -49,7 +49,7 @@ def takedown_fields(ev):
     return ip, svc, mode or ("firewall" if action_effect(ev) == "impact_firewall" else "stop")
 
 
-def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
+def red_metrics(events, t0, world, labels=None, win_octets=("2", "3"), teams=None):
     m = {"takedowns": 0, "timeline": [], "distinct_tactics": set(), "initial_access": set(),
          "targets": set(), "stalls": [], "restore_reactions": 0, "blue_restore_events": 0,
          "blue_restore_list": [], "windows_footholds": 0, "actions_ok": 0,
@@ -65,14 +65,14 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
                     for item in entries:
                         m["blue_restore_events"] += 1
                         m["blue_restore_list"].append(
-                            (timefmt.t_plus(timefmt.parse_ts(ev.get("ts", "1970")), t0),
+                            (timefmt.t_plus(timefmt.parse_ts(ev.get("ts") or ""), t0),
                              (item or {}).get("team") or "?",
                              (item or {}).get("target") or "",
                              (item or {}).get("service") or (item or {}).get("detail") or ""))
                 else:
                     m["blue_restore_events"] += 1
                     m["blue_restore_list"].append(
-                        (timefmt.t_plus(timefmt.parse_ts(ev.get("ts", "1970")), t0), ev.get("team") or "?",
+                        (timefmt.t_plus(timefmt.parse_ts(ev.get("ts") or ""), t0), ev.get("team") or "?",
                          ev.get("target") or "", ev.get("detail", "")))
             continue
         tactic = action_effect(ev)
@@ -87,7 +87,7 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
                     m["evictions"] += cur - prev_evicted
                 prev_evicted = cur
         ip = action_target(ev)
-        tp = timefmt.t_plus(timefmt.parse_ts(ev.get("ts", "1970")), t0)
+        tp = timefmt.t_plus(timefmt.parse_ts(ev.get("ts") or ""), t0)
         if ok and tactic != HEALTH_CHECK:
             m["distinct_tactics"].add(tactic)
             if ip:
@@ -100,7 +100,7 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
             dip, svc, mode = takedown_fields(ev)
             dip = dip or ip
             m["takedowns"] += 1
-            m["timeline"].append((tp, host_labels.host_label(dip, labels), svc, mode))
+            m["timeline"].append((tp, host_labels.host_label(dip, labels, teams), svc, mode))
             takes.append((tp, dip))
     per_ip = {}
     restored = []
@@ -122,7 +122,7 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
         # A re-kill soon after blue restored that box is a reaction even with no gap;
         # restore rows carry target=null, so the match is on the host label.
         follow_reaction = False
-        box = host_labels.host_label(dip, labels)
+        box = host_labels.host_label(dip, labels, teams)
         for rtp, _rteam, rbox in restored:
             if (rtp is not None and tp is not None
                     and 0 <= tp - rtp <= REAKILL_GAP_SEC / 60
@@ -151,5 +151,5 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3")):
                                       if ip and ip.split(".")[-1] in win_octets})
     m["distinct_tactics"] = sorted(m["distinct_tactics"])
     m["initial_access"] = sorted({t for t, _ in m["initial_access"]})
-    m["targets"] = sorted(host_labels.host_label(ip, labels) for ip in m["targets"])
+    m["targets"] = sorted(host_labels.host_label(ip, labels, teams) for ip in m["targets"])
     return m

@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import threading
 
 from multinode.nodes_config import load_nodes_config
 from infra.client import proxmox_api_for
@@ -64,18 +65,33 @@ def plan_sync(src_rec, dst_rec, template_name):
 
 
 def run_sync(plan):
+    def drain(pipe, sink):
+        # A pipe nobody drains blocks the child at ~64 KB: vzdump's progress on stderr would
+        # deadlock the whole pipeline until the operator killed it.
+        for line in iter(pipe.readline, b""):
+            sink.append(line)
+        pipe.close()
+
     p1 = subprocess.Popen(plan["commands"][0], stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE)
     p2 = subprocess.Popen(plan["commands"][1], stdin=p1.stdout,
                           stderr=subprocess.PIPE)
     p1.stdout.close()
-    _, err2 = p2.communicate()
+    src_err, dst_err = [], []
+    threads = [threading.Thread(target=drain, args=(p1.stderr, src_err), daemon=True),
+               threading.Thread(target=drain, args=(p2.stderr, dst_err), daemon=True)]
+    for thread in threads:
+        thread.start()
+    p2.wait()
     p1.wait()
+    for thread in threads:
+        thread.join(timeout=5)
     if p2.returncode != 0 or p1.returncode != 0:
-        e1 = (p1.stderr.read() or b"").decode(errors="replace").strip()
+        e1 = b"".join(src_err).decode(errors="replace").strip()
+        e2 = b"".join(dst_err).decode(errors="replace").strip()
         raise SystemExit(
             f"  ERROR: template sync failed (vzdump rc={p1.returncode}, qmrestore "
-            f"rc={p2.returncode}): {(err2 or b'').decode(errors='replace').strip()[:300]}"
+            f"rc={p2.returncode}): {e2[:300]}"
             f"{(' | src: ' + e1[:200]) if e1 else ''}")
     return plan["dst_vmid"]
 

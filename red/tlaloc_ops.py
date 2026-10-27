@@ -467,9 +467,23 @@ def _team_identifiers(team_keys):
             if team.get("identifier") is not None]
 
 
+def start_director(ssh_key, red_ip, *, runner=None):
+    """Start the red loop — call it AFTER the trail wipe and the tz-ready snapshots.
+
+    Starting it inside `plant_assume_breach` made the agent attack while phase 7 was still
+    planting late configs, wiping box logs and snapshotting: the "as delivered" restore
+    point then carried live red traffic, and the wipe raced the agent itself.
+    """
+    return start_unit(ssh_key, red_ip, runner=runner)
+
+
 def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
-                        mythic_runner=None, llm=None, llm_key=None):
-    """[7/8] Deploy red01, install the C2, seed, prove the config — every step raises."""
+                        mythic_runner=None, llm=None, llm_key=None, start_loop=True):
+    """[7/8] Deploy red01, install the C2, seed, prove the config — every step raises.
+
+    `start_loop=False` leaves the unit enabled but stopped, for a caller that has more work
+    to do on the boxes before T0 (the scrim harness always stops before the fire test).
+    """
     from infra.ownership import Ownership
     from red import gaia_ops, red01_ops
     comp_dir = Path(getattr(ctx, "comp_dir"))
@@ -595,8 +609,11 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         print(f"  tlaloc      : seed manifest proves {seeded} box(es) planted")
     else:
         print("  tlaloc      : assume_breach off — no day-0 seed or manifest")
-    start_unit(ssh_key, red_ip, runner=runner)
-    print(f"  tlaloc      : loop started on red01 ({UNIT})")
+    if start_loop:
+        start_unit(ssh_key, red_ip, runner=runner)
+        print(f"  tlaloc      : loop started on red01 ({UNIT})")
+    else:
+        print(f"  tlaloc      : unit installed on red01 ({UNIT}); NOT started")
     summary = {"engine": "tlaloc", "vmid": red_vmid, "red_ip": red_ip,
                "node": identity["node"], "config": str(cfg_path),
                "manifest": manifest.get("path") if manifest else None, "at": _now()}
@@ -612,12 +629,18 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
 
 
 def destroy_tlaloc_red(comp_dir, *, ownership, engine_ip="", engine_user="sysadmin",
-                       env=None, runner=None, ssh_key=None, red_ip=None):
-    """Stop the unit with its verdict captured; only then destroy this run's red01."""
+                       env=None, runner=None, ssh_key=None, red_ip=None, vmid=None):
+    """Stop the unit with its verdict captured; only then destroy this run's red01.
+
+    `vmid` is the caller's fallback (a scrim's --red-vmid or manifest) when the state has no
+    record; without it the destroy refused a red01 the caller had just named.
+    """
     from red import red01_ops
     runner = runner or _default_runner
     env = env if env is not None else os.environ
-    identity = red01_ops.recorded_identity(comp_dir)
+    identity = dict(red01_ops.recorded_identity(comp_dir))
+    if vmid and not identity.get("vmid"):
+        identity["vmid"] = vmid
     ssh_key = ssh_key or env.get("TLALOC_SSH_KEY")
     red_ip = red_ip or identity.get("ip") or env.get("TLALOC_RED_IP")
     if ssh_key and red_ip:

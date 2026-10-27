@@ -3,31 +3,23 @@
 import json
 from functools import partial
 
-from common.constants import PER_MACHINE_NAKON_BUDGET, SNAP_READY
+from common.constants import SNAP_READY
+from guests.converge_ops import record_clean_coverage, record_stage, run_stage, stage_machines
 from guests.domain_ops import deploy_domain_configs
 from guests.service_fixup_ops import reensure_mysql_credlist_users
-from nakonops.nakon_bundle_ops import build_nakon_bundle
-from nakonops.nakon_run_ops import run_nakon
 from common.timing import timed
 from common.utils import compfile_flag, run_concurrent
 from red import tlaloc_ops
 
-from deploy_lib.coverage import record_clean_coverage, record_stage_coverage
 from deploy_lib.phases._snapshots import snap_ready
 
 
-def _wipe_targets(managed_targets):
-    # The box record is nested under t["box"]: reading top-level keys silently yields
-    # windows=False and sends Windows boxes down the Linux wipe path, where they hang.
-    from common.windows_ops import is_windows_template
-    return [{"ip": t["ip"],
-             "name": (t.get("box") or {}).get("name") or "",
-             "windows": is_windows_template((t.get("box") or {}).get("template", ""))}
-            for t in managed_targets]
-
-
 def _publish_red_intel_state(ctx):
-    """tlaloc's sensors read the scoreboard as admin; the file holds box passwords."""
+    """tlaloc's sensors read the scoreboard as admin; the file holds box passwords.
+
+    It is a staged INPUT to tlaloc's intel contract (tlaloc/intel/base.py), not a second copy
+    of the state document: the agent only ever sees what the deploy stages onto red01.
+    """
     from config.config_ops import write_text_atomic
     write_text_atomic(ctx.comp_dir / ".deploy_state.json", json.dumps({
         "box_password": ctx.box_password,
@@ -49,25 +41,17 @@ def phase7_domains_and_final(ctx):
 
     # AFTER domain promotion on purpose: these configs break the DNS/apt realmd joins need and
     # would brick a member box's domain-join reboot; nothing downstream reboots or needs apt.
-    final_machines = json.loads(ctx.final_config_path.read_text())["machines"]
+    final_machines = stage_machines(ctx.final_config_path)
     if not final_machines:
         record_clean_coverage(ctx)
-    if final_machines:
-        print(f"  Final-stage pass (disruption + boot-hostile) on {len(final_machines)} machine(s)...")
-        final_bundle = build_nakon_bundle(ctx.final_config_path)
-        with timed(ctx.comp_dir, 7, "nakon", f"final x{len(final_machines)}"):
-            result = run_nakon(ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip, final_bundle,
-                               ctx.final_config_path,
-                               timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(final_machines)),
-                               strict=False, jobs=ctx.nakon_jobs)
-        # Merge, not overwrite: a failure in both passes must keep the pre-domain tally.
-        merged = list(ctx.state.get("nakon_failed_steps") or [])
-        merged += [f"final: {line}" for line in result.failed[:20]]
-        seen = set()
-        ctx.state["nakon_failed_steps"] = [x for x in merged if not (x in seen or seen.add(x))][:40]
-        # Saving is mandatory even on a green pass: record_stage_coverage may have cleared a
-        # stale entry, and an unsaved clear leaves verify's coverage gate red.
-        record_stage_coverage(ctx.state, final_machines, result, ctx.save_state)
+    else:
+        print(f"  Final-stage pass (disruption + boot-hostile) on "
+              f"{len(final_machines)} machine(s)...")
+        result = run_stage(ctx.final_config_path, final_machines, ssh_key=ctx.ssh_key,
+                           scoring_user=ctx.scoring_user, scoring_ip=ctx.scoring_ip,
+                           jobs=ctx.nakon_jobs, strict=False, label="final",
+                           comp_dir=ctx.comp_dir)
+        record_stage(ctx.state, final_machines, result, ctx.save_state, "final")
 
     # The mysql final-stage plants rebuild the auth tables and take the credlist SQL accounts
     # fix_services created with them, failing the auth-based sql check on every team copy.
@@ -82,35 +66,38 @@ def phase7_domains_and_final(ctx):
     # compromised, and a range with no red team aborts the deploy rather than degrade.
     print("  Planting assume-breach red presence (tlaloc: red01 + C2 + persistence)...")
     with timed(ctx.comp_dir, 7, "red"):
-        tlaloc_ops.plant_assume_breach(ctx)
+        # The loop starts at the END of this phase: a live agent would generate traffic while
+        # the late pass still writes account files, the trail wipe still runs and tz-ready is
+        # still being taken.
+        red_summary = tlaloc_ops.plant_assume_breach(ctx, start_loop=False)
 
     # Last of the account writers (useradd resets /etc/{passwd,shadow,group} to default modes,
     # undoing any earlier plant), but before the trail wipe so this pass leaves no SSH trace.
-    late_machines = json.loads(ctx.late_config_path.read_text())["machines"]
+    late_machines = stage_machines(ctx.late_config_path)
     if late_machines:
         print(f"  Account-file mode pass on {len(late_machines)} machine(s) "
               f"(after the last account writer)...")
-        late_bundle = build_nakon_bundle(ctx.late_config_path)
-        with timed(ctx.comp_dir, 7, "nakon", f"late x{len(late_machines)}"):
-            result = run_nakon(ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip, late_bundle,
-                               ctx.late_config_path,
-                               timeout=max(2400, PER_MACHINE_NAKON_BUDGET * len(late_machines)),
-                               strict=False, jobs=ctx.nakon_jobs)
-        merged = list(ctx.state.get("nakon_failed_steps") or [])
-        merged += [f"late: {line}" for line in result.failed[:20]]
-        seen = set()
-        ctx.state["nakon_failed_steps"] = [x for x in merged if not (x in seen or seen.add(x))][:40]
-        record_stage_coverage(ctx.state, late_machines, result, ctx.save_state)
+        result = run_stage(ctx.late_config_path, late_machines, ssh_key=ctx.ssh_key,
+                           scoring_user=ctx.scoring_user, scoring_ip=ctx.scoring_ip,
+                           jobs=ctx.nakon_jobs, strict=False, label="late",
+                           comp_dir=ctx.comp_dir)
+        record_stage(ctx.state, late_machines, result, ctx.save_state, "late")
 
     # Trails first, snapshot second: the wipe has to be inside the restore point,
     # or a rollback to tz-ready hands blue every deploy log back.
     try:
-        from scrim import clean_trails
+        from guests import clean_trails
         clean_trails.clean_trails(ctx.comp_dir, clean_trails.creds_for_deploy(ctx),
-                                 targets=_wipe_targets(ctx.managed_targets))
+                                 targets=clean_trails.targets_from(ctx.managed_targets))
     except Exception as e:                                   # noqa: BLE001 - never fatal
         print(f"  WARNING: trail wipe failed ({type(e).__name__}: {e}) — box logs still "
               f"hold the deploy")
 
     print(f"  Snapshotting all boxes as '{SNAP_READY}' (as-delivered restore point)...")
     run_concurrent(ctx.all_targets, partial(snap_ready, ctx), max_workers=4)
+
+    # Last: the range is delivered, so red may begin attacking.
+    if red_summary:
+        with timed(ctx.comp_dir, 7, "red_start"):
+            tlaloc_ops.start_director(ctx.ssh_key, red_summary["red_ip"])
+        print(f"  tlaloc      : loop started on red01 ({red_summary['red_ip']})")

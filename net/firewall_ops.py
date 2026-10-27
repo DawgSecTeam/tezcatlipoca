@@ -515,17 +515,29 @@ def bootstrap_firewalls(teams, fw_targets, config_paths, ssh_ctx, node, log=prin
 
 
 # NIC naming must match the engine's netplan: ens19+ are team NICs in sorted team-key order, then the transit NICs continue that sequence.
-def cutover_netplan_yaml(teams, red_segment=None):
+def _iface(name, mac):
+    lines = [f"    {name}:"]
+    if mac:
+        lines += [f'      match:\n        macaddress: "{mac}"', f"      set-name: {name}"]
+    return lines
+
+
+def cutover_netplan_yaml(teams, red_segment=None, macs=()):
     keys = sorted(teams)
     n = len(keys)
+    macs = list(macs or ())
+
+    def mac(index):
+        return macs[index] if index < len(macs) else ""
+
     lines = ["network:", "  version: 2", "  ethernets:"]
     for idx, k in enumerate(keys):
-        lines.append(f"    ens{18 + idx + 1}:")
+        lines += _iface(f"ens{18 + idx + 1}", mac(idx))
         lines.append("      dhcp4: false")
         lines.append("      optional: true")
     for idx, k in enumerate(keys):
         tid = teams[k]["identifier"]
-        lines.append(f"    ens{18 + n + idx + 1}:")
+        lines += _iface(f"ens{18 + n + idx + 1}", mac(n + idx))
         lines.append(f"      addresses: [\"172.31.{tid}.1/30\"]")
         lines.append("      optional: true")
         lines.append("      routes:")
@@ -537,17 +549,17 @@ def cutover_netplan_yaml(teams, red_segment=None):
         # with a gateway that does not exist: every SSH the day-0 seed tries times
         # out, the seed plants nothing, and the deploy dies "no planted box" while
         # the rest of the range is healthy.
-        lines.append(f"    ens{18 + n + n + 1}:")
+        lines += _iface(f"ens{18 + n + n + 1}", mac(n + n))
         lines.append(f"      addresses: [\"{red_segment['gw']}/24\"]")
         lines.append("      optional: true")
     return "\n".join(lines) + "\n"
 
 
 # The cutover rewrites the engine's netplan in place; nothing re-applies the pre-cutover file, so the team gateway address stays on the firewalls.
-def cut_over_engine(ssh_ctx, teams, red_segment=None, log=print):
+def cut_over_engine(ssh_ctx, teams, red_segment=None, log=print, macs=()):
     log("  Engine cutover: 192.168.<team>.1 moves to the firewalls; engine routes "
         "team subnets via the transit /30s")
-    b64 = base64.b64encode(cutover_netplan_yaml(teams, red_segment).encode()).decode()
+    b64 = base64.b64encode(cutover_netplan_yaml(teams, red_segment, macs).encode()).decode()
     r = ssh_on_gateway(
         ssh_ctx,
         f"echo {b64} | base64 -d | sudo tee /etc/netplan/60-team-ifaces.yaml "

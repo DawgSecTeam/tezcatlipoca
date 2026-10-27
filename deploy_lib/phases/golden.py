@@ -6,6 +6,7 @@ from common.constants import SNAP_BASE
 from golden.golden_target_ops import _template_vmid_map
 from golden.golden_ops import build_golden_set, windows_plan_features
 from guests.apt_dns_ops import fix_dns_on_boxes, prep_apt_on_boxes
+from guests.ubuntu_auth_ops import setup_ubuntu_auth
 from nakonops.nakon_config_ops import generate_slot_golden_config
 from multinode.placement_record import record_of
 from common.ssh_ops import wait_for_boxes_ssh, wait_for_cloud_init
@@ -14,7 +15,7 @@ from common.timing import timed
 from common.utils import is_unmanaged, run_concurrent
 from common.windows_ops import bootstrap_windows_box
 
-from deploy_lib.coverage import record_coverage
+from guests.converge_ops import record_coverage
 from deploy_lib.golden_plan import golden_rebuild_gate
 from deploy_lib.phases._snapshots import snap_base
 
@@ -143,6 +144,10 @@ def bootstrap_clones(ctx):
         wait_for_boxes_ssh(ctx.tf_ctx, ctx.managed_targets, timeout=300)
     with timed(ctx.comp_dir, 4, "wait_cloud_init"):
         wait_for_cloud_init(ctx.tf_ctx, ctx.managed_targets, timeout=240)
+    # The clone's cloud-init rewrites resolv.conf/sudoers state; auth then DNS then apt is
+    # the order the DNS fix's sudo calls need (docs/architecture.md phase 4).
+    with timed(ctx.comp_dir, 4, "ubuntu_auth"):
+        setup_ubuntu_auth(ctx.linux_targets, ctx.tf_ctx)
     with timed(ctx.comp_dir, 4, "fix_dns"):
         fix_dns_on_boxes(ctx.linux_targets, ctx.tf_ctx)
     with timed(ctx.comp_dir, 4, "prep_apt"):

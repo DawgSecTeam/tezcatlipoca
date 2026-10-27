@@ -518,9 +518,6 @@ class TestTeardownEntryPoint(unittest.TestCase):
 
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 # The route pair retries once on a network-side flap (the red01 pull died on a
 # seconds-long no-route flap on the ENGINE's jump address and the report was lost).
@@ -570,3 +567,7 @@ class ScpRetry(unittest.TestCase):
                                  "host": "10.0.0.198"}, "/tmp/ba/report.md", d)
         self.assertEqual([p.name for p in got], ["report.md"])
         self.assertEqual(dest.read_text(), "report body")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -76,7 +76,7 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
               + ", ".join(f"{name}={role!r}" for name, role in sorted(bad.items()))
               + " (expected 'dc' or 'member')")
         return gate_fail("domains", "domain_roles.json has invalid role values")
-    node = config.active().proxmox.node
+    default_node = config.active().proxmox.node
     # Box TYPES (boxes.json order = vmid order), not verify's per-team nakon machines.
     try:
         boxes = json.loads((comp_dir / "boxes.json").read_text())
@@ -93,6 +93,8 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
         print("  FAIL  no teams loaded — nothing to check domain roles against")
         return gate_fail("domains", "no teams loaded")
     dc_name = next((n for n, r in roles.items() if r == "dc"), None)
+    from common.targets import target_nodes
+    box_nodes = target_nodes(comp_dir)
     ok = True
     domain_sids, machine_sids = {}, {}
 
@@ -109,6 +111,9 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
                 "name": name, "role": role,
                 "vmid": vm_id_for(ident, idx[name]),
                 "windows": is_windows_template(boxes[idx[name]].get("template") or ""),
+                # Satellite teams' VMs live on satellite hosts; the guest-agent channel is
+                # node-scoped, so a Windows probe on the engine's node always fails.
+                "node": box_nodes.get((team_key, name)) or default_node,
             })
 
     def _probe(job):
@@ -117,7 +122,8 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
         ident, domain = job["ident"], job["domain"]
         if job["windows"]:
             try:
-                _rc, out, err = guest_agent_exec_windows(node, job["vmid"], _WIN_DOMAIN_PS,
+                _rc, out, err = guest_agent_exec_windows(job["node"], job["vmid"],
+                                                         _WIN_DOMAIN_PS,
                                                          timeout=120)
                 return {"kv": _kv(out), "err": err or "", "info": [], "fail": ""}
             except Exception as e:
@@ -128,7 +134,8 @@ def check_domains(comp_dir, teams, boxes, ctx=None):
                      f"realm list 2>/dev/null | grep -qi 'domain-name: *{domain}' "
                      f"&& echo JOINED=1 || echo JOINED=0")
         try:
-            _rc, out, err = guest_agent_exec_root(node, job["vmid"], realm_cmd, timeout=60)
+            _rc, out, err = guest_agent_exec_root(job["node"], job["vmid"], realm_cmd,
+                                                  timeout=60)
             return {"kv": _kv(out), "err": err or "", "info": [], "fail": ""}
         except Exception as agent_err:
             # The PVE agent channel has a per-instance exec breaker that can stay tripped; Linux

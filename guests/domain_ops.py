@@ -105,7 +105,11 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
     if not roles:
         return
 
-    node = config.active().proxmox.node
+    # Each team may live on its own host: the guest-agent channel is node-scoped, so every
+    # per-box call resolves the box's own node (the frozen roster knows it).
+    from common.targets import target_nodes
+    default_node = config.active().proxmox.node
+    box_nodes = target_nodes(comp_dir)
     all_machines = {m["name"]: m for m in json.loads(nakon_config_path.read_text())["machines"]}
     dc_box = next((b for b in boxes if roles.get(b["name"]) == "dc"), None)
     member_boxes = [b for b in boxes if roles.get(b["name"]) == "member"]
@@ -123,6 +127,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
 
     def _deploy_team_domains(item):
         team_key, team = item
+        node = box_nodes.get((team_key, dc_box["name"])) or default_node
         identifier = team["identifier"]
         domain = team_domain(comp_dir, identifier)
         dc_machine_name = f"{dc_box['name']}-team{identifier}"
@@ -246,9 +251,10 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                 continue
             member_vmid = vm_id_for(identifier, box_index(boxes, member_box["name"]))
             member_ip = member_machine["ip"]
+            member_node = box_nodes.get((team_key, member_box["name"])) or default_node
 
             if is_windows_template(member_box["template"]):
-                if _probe_joined(node, member_box, member_vmid, domain) and not force_member_join:
+                if _probe_joined(member_node, member_box, member_vmid, domain) and not force_member_join:
                     with PRINT_LOCK:
                         print(f"  [{team_key}] {member_box['name']} already joined to {domain} — "
                               f"skipping join (resume)")
@@ -256,7 +262,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                 with PRINT_LOCK:
                     print(f"  [{team_key}] Repointing {member_box['name']}'s DNS at "
                           f"{dc_box['name']} ({dc_ip}) so it can find the domain...")
-                dns_repoint_windows_box(node, member_vmid, dc_ip)
+                dns_repoint_windows_box(member_node, member_vmid, dc_ip)
 
                 with PRINT_LOCK:
                     print(f"  [{team_key}] Joining {member_box['name']} to {domain}...")
@@ -282,13 +288,13 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                         print(f"    Waiting for {member_box['name']} to reboot and come back "
                               f"(domain join)...")
                     time.sleep(30)  # Add-Computer -Restart: let the reboot begin first
-                    if not wait_for_guest_agent(node, member_vmid, timeout=900):
+                    if not wait_for_guest_agent(member_node, member_vmid, timeout=900):
                         with PRINT_LOCK:
                             print(f"  WARNING: {member_box['name']} guest agent never came back after "
                                   f"Domain Join")
                         break
-                    wait_for_windows_sshd(node, member_vmid, timeout=180)
-                    if _probe_joined(node, member_box, member_vmid, domain):
+                    wait_for_windows_sshd(member_node, member_vmid, timeout=180)
+                    if _probe_joined(member_node, member_box, member_vmid, domain):
                         break
                     if attempt < JOIN_ATTEMPTS:
                         with PRINT_LOCK:
@@ -320,7 +326,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                     with PRINT_LOCK:
                         print(f"  WARNING: [{team_key}] could not pin {member_box['name']}'s "
                               f"resolver at {dc_ip}: {str(e)[:160]}")
-                if _probe_joined(node, member_box, member_vmid, domain, member_ip=member_ip,
+                if _probe_joined(member_node, member_box, member_vmid, domain, member_ip=member_ip,
                                  engine_ctx=engine_ctx,
                                  box_user=box_user) and not force_member_join:
                     with PRINT_LOCK:
@@ -350,7 +356,7 @@ def deploy_domain_configs(teams, boxes, comp_dir, nakon_config_path, key, scorin
                         with PRINT_LOCK:
                             print(f"  WARNING: [{team_key}] {member_box['name']} domain-join failed "
                                   f"— continuing ({str(e)[:160]})")
-                    if _probe_joined(node, member_box, member_vmid, domain, member_ip=member_ip,
+                    if _probe_joined(member_node, member_box, member_vmid, domain, member_ip=member_ip,
                                      engine_ctx=engine_ctx, box_user=box_user):
                         break
                     if attempt < JOIN_ATTEMPTS:

@@ -9,13 +9,15 @@ the state document so an observer (the dashboard) sees the hold without parsing 
 Unset — a manual deploy — is a no-op.
 """
 
+import os
 import time
 from pathlib import Path
-from estate import config
 
 
 def pause_at_boundary(ctx, phase):
-    value = config.active().knobs.pause_file
+    # Deliberately NOT a config key: this is the run queue's per-run handoff, not operator
+    # estate config (see docs/architecture.md § Secrets and state).
+    value = os.environ.get("TEZ_PAUSE_FILE", "")
     path = Path(value) if value else None
     if path is None or not path.exists():
         return

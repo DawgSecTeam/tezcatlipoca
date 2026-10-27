@@ -260,7 +260,7 @@ def service_fixup_script(services, creds):
 
 
 def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
-    node = config.active().proxmox.node
+    default_node = config.active().proxmox.node
     print("  Hardening services on all team boxes...")
     box_services = json.loads((comp_dir / "box_services.json").read_text())
 
@@ -292,7 +292,8 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
                     # Detached: this script restarts several services and can outlive the
                     # agent channel's 120s budget; the guest-side log is the evidence.
                     res = guest_agent_exec_detached(
-                        node, vmid, root_script, f"/tmp/tz-harden-{vmid}.log", timeout=900)
+                        t.get("node") or default_node, vmid, root_script,
+                        f"/tmp/tz-harden-{vmid}.log", timeout=900)
                     if res.rc == 0:
                         with PRINT_LOCK:
                             print(f"    Services hardened on {ip} (via guest agent)")
@@ -345,7 +346,7 @@ def reensure_mysql_credlist_users(comp_dir, targets, ctx, box_creds):
             jobs.append((t, mysql_credlist_reensure_script(cred_items)))
     if not jobs:
         return
-    node = config.active().proxmox.node
+    default_node = config.active().proxmox.node
     with PRINT_LOCK:
         print("  Re-ensuring credlist SQL users on mysql-pinned box(es) "
               f"({', '.join(t['box_name'] for t, _ in jobs)})...")
@@ -368,7 +369,8 @@ def reensure_mysql_credlist_users(comp_dir, targets, ctx, box_creds):
         except Exception as e:
             root_script = re.sub(r"\bsudo ", "", script_content)
             try:
-                rc, _out, err = guest_agent_exec_root(node, t["vmid"], root_script, timeout=120)
+                rc, _out, err = guest_agent_exec_root(t.get("node") or default_node,
+                                                     t["vmid"], root_script, timeout=120)
                 with PRINT_LOCK:
                     if rc == 0:
                         print(f"    Credlist SQL users ensured on {t['ip']} (via guest agent)")

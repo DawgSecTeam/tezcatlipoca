@@ -49,7 +49,6 @@ _SPEC = {
     "knobs.team_identifiers": "",
     "knobs.scoring_vmid": 0,
     "knobs.artifacts_archive": "",
-    "knobs.pause_file": "",
     "knobs.scrim_web01_port": 0,
     "knobs.qga_bridge": "vmbr0",
     "knobs.qga_pkg_branch": "",
@@ -155,7 +154,9 @@ class Config:
             return self._overrides[key]
         default = _SPEC[key]
         raw = os.environ.get(env_name(key))
-        if raw not in (None, ""):
+        # An explicitly empty env var is a value, not an absence: `TEZ_ENGINE_MGMT_IP=""`
+        # means DHCP and must not fall through to the profile's static address.
+        if raw is not None:
             return _coerce(key, default, raw)
         value = _dig(self._file, key)
         return default if value is None else _coerce(key, default, value)

@@ -79,12 +79,22 @@ def retire_range(run_tag, *, log=print):
     return view
 
 
-def reclaim(comp, run_tag, *, node, allow_templates=False, log=print):
+def reclaim(comp, run_tag, *, node, nodes=None, allow_templates=False, log=print):
 # Destroys VMs carrying {tezcatlipoca, comp-<comp>, <run_tag>}; `remaining` non-empty means the reclaim did not finish.
     ownership = Ownership(comp, run_tag)
-    vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
+    nodes = list(dict.fromkeys([node, *(nodes or [])]))
+    vms = []
+    for n in nodes:
+        try:
+            vms += [dict(v, _node=n) for v in proxmox_api("GET", f"/nodes/{n}/qemu")["data"]]
+        except Exception as e:                               # noqa: BLE001 - reported below
+            log(f"  WARNING: could not list VMs on {n}: {e}")
     destroyed, kept, notes = [], [], []
-    for vm in sorted(vms, key=lambda v: v["vmid"]):
+    # Non-templates FIRST: a linked clone's base volume still in use makes the template's
+    # destroy fail, and vmid order puts a golden (1xxx) before its team boxes (12xx+).
+    ordered = sorted(vms, key=lambda v: (bool(parse_vm_tags(v.get("tags")) & set(TEMPLATE_ROLES)),
+                                         v["vmid"]))
+    for vm in ordered:
         tags = parse_vm_tags(vm.get("tags"))
         if comp_tag(comp) in tags and not ownership.tags <= tags:
             others = sorted(t for t in tags if t.startswith("run-"))
@@ -99,27 +109,34 @@ def reclaim(comp, run_tag, *, node, allow_templates=False, log=print):
             continue
         log(f"  vmid {vm['vmid']} ({vm.get('name')}) — "
             f"{'+'.join(sorted(role)) or 'plain vm'}")
-        destroy_vm_if_exists(node, vm["vmid"],
+        destroy_vm_if_exists(vm["_node"], vm["vmid"],
                              expect_tags=ownership.with_role(*role).tags, require_owned=True)
         destroyed.append({"vmid": vm["vmid"], "name": vm.get("name"),
                           "role": "+".join(sorted(role)) or "vm"})
     # Bridges carry no tags, so their comment is the whole proof: only this run's come out.
     bridges = []
-    for iface, comment in node_bridges(node).items():
-        if not iface.startswith("vmbr"):
-            continue
-        if bridge_owned_by(comment, comp, run_tag):
-            log(f"  bridge {iface} ({comment})")
-            if destroy_bridge_if_exists(node, iface):
-                bridges.append(iface)
-        elif "comp-" in comment or "tezcatlipoca" in comment:
-            notes.append(f"bridge {iface} is another run's ({comment}) — not touched")
-        elif iface != "vmbr0" and iface[4:].isdigit():
-            notes.append(f"bridge {iface} carries no ownership comment — not touched")
-    remaining = [v["vmid"] for v in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
-                 if v["vmid"] in {d["vmid"] for d in destroyed}]
+    for n in nodes:
+        for iface, comment in node_bridges(n).items():
+            if not iface.startswith("vmbr"):
+                continue
+            if bridge_owned_by(comment, comp, run_tag):
+                log(f"  bridge {iface} on {n} ({comment})")
+                if destroy_bridge_if_exists(n, iface):
+                    bridges.append(iface)
+            elif "comp-" in comment or "tezcatlipoca" in comment:
+                notes.append(f"bridge {iface} on {n} is another run's ({comment}) — not touched")
+            elif iface != "vmbr0" and iface[4:].isdigit():
+                notes.append(f"bridge {iface} on {n} carries no ownership comment — not touched")
+    remaining = []
+    for n in nodes:
+        try:
+            remaining += [v["vmid"] for v in proxmox_api("GET", f"/nodes/{n}/qemu")["data"]
+                          if v["vmid"] in {d["vmid"] for d in destroyed}]
+        except Exception:                                    # noqa: BLE001 - already warned
+            pass
     # A leftover means the reclaim did not finish, so the range still exists and must stay live.
     if not remaining:
         retire_range(run_tag, log=log)
     return {"destroyed": destroyed, "kept_templates": kept, "notes": notes,
-            "bridges": bridges, "remaining": remaining, "scanned": len(vms)}
+            "bridges": bridges, "remaining": remaining, "scanned": len(vms),
+            "nodes": nodes}

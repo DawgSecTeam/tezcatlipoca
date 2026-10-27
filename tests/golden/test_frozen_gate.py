@@ -80,29 +80,38 @@ def _boot_v1():
 def _boot_v2():
     return "bootstrap two"
 
-_ENGINE_TF = '''
-resource "proxmox_virtual_environment_vm" "scoring_engine" {
-  vm_id = 1000
-}
 
-resource "proxmox_virtual_environment_vm" "team_box" {
-  vm_id = 1240
-}
-'''
+def _prose_only():
+    """A docstring that must not reach the hash."""
+    # a comment that must not reach the hash either
+    return 7
 
+
+def _different_value():
+    return 8
 
 class EngineHashInputTests(unittest.TestCase):
-    def _inputs(self, vmid=955, ref="v1", shape=_ENGINE_TF, boot=_boot_v1):
-        return template_freeze.engine_hash_inputs(vmid, ref, shape, boot)
+    def _inputs(self, vmid=955, ref="v1", boot=_boot_v1):
+        return template_freeze.engine_hash_inputs(vmid, ref, boot)
 
-
-    def test_engine_shape_edit_is_code_drift(self):
-        drift = template_freeze.classify_drift(self._inputs(), self._inputs(shape=_ENGINE_TF + "\n"))
+    def test_bootstrap_edit_is_code_drift(self):
+        drift = template_freeze.classify_drift(self._inputs(), self._inputs(boot=_boot_v2))
         self.assertEqual(drift["config"], [])
-        self.assertEqual(drift["code"], ["estate.apply:create_engine"])
+        self.assertEqual(drift["code"], ["bootstrap_scoring_engine"])
 
+    def test_comments_and_docstrings_are_stripped_from_the_hash(self):
+        # The hash exists to catch changes that alter the disk; a prose edit must not rebuild
+        # a 40 GB template for an hour.
+        normalized = template_freeze._normalized_source(_prose_only)
+        self.assertNotIn("#", normalized)
+        self.assertNotIn("A docstring", normalized)
+        self.assertIn("return 7", normalized)
+        self.assertNotEqual(template_freeze.code_hash(_prose_only),
+                            template_freeze.code_hash(_different_value))
 
-
+    def test_the_pinned_quotient_ref_is_config_drift(self):
+        drift = template_freeze.classify_drift(self._inputs(), self._inputs(ref="v2"))
+        self.assertEqual(drift["config"], ["quotient_ref"])
 
 
 if __name__ == "__main__":

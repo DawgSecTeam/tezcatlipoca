@@ -6,7 +6,8 @@ from pathlib import Path
 
 from common.constants import (GOLDEN_VMID_OFFSET, MAX_BOXES_PER_TEAM, RED_SEGMENT_GW,
                               RED_SEGMENT_IP, RED_SEGMENT_SUBNET)
-from common.utils import BOX_DNS, compfile_value
+from common.ssh_ops import quote_sshkeys
+from common.utils import box_dns, compfile_value
 from estate import config
 from infra.client import proxmox_api, wait_for_proxmox_task
 from infra.guest_exec import guest_agent_exec_root, wait_for_guest_agent
@@ -52,8 +53,14 @@ def red01_ip_override(comp_dir):
 
 
 def red01_ip_for(comp_dir, placement=None):
-    return red01_ip_override(comp_dir) or \
-        (((placement or {}).get("red01") or {}).get("ip") or "")
+    """The address red01 actually holds: Compfile pin, then the state's record, then placement.
+
+    A single-node deploy has no placement; reading only the placement made `red01_ip_for`
+    answer "" for a live range and every caller re-select a different address.
+    """
+    return (red01_ip_override(comp_dir)
+            or (recorded_identity(comp_dir) or {}).get("ip") or ""
+            or (((placement or {}).get("red01") or {}).get("ip") or ""))
 
 
 def red01_ip_is_explicit(comp_dir):
@@ -89,6 +96,11 @@ def select_red_ip(comp_dir, placement, engine_mgmt_ip="", comp_tags=None):
 
 
 def recorded_identity(comp_dir):
+    """This competition's red01 identity, from the state's `red` section.
+
+    The placement copy is only a mirror; reading it FIRST made a stale placement outrank the
+    section that `record_identity` writes on a single-node deploy.
+    """
     from estate import state
     document = state.EstateState.load(comp_dir)
     recorded = document.section("red") or {}
@@ -160,7 +172,7 @@ def _netplan(iface, ip, gw, red_iface):
     # or the box reaches 8.8.8.8 and still resolves nothing.
     return (f"network:\n  version: 2\n  ethernets:\n"
             f"    {iface}:\n      dhcp4: no\n      addresses: ['{ip}/24']\n"
-            f"      nameservers:\n        addresses: [{', '.join(BOX_DNS.split())}]\n"
+            f"      nameservers:\n        addresses: [{', '.join(box_dns().split())}]\n"
             f"      routes:\n        - to: default\n          via: {gw}\n"
             f"    {red_iface}:\n      dhcp4: no\n      addresses: ['{RED_SEGMENT_IP}/24']\n"
             f"      routes:\n        - to: {ROUTE_NOTE}\n          via: {RED_SEGMENT_GW}\n")
@@ -234,11 +246,10 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
         wait_for_proxmox_task(node, upid)
     else:
         print(f"  red01      : adopting vmid {vmid} (this run's) for reconfigure")
-    from golden.golden_target_ops import _quote_sshkeys
     data = {"name": NAME, "onboot": 1, "agent": 1,
             "net0": f"virtio,bridge={_mgmt_bridge(placement)}",
             "ipconfig0": f"ip={ip}/24,gw={gw}",
-            "ciuser": RED_USER, "sshkeys": _quote_sshkeys(pub_key),
+            "ciuser": RED_USER, "sshkeys": quote_sshkeys(pub_key),
             "tags": ";".join(sorted(ownership.tags)),
             "description": f"tlaloc red01 comp={ownership.comp} id={ownership.run_id}"}
     if red_bridge:
@@ -325,45 +336,60 @@ def dnat_destinations(team_identifiers, callback_host=""):
     return dsts
 
 
+FORWARD_CHAIN = "RANGE-RED-FWD"
+DNAT_CHAIN = "RANGE-RED-DNAT"
+SNAT_CHAIN = "RANGE-RED-SNAT"
+
+
 def firewall_script(*, team_identifiers, callback_port, callback_host="",
                     red_ip=RED_SEGMENT_IP, red_subnet=RED_SEGMENT_SUBNET):
-    """Rule order is load-bearing: return-accept before the DROP-toward-red, DNAT before the team-SNAT exemption, else check-ins appear to come from the engine."""
-    lines = [
-        "#!/bin/bash",
-        "# red segment: red keeps its source address end-to-end, blue can firewall it,",
-        "# and scoring still sources from the team gateway. Re-asserted by a 30s timer",
-        "# because Docker on the engine wipes iptables when its containers restart.",
-        f"iptables -C FORWARD -s {red_subnet} -d 192.168.0.0/16 -j ACCEPT 2>/dev/null || "
-        f"iptables -I FORWARD 1 -s {red_subnet} -d 192.168.0.0/16 -j ACCEPT",
-        f"iptables -C FORWARD -d {red_subnet} -m conntrack --ctstate RELATED,ESTABLISHED "
-        f"-j ACCEPT 2>/dev/null || iptables -I FORWARD 2 -d {red_subnet} "
-        f"-m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
-        f"iptables -C FORWARD -d {red_subnet} -j DROP 2>/dev/null || "
-        f"iptables -I FORWARD 3 -d {red_subnet} -j DROP",
+    """Red-segment rules, rebuilt idempotently inside three of our own chains.
+
+    A timer re-runs this every 30 s, so "is the rule already there?" must be answerable
+    cheaply and correctly. The old version checked `PREROUTING | head -1` inside a loop over
+    (dst, proto): only ONE rule can ever be first, so every other rule was deleted and
+    re-inserted every 30 seconds, churning conntrack for live C2 callbacks. Flushing our own
+    chains and re-populating them is atomic enough, never touches Docker's rules, and needs
+    no positional indices.
+    """
+    def hook_chain(table, parent, chain, position=1):
+        return [
+            f"iptables -t {table} -N {chain} 2>/dev/null || true",
+            f"iptables -t {table} -C {parent} -j {chain} 2>/dev/null || "
+            f"iptables -t {table} -I {parent} {position} -j {chain}",
+            f"iptables -t {table} -F {chain}",
+        ]
+
+    lines = ["#!/bin/bash", "# red segment: red keeps its source address end-to-end, blue can",
+             "# firewall it, and scoring still sources from the team gateway. Re-asserted by a",
+             "# 30s timer because Docker on the engine wipes iptables when its containers restart."]
+    lines += hook_chain("filter", "FORWARD", FORWARD_CHAIN)
+    lines += [
+        f"iptables -A {FORWARD_CHAIN} -s {red_subnet} -d 192.168.0.0/16 -j ACCEPT",
+        f"iptables -A {FORWARD_CHAIN} -d {red_subnet} -m conntrack "
+        f"--ctstate RELATED,ESTABLISHED -j ACCEPT",
     ]
     if callback_port:
         port = int(callback_port)
         for dst in dnat_destinations(team_identifiers, callback_host):
             for proto in ("tcp", "udp"):
-                # Docker publishes Quotient on 0.0.0.0:80 and jumps its own chain at
-                # PREROUTING 1: an appended DNAT is shadowed; ours stays at position 1.
-                rule = (f"-d {dst}/32 -p {proto} -m {proto} --dport {port} "
-                        f"-j DNAT --to-destination {red_ip}:{port}")
-                lines += [
-                    f"if ! iptables -t nat -S PREROUTING | grep '^-A' | head -1 | "
-                    f"grep -q -- '{rule}'; then "
-                    f"while iptables -t nat -D PREROUTING -p {proto} -d {dst} --dport {port} "
-                    f"-j DNAT --to-destination {red_ip}:{port} 2>/dev/null; do :; done; "
-                    f"iptables -t nat -I PREROUTING 1 -p {proto} -d {dst} --dport {port} "
-                    f"-j DNAT --to-destination {red_ip}:{port}; fi",
-                    f"iptables -C FORWARD -p {proto} -d {red_ip} --dport {port} -j ACCEPT "
-                    f"2>/dev/null || iptables -I FORWARD 1 -p {proto} -d {red_ip} "
-                    f"--dport {port} -j ACCEPT",
-                    f"iptables -t nat -C POSTROUTING -s 192.168.0.0/16 -d {red_ip} "
-                    f"-p {proto} --dport {port} -j ACCEPT 2>/dev/null || "
-                    f"iptables -t nat -I POSTROUTING 1 -s 192.168.0.0/16 -d {red_ip} "
-                    f"-p {proto} --dport {port} -j ACCEPT",
-                ]
+                lines.append(f"iptables -A {FORWARD_CHAIN} -p {proto} -d {red_ip} "
+                             f"--dport {port} -j ACCEPT")
+    # The DROP goes last inside our chain: every ACCEPT above must match first.
+    lines.append(f"iptables -A {FORWARD_CHAIN} -d {red_subnet} -j DROP")
+    if callback_port:
+        port = int(callback_port)
+        lines += hook_chain("nat", "PREROUTING", DNAT_CHAIN)
+        lines += hook_chain("nat", "POSTROUTING", SNAT_CHAIN)
+        for dst in dnat_destinations(team_identifiers, callback_host):
+            for proto in ("tcp", "udp"):
+                # A callback to the team gateway lands here and must reach red01, not Quotient.
+                lines.append(f"iptables -t nat -A {DNAT_CHAIN} -p {proto} -d {dst} "
+                             f"--dport {port} -j DNAT --to-destination {red_ip}:{port}")
+                # Exempt the callback from the range's team SNAT, so blue sees red's address
+                # (and not the check-in sourced from its own gateway).
+                lines.append(f"iptables -t nat -A {SNAT_CHAIN} -s 192.168.0.0/16 -d {red_ip} "
+                             f"-p {proto} --dport {port} -j ACCEPT")
     return "\n".join(lines) + "\n"
 
 
@@ -400,33 +426,26 @@ def install_engine_rules(engine_ip, ssh_key, *, engine_user, team_identifiers,
     return {"ok": True}
 
 
-def remove_engine_rules(engine_ip, ssh_key, *, engine_user, runner=None, timeout=120,
-                        team_identifiers=(), callback_port=None, callback_host=""):
-    """Best effort: the engine survives a teams-only teardown, so its red rules must not outlive red01."""
-    dnat = ""
-    if callback_port:
-        for dst in dnat_destinations(team_identifiers, callback_host):
-            for proto in ("tcp", "udp"):
-                dnat += (f"while sudo iptables -t nat -D PREROUTING -p {proto} -d {dst} "
-                         f"--dport {int(callback_port)} -j DNAT --to-destination "
-                         f"{RED_SEGMENT_IP}:{int(callback_port)} 2>/dev/null; do :; done; "
-                         f"while sudo iptables -D FORWARD -p {proto} -d {RED_SEGMENT_IP} "
-                         f"--dport {int(callback_port)} -j ACCEPT 2>/dev/null; do :; done; "
-                         f"while sudo iptables -t nat -D POSTROUTING -s 192.168.0.0/16 -d "
-                         f"{RED_SEGMENT_IP} -p {proto} --dport {int(callback_port)} -j ACCEPT "
-                         f"2>/dev/null; do :; done; ")
+def remove_engine_rules(engine_ip, ssh_key, *, engine_user, runner=None, timeout=120):
+    """Best effort: the engine survives a teams-only teardown, so its red rules must not outlive red01.
+
+    Unhooking + flushing our own chains is enough — it needs no knowledge of the callback
+    port or the team list, so a `--teams-only` teardown cannot leave orphaned rules behind.
+    """
+    unhook = ""
+    for table, parent, chain in (("filter", "FORWARD", FORWARD_CHAIN),
+                                 ("nat", "PREROUTING", DNAT_CHAIN),
+                                 ("nat", "POSTROUTING", SNAT_CHAIN)):
+        unhook += (f"while sudo iptables -t {table} -D {parent} -j {chain} 2>/dev/null; do :; done; "
+                   f"sudo iptables -t {table} -F {chain} 2>/dev/null; "
+                   f"sudo iptables -t {table} -X {chain} 2>/dev/null; ")
     proc = _run(ssh_argv(ssh_key, engine_ip, (
         "sudo systemctl disable --now range-red-firewall.timer 2>/dev/null; "
         "sudo rm -f /usr/local/sbin/range-red-firewall.sh "
         "/etc/systemd/system/range-red-firewall.service "
         "/etc/systemd/system/range-red-firewall.timer; "
         "sudo systemctl daemon-reload 2>/dev/null; "
-        f"while sudo iptables -D FORWARD -s {RED_SEGMENT_SUBNET} -d 192.168.0.0/16 "
-        "-j ACCEPT 2>/dev/null; do :; done; "
-        f"while sudo iptables -D FORWARD -d {RED_SEGMENT_SUBNET} "
-        "-m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; do :; done; "
-        f"while sudo iptables -D FORWARD -d {RED_SEGMENT_SUBNET} -j DROP 2>/dev/null; do :; done; "
-        + dnat),
+        + unhook),
         timeout=timeout, user=engine_user), runner=runner)
     return {"ok": getattr(proc, "returncode", 1) == 0, "detail": _tail(proc)}
 
@@ -436,8 +455,7 @@ def _tail(proc, n=300):
 
 
 def destroy(comp_dir, *, ownership, node=None, vmid=None, engine_ip=None, ssh_key=None,
-            engine_user=None, runner=None, team_identifiers=(), callback_port=None,
-            callback_host=""):
+            engine_user=None, runner=None):
     """Destroyed through the ownership guard: a recycled vmid or another run's red01 is refused, not deleted."""
     recorded = recorded_identity(comp_dir)
     node = node or recorded.get("node") or config.active().proxmox.node
@@ -445,9 +463,7 @@ def destroy(comp_dir, *, ownership, node=None, vmid=None, engine_ip=None, ssh_ke
     removed = {"vm": False, "rules": False}
     if engine_ip and ssh_key and engine_user:
         removed["rules"] = remove_engine_rules(
-            engine_ip, ssh_key, engine_user=engine_user, runner=runner,
-            team_identifiers=team_identifiers, callback_port=callback_port,
-            callback_host=callback_host).get("ok", False)
+            engine_ip, ssh_key, engine_user=engine_user, runner=runner).get("ok", False)
     if not vmid:
         raise RuntimeError("red01's vmid is not recorded for this competition — cannot "
                            "prove what to destroy")
@@ -456,6 +472,9 @@ def destroy(comp_dir, *, ownership, node=None, vmid=None, engine_ip=None, ssh_ke
     from estate import state
     document = state.EstateState.load(comp_dir)
     (document.data.get("placement") or {}).pop("red01", None)
+    # The `red` section is the single-node identity record: leaving it behind made
+    # recorded_identity() keep answering with the destroyed VM.
+    document.data.pop("red", None)
     document.save()
     return removed
 

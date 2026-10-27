@@ -7,6 +7,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from common.constants import comp_slug
 from estate import state as estate_state
 from estate import config
 
@@ -41,8 +42,7 @@ def team_tag(comp_id, identifier):
 def router_node_name(comp_id):
     # A competition name with a space ("CDE 2026") is not a hostname; tailscale
     # rejects it outright (live: cde-2026 deploy, 2026-10-19).
-    slug = re.sub(r"[^a-z0-9-]+", "-", str(comp_id).lower()).strip("-")
-    return f"eng-{slug}"
+    return f"eng-{comp_slug(comp_id)}"
 
 
 def load_roster(comp_dir):
@@ -452,7 +452,9 @@ def _comp_teams(ctx):
 
 def setup_remote_access(ctx):
     env = _headscale_env()
-    comp_id = ctx.comp_name
+    # Every identifier below (headscale user, node tag, policy key) is an identifier, not a
+    # display name: slug once here so the policy/teardown agree with the deploy.
+    comp_id = comp_slug(ctx.comp_name)
     teams = _comp_teams(ctx)
     all_ids = [t["identifier"] for t in teams]
     engine_ip = ctx.tf_ctx.get("scoring_engine_ip") or ctx.engine_mgmt_ip
@@ -522,7 +524,7 @@ def teardown_remote_access(comp_dir, state=None):
     ra = (state or {}).get("remote_access")
     if not ra or not ra.get("enabled"):
         return
-    comp_id = ra["comp_id"]
+    comp_id = comp_slug(ra["comp_id"])
     print(f"\nCleaning up headscale remote access for '{comp_id}' (warn-and-proceed)...")
     try:
         for entry in hs_json("nodes list"):
@@ -563,6 +565,7 @@ def teardown_remote_access(comp_dir, state=None):
 
 
 def verify_remote_access(state, comp_id, planned_identifiers):
+    comp_id = comp_slug(comp_id)
     # Post-deploy check used by the verifier: returns (ok, problems[]). Config-presence level — a real participant-device probe is a manual step (docs).
     problems = []
     ra = (state or {}).get("remote_access") or {}

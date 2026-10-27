@@ -4,7 +4,7 @@ import sys
 import pipeline_api
 
 from common.constants import (DEFAULT_ENGINE_MGMT_GW, RED_SEGMENT_GW,
-                              RED_SEGMENT_SUBNET, red_bridge_name)
+                              RED_SEGMENT_SUBNET, SCORING_ENGINE_VMID, red_bridge_name)
 from common.utils import competition_name, stages_red
 from multinode.placement_record import resolved_mgmt_bridge
 from engine.engine_event_ops import push_event_conf
@@ -33,15 +33,19 @@ def _replace_engine(comp_dir, state, teams, boxes):
     placement, identifiers, in_path = _identifiers(comp_dir, teams, boxes)
     cfg = estate_config.active()
     node = cfg.proxmox.node
-    vmid = int(state["scoring_vmid"])
+    vmid = int(state.get("scoring_vm_id") or SCORING_ENGINE_VMID)
     ownership = Ownership(competition_name(comp_dir), state["run_id"])
     destroy_vm_if_exists(node, vmid, expect_tags=ownership.tags)
     estate_apply.create_engine(
         estate_state.EstateState.load(comp_dir), ownership, node, vmid=vmid,
         template_vmid=int(state["engine_template_vmid"]),
         team_identifiers=identifiers, transit_identifiers=identifiers if in_path else [],
-        mgmt_ip=config.active().engine.mgmt_ip,
-        mgmt_gw=(config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW),
+        # The RECORDED address wins: an auto-selected band IP lives in the document, while the
+        # process config still holds the profile default (.250), which the new engine would
+        # then take while every later step dials the recorded one.
+        mgmt_ip=(state.get("engine_mgmt_ip") or config.active().engine.mgmt_ip),
+        mgmt_gw=(state.get("engine_mgmt_gw") or config.active().engine.mgmt_gw
+                 or DEFAULT_ENGINE_MGMT_GW),
         mgmt_bridge=resolved_mgmt_bridge(placement),
         username=cfg.engine.username,
         ssh_public_key=cfg.ssh.public_key,
@@ -53,11 +57,14 @@ def _address_engine(comp_dir, state, teams, boxes, ctx):
     from estate import engine_setup
     from multinode.placement_record import satellite_routes_for
     placement, identifiers, in_path = _identifiers(comp_dir, teams, boxes)
+    from estate import apply as estate_apply
     engine_setup.configure_engine_network(
         ctx, identifiers, identifiers if in_path else [],
         satellite_routes_for(placement) if placement else [],
         red_segment=({"subnet": RED_SEGMENT_SUBNET, "gw": RED_SEGMENT_GW}
-                     if stages_red(comp_dir) else None))
+                     if stages_red(comp_dir) else None),
+        macs=estate_apply.engine_nic_macs(config.active().proxmox.node,
+                                         int(state.get("scoring_vm_id") or 1000)))
 
 
 def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
@@ -94,6 +101,27 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
                      ctx["scoring_engine_ip"], timeout=300)
         with timed(comp_dir, "recovery", "engine_network"):
             _address_engine(comp_dir, state, teams, boxes, ctx)
+        if state.get("firewalls_bootstrapped"):
+            # An in-path range's engine does not hold 192.168.<id>.1 any more: re-applying the
+            # pre-cutover netplan puts the engine back on the firewalls' gateway address and
+            # silently bypasses them.
+            from common.constants import RED_SEGMENT_GW, RED_SEGMENT_SUBNET
+            from net.firewall_ops import cut_over_engine
+            from estate import apply as estate_apply
+            cut_over_engine(ctx, teams,
+                            red_segment=({"subnet": RED_SEGMENT_SUBNET,
+                                          "gw": RED_SEGMENT_GW}
+                                         if stages_red(comp_dir) else None),
+                            macs=estate_apply.engine_nic_macs(node, engine_vmid))
+        if stages_red(comp_dir) and state.get("red"):
+            # The re-cloned engine has no red rules; without them red01 cannot reach a team.
+            from red import red01_ops
+            red01_ops.install_engine_rules(
+                ctx["scoring_engine_ip"], ctx["ssh_key_path"],
+                engine_user=ctx["vm_username"],
+                team_identifiers=[teams[k]["identifier"] for k in sorted(teams)],
+                callback_port=state["red"].get("callback_port"),
+                callback_host=state["red"].get("callback_host") or "")
         with timed(comp_dir, "recovery", "engine_from_template"):
             prepare_engine_from_template(ctx, state["postgres_password"],
                                          state["redis_password"])
@@ -109,7 +137,7 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
         ensure_nat_forwarding(ctx)
 
     # The DB is empty, so phase 7's done-flags are stale — leaving them made the
-    # --from-phase 7 re-seed skip every step; portal_up too, the new engine has no portal yet.
+    # --from-phase 8 re-seed skip every step; portal_up too, the new engine has no portal yet.
     for flag in ("seeded", "engine_unpaused", "injects_created", "injects_fingerprint",
                  "portal_up"):
         state.pop(flag, None)
@@ -119,16 +147,19 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
 
     print(f"\n  Engine recovered from template (vmid {state['engine_template_vmid']}).")
     print("  The scoring DB is EMPTY — re-seed with:")
-    print(f"    python3 create-competition.py --competition {competition_name(comp_dir)} "
-          f"--from-phase 7 --yes")
+    print(f"    python3 create-competition.py --comp-dir {comp_dir} --from-phase 8 --yes")
     return True
 
 
 def reseed_event(comp_dir):
-# Offsets resolve at phase-7 time — a rollback-ready alone left every inject already closed.
+# Offsets resolve at phase-8 time — a rollback-ready alone left every inject already closed.
+#     Phase 8 is the seed; phase 7 would re-run domains, the disruptive final pass and the
+#     red plant, and re-take every box's tz-ready snapshot mid-event.
     import subprocess
-    subprocess.run([sys.executable, "create-competition.py", "--competition", competition_name(comp_dir),
-                    "--from-phase", "7", "--yes"], check=True)
+    from pathlib import Path
+    driver = Path(__file__).resolve().parents[1] / "create-competition.py"
+    subprocess.run([sys.executable, str(driver), "--comp-dir", str(Path(comp_dir).resolve()),
+                    "--from-phase", "8", "--yes"], check=True)
 
 
 def args_yes_engine_recovery():

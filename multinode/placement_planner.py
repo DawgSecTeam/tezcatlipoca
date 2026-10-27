@@ -4,8 +4,8 @@ import os
 import time
 
 from common.constants import ENGINE_TEMPLATE_VMID_OFFSET, MAX_BOXES_PER_TEAM, comp_tag
-from multinode.nodes_config import (MAX_SATELLITES, NODES_CONFIG_PATH, PLACEMENT_VERSION,
-                                    load_nodes_config)
+from multinode.nodes_config import (JUMP_RESERVE_MB, MAX_SATELLITES, NODES_CONFIG_PATH,
+                                    PLACEMENT_VERSION, load_nodes_config)
 from multinode.placement_record import (anchor_identifier, check_team_blocks,
                               default_jump_mgmt_ip, engine_record, golden_slot_span,
                               jump_vmid_for, read_placement, teams_on_node, write_placement)
@@ -65,7 +65,9 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=
             return False
         tags = {t.strip() for t in str(vm.get("tags") or "").replace(";", ",").split(",") if t.strip()}
         if vm.get("template") == 1 and vm.get("status") == "stopped":
-            return "tezcatlipoca" in tags
+            # Only THIS competition's kept template is not a collision; another range's
+            # template is exactly the collision preflight will refuse.
+            return comp_tag(comp_name) in tags
         if any(t.startswith("comp-") and t != comp_tag(comp_name) for t in tags):
             return False
         return True
@@ -124,6 +126,9 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
     reserved_mb = {}
     for key, node_name in team_nodes.items():
         reserved_mb[node_name] = reserved_mb.get(node_name, 0) + _team_reservation_mb(boxes)
+    # Every candidate node may end up hosting a jump VM; keep that much out of the ledger so
+    # a "full" node does not get one team too many and then fail to start its router.
+    declared_jump_reserve = JUMP_RESERVE_MB if len(records) > 1 else 0
 
     prefer = [str(x) for x in (balancing.get("prefer") or [])]
 
@@ -137,8 +142,11 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
         return placed < rec.max_teams
 
     def eff_free(rec):
+        # `weight` is a multiplier on the node's headroom: raising it in nodes.json must make
+        # the node MORE attractive, which is what the error text tells operators to do.
         mem = probes[rec.name].get("mem_free_bytes") or 0
-        return (mem / rec.weight) - reserved_mb.get(rec.name, 0) * 1024 ** 2
+        return (mem - reserved_mb.get(rec.name, 0) * 1024 ** 2
+                - declared_jump_reserve * 1024 ** 2) * rec.weight
 
     skipped = []
     for key in sorted((k for k in teams if k not in team_nodes),

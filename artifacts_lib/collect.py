@@ -88,7 +88,8 @@ def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=F
             collected["targets"].append(entry)
             continue
 
-        for want in list(target.get("want", [])) + list(target.get("want_globs", [])):
+        all_wants = list(target.get("want", [])) + list(target.get("want_globs", []))
+        for index, want in enumerate(all_wants):
             label = want_label(want)
             records = []
             already = (_previous_items(previous, entry["name"], label)
@@ -129,9 +130,9 @@ def collect(test_path, targets, *, transport=None, skip_existing=True, dry_run=F
                     entry["errors"].append(f"{label}: {record.get('reason')}")
             # A dead box must not burn the per-file timeout on every remaining want during teardown.
             if stop_on_unreachable and any(r["status"] == UNREACHABLE for r in records):
-                remaining = [w for w in (list(target.get("want", []))
-                                         + list(target.get("want_globs", [])))
-                             if want_label(w) != label]
+                # Only the wants AFTER this one: the old label filter re-marked the ones
+                # already collected as "skipped", double-counting them.
+                remaining = all_wants[index + 1:]
                 entry["files"].extend({"want": want_label(w), "canonical": w.get("canonical"),
                                        "status": SKIPPED,
                                        "reason": "not attempted: target unreachable"}

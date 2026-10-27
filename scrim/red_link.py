@@ -6,7 +6,7 @@ from artifacts_lib import artifacts_ops
 from artifacts_lib.constants import SIDES
 from common.comp_paths import resolve_comp_dir
 from scrim import core
-from scrim import procs
+from common import procs
 from scrim.core import log
 
 
@@ -232,9 +232,15 @@ def start_red_director(args):
 
 
 def stop_red_director(args):
-    """Quiet a reused range before the pre-T0 fire test, which a live loop races (its
-    restore and red's next takedown flap the service the test needs to see down)."""
-    target, common, jump = _red_ssh_ctx(args)
+    """Quiet the range before the pre-T0 fire test, which a live loop races (its restore and
+    red's next takedown flap the service the test needs to see down)."""
+    try:
+        target, common, jump = _red_ssh_ctx(args)
+    except RuntimeError as e:
+        # Nothing staged yet (a fresh deploy that never reached phase 7, or a --skip-deploy
+        # run before any red): there is no loop to stop.
+        log(f"red director stop skipped — {e}")
+        return False
     cmd = f"sudo -n systemctl stop {red_unit(args)}"
     for extra in ([], (["-o", jump] if jump else [])):
         try:

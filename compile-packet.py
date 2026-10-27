@@ -9,10 +9,8 @@ competition definitions in the comps repo; this compiles that shape into
 
 import argparse
 import sys
-from pathlib import Path
-
 from config.packet_ops import (load_profile, packet_yaml_for_event, compile_profile,
-                               resolve_packet_source, validate_profile)
+                               resolve_packet_source)
 
 
 def main():
@@ -53,13 +51,6 @@ def main():
           f"{len({s['box'] for s in services})} box(es)")
     if profile.get("injects"):
         print(f"  injects   : {len(profile['injects'])}")
-    if args.dry_run:
-        errors = validate_profile(profile)
-        if errors:
-            print("  VALIDATION ERRORS:")
-            for e in errors:
-                print(f"    - {e}")
-            return 1
     if not args.dry_run:
         print("  wrote:")
         for path in wrote:

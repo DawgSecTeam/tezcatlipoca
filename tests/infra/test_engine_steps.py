@@ -145,7 +145,11 @@ class QuotientInjectPatch(unittest.TestCase):
             cmds[step] = cmd
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
+        # The compose-up retry lives in engine_cmd_ops now: patch both bindings.
+        from engine import engine_cmd_ops
         with mock.patch.object(bo, "_run_engine_cmd", side_effect=fake_run_cmd), \
+                mock.patch.object(engine_cmd_ops, "_run_engine_cmd", side_effect=fake_run_cmd), \
+                mock.patch.object(engine_cmd_ops.time, "sleep"), \
                 mock.patch.object(bo, "install_range_healthcheck"):
             bootstrap_scoring_engine(_CTX, "pg", "redis", quotient_ref="abc")
         self.assertIn("patch Quotient inject page", steps)

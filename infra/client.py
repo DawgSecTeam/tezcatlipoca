@@ -41,12 +41,24 @@ def _route_for_path(path):
 
 
 def live_vmids():
-    """Raises on failure: an empty set reads as "everything is gone" and kills a fine resume."""
-    try:
-        data = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
-    except Exception as e:                                  # noqa: BLE001 - reported
-        raise RuntimeError(f"could not list the cluster's VMs to verify the resume: {e}")
-    return {int(v["vmid"]) for v in (data or []) if v.get("vmid") is not None}
+    """Every vmid visible from every host this process routes to.
+
+    Raises on failure: an empty set reads as "everything is gone" and kills a fine resume.
+    Independent Proxmox hosts only list their OWN VMs in /cluster/resources, so a multi-node
+    resume must ask each routed host or every satellite VM reads as gone.
+    """
+    hosts = sorted(_NODE_ROUTES) or [None]
+    vmids = set()
+    for host in hosts:
+        try:
+            if host is None:
+                data = proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
+            else:
+                data = cluster_vms_for(host)
+        except Exception as e:                              # noqa: BLE001 - reported
+            raise RuntimeError(f"could not list the cluster's VMs to verify the resume: {e}")
+        vmids |= {int(v["vmid"]) for v in (data or []) if v.get("vmid") is not None}
+    return vmids
 
 
 class _FingerprintAdapter(HTTPAdapter):
@@ -63,31 +75,34 @@ def proxmox_request(method, url, fingerprint=None, **kwargs):
     cfg = config.active()
     fp = fingerprint or cfg.proxmox.tls_fingerprint
     ca = cfg.proxmox.ca_bundle
-    session = requests.Session()
-    if fp:
-        session.mount("https://", _FingerprintAdapter(fp))
-        kwargs.setdefault("verify", False)
-    else:
-        kwargs.setdefault("verify", ca or False)
-    return session.request(method, url, **kwargs)
+    with requests.Session() as session:
+        if fp:
+            session.mount("https://", _FingerprintAdapter(fp))
+            kwargs.setdefault("verify", False)
+        else:
+            kwargs.setdefault("verify", ca or False)
+        return session.request(method, url, **kwargs)
 
 
-def proxmox_api_for(endpoint, token, method, path, **kwargs):
+def proxmox_api_for(endpoint, token, method, path, fingerprint=None, **kwargs):
     url = f"{endpoint.rstrip('/')}/api2/json{path}"
     headers = {"Authorization": f"PVEAPIToken={token}"}
+    # Only re-send a request the server cannot have applied twice: a POST that timed out may
+    # still be running (a re-POSTed /clone fails "already exists"), so it is sent once.
+    idempotent = method in ("GET", "HEAD", "PUT", "DELETE")
 
     def _call():
         kwargs.setdefault("timeout", 60)
-        r = proxmox_request(method, url, headers=headers, **kwargs)
+        r = proxmox_request(method, url, fingerprint=fingerprint, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
 
     def _retry_on(exc):
         # PVE serializes API writes on per-VM/datastore lock files and answers the loser
         # with a 500 "can't lock file"; the calls are idempotent, so retry is safe.
-        if not isinstance(exc, (requests.exceptions.ConnectionError,
-                                requests.exceptions.Timeout,
-                                requests.exceptions.HTTPError)):
+        if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+            return idempotent
+        if not isinstance(exc, requests.exceptions.HTTPError):
             return False
         response = getattr(exc, "response", None)
         return response is not None and "can't lock file" in (response.text or "")
@@ -99,7 +114,8 @@ def proxmox_api_for(endpoint, token, method, path, **kwargs):
 def proxmox_api(method, path, **kwargs):
     override = _route_for_path(path)
     if override:
-        endpoint, token = override
+        endpoint, token, fingerprint = override
+        kwargs.setdefault("fingerprint", fingerprint)
     else:
         cfg = config.active()
         endpoint = cfg.require("proxmox.endpoint")
@@ -111,9 +127,9 @@ def cluster_vms_for(node):
     """Independent hosts' /cluster/resources shows only their own VMs — ask the owning host."""
     override = _route_for_path(f"/nodes/{node}/x")
     if override:
-        endpoint, token = override
+        endpoint, token, fingerprint = override
         return proxmox_api_for(endpoint, token, "GET", "/cluster/resources",
-                               params={"type": "vm"})["data"]
+                               fingerprint=fingerprint, params={"type": "vm"})["data"]
     return proxmox_api("GET", "/cluster/resources", params={"type": "vm"})["data"]
 
 
@@ -166,7 +182,9 @@ def destroy_bridge_if_exists(node, bridge_name):
         if bridge_name not in existing:
             return True
         proxmox_api("DELETE", f"/nodes/{node}/network/{bridge_name}")
-        proxmox_api("PUT", f"/nodes/{node}/network")
+        upid = proxmox_api("PUT", f"/nodes/{node}/network").get("data")
+        if upid:
+            wait_for_proxmox_task(node, upid)
         remaining = {n.get("iface") for n in proxmox_api("GET", f"/nodes/{node}/network")["data"]}
         return bridge_name not in remaining
     except requests.exceptions.HTTPError as e:
@@ -186,7 +204,8 @@ def storage_queue_lock(node, wait_s=900):
     slug = re.sub(r"[^A-Za-z0-9._-]", "_", f"{host}-{node}")
     path = Path.home() / ".tezcatlipoca" / "locks" / f"storage-{slug}.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(path, "w")
+    # `a+`: truncating before the flock wipes the holder's pid and makes the wait message lie.
+    fh = open(path, "a+")
     try:
         deadline, announced = time.time() + wait_s, False
         while True:

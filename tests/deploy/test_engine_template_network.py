@@ -11,7 +11,7 @@ from unittest import mock
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 
-from engine import engine_identity_ops
+from engine import engine_cmd_ops, engine_identity_ops
 
 
 def test_prepare_from_template_fixes_dns_before_compose_up():
@@ -21,7 +21,9 @@ def test_prepare_from_template_fixes_dns_before_compose_up():
         steps.append(kw.get("step"))
         return None
 
+    # start_quotient lives in engine_cmd_ops; patch both bindings.
     with mock.patch.object(engine_identity_ops, "_run_engine_cmd", side_effect=fake), \
+         mock.patch.object(engine_cmd_ops, "_run_engine_cmd", side_effect=fake), \
          mock.patch.object(engine_identity_ops, "push_quotient_env"), \
          mock.patch.object(engine_identity_ops, "_install_firewall_and_healthcheck"):
         engine_identity_ops.prepare_engine_from_template(SimpleNamespace(), "pg", "redis")
@@ -30,6 +32,7 @@ def test_prepare_from_template_fixes_dns_before_compose_up():
 
 def test_prepare_from_template_installs_the_range_firewall():
     with mock.patch.object(engine_identity_ops, "_run_engine_cmd"), \
+         mock.patch.object(engine_cmd_ops, "_run_engine_cmd"), \
          mock.patch.object(engine_identity_ops, "push_quotient_env"), \
          mock.patch.object(engine_identity_ops, "_install_firewall_and_healthcheck") as fw:
         engine_identity_ops.prepare_engine_from_template(SimpleNamespace(), "pg", "redis")

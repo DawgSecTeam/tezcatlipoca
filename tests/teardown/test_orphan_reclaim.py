@@ -228,7 +228,8 @@ class Cli(unittest.TestCase):
 
     def test_leftovers_exit_nonzero(self):
         result = {"destroyed": [{"vmid": 100, "name": "engine", "role": "vm"}],
-                  "kept_templates": [], "notes": [], "remaining": [100], "scanned": 7}
+                  "kept_templates": [], "notes": [], "remaining": [100], "scanned": 7,
+                  "nodes": ["pve"]}
         rc, out = self._run(self._args(), result)
         self.assertEqual(rc, 1)
         self.assertIn("NOT CLEAN", out)

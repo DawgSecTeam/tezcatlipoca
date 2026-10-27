@@ -36,15 +36,14 @@ class ExpansionScript(unittest.TestCase):
 
     def test_resize2fs_device_is_not_wrapped_in_literal_quotes(self):
         script = _run()["cmds"][0][1]
-        self.assertIn('GROW_FS="resize2fs $SRC"', script)
-        self.assertNotIn('resize2fs \\"', script)
+        self.assertIn('resize2fs "$SRC"', script)
 
     def test_btrfs_layout_grows_via_btrfs_resize(self):
         # Fedora: findmnt reports btrfs root as '/dev/sda3[/root]' — the subvol suffix must be stripped
         captured = _run()
         script = captured["cmds"][0][1]
         self.assertIn("${ROOT_SRC%%\\[*}", script)
-        self.assertIn('btrfs) GROW_FS="btrfs filesystem resize max /"', script)
+        self.assertIn("btrfs) btrfs filesystem resize max /", script)
         self.assertIn('if [ -n "$DISK" ] && [ -n "$PART" ]', script)
 
     def test_script_is_valid_shell(self):

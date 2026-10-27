@@ -74,21 +74,25 @@ def guest_agent_exec_root(node, vmid, script, timeout=60, shell="bash"):
 
 
 def guest_agent_write_file(node, vmid, path, content):
+    import shlex
     if isinstance(content, (bytes, bytearray, memoryview)):
         data = bytes(content)
     else:
         with open(content, "rb") as f:
             data = f.read()
+    quoted = shlex.quote(str(path))
     parts = []
     for start in range(0, len(data), _FILE_WRITE_CHUNK):
         part = f"{path}.part{len(parts)}"
         _guest_agent_write_chunk(
             node, vmid, part, data[start:start + _FILE_WRITE_CHUNK])
         parts.append(part)
-    # file-write is one-shot (no append/offset), so parts concatenate guest-side.
-    rc, _out, err = guest_agent_exec_root(
-        node, vmid,
-        f"cat {' '.join(parts)} > {path} && rm -f {' '.join(parts)}", timeout=300)
+    # file-write is one-shot (no append/offset), so parts concatenate guest-side. An empty
+    # file has no parts: `cat` with no operand would read stdin until the timeout.
+    sources = " ".join(shlex.quote(p) for p in parts)
+    command = (f"cat {sources} > {quoted} && rm -f {sources}" if parts
+               else f": > {quoted}")
+    rc, _out, err = guest_agent_exec_root(node, vmid, command, timeout=300)
     if rc != 0:
         raise RuntimeError(f"could not reassemble {path} in vmid {vmid} from "
                            f"{len(parts)} chunks: rc={rc} {err.strip()[:200]}")

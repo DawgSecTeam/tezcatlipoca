@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
-from deploy_lib.phases.final import _wipe_targets  # noqa: E402
+from guests.clean_trails import targets_from as _wipe_targets  # noqa: E402
 
 
 def _target(name, template, ip, octet=2):

@@ -15,7 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scrim import clean_trails  # noqa: E402
+from guests import clean_trails  # noqa: E402
 
 CREDS = {"KEY_PATH": "/k", "VM_USER": "jump", "ENGINE_IP": "10.0.0.248",
          "BOX_USER": "medic", "BOX_PW": "pw"}

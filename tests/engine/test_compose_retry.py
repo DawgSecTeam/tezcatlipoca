@@ -11,6 +11,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 from engine import engine_bootstrap_ops as ebo
+from engine import engine_cmd_ops
 
 
 class Retry(unittest.TestCase):
@@ -24,7 +25,9 @@ class Retry(unittest.TestCase):
             return SimpleNamespace(stdout="")
 
         ctx = SimpleNamespace()
-        with patch.object(ebo, "_run_engine_cmd", side_effect=fake), \
+        # The retry now lives in engine_cmd_ops.start_quotient: patch the OWNING module.
+        with patch.object(engine_cmd_ops, "_run_engine_cmd", side_effect=fake), \
+             patch.object(ebo, "_run_engine_cmd", side_effect=fake), \
              patch.object(ebo, "push_quotient_env"), \
              patch.object(ebo, "_patch_quotient_injects_cmd", return_value="x"), \
              patch.object(ebo, "_install_firewall_and_healthcheck"), \

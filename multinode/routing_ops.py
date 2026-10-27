@@ -29,7 +29,8 @@ def verify_satellite_routing(placement, ctx, timeout=120):
         names = ", ".join(s["name"] for s in pending)
         raise RuntimeError(
             f"routing to satellite(s) {names} never converged within {timeout}s: "
-            f"{last_err}. Check the engine's /etc/netplan/70-satellite-routes.yaml, "
+            f"{last_err}. Check the engine's /usr/local/sbin/satellite-routes.sh and "
+            f"satellite-routes.service (an engine reboot re-asserts them), "
             f"the jump VM's state on the satellite node, and jump mgmt IP "
             f"{', '.join(s['jump_mgmt_ip'] for s in pending)}.")
 

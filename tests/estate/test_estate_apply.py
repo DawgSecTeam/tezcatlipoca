@@ -212,12 +212,17 @@ class Idempotency(Base):
     def test_existing_owned_vm_is_adopted_without_cloning(self):
         self.fake.vms.append({"vmid": 1401, "name": "team1-web01", "status": "stopped",
                               "tags": "tezcatlipoca;comp-scrim-one;run-abc123"})
-        self.fake.configs[1401] = {"tags": "tezcatlipoca;comp-scrim-one;run-abc123"}
+        self.fake.configs[1401] = {"tags": "tezcatlipoca;comp-scrim-one;run-abc123",
+                                   "scsi0": "hdd:vm-1401-disk-0,size=20G"}
         estate_apply.create_team_box(self.state, self.ownership, target(), source_vmid=1451,
                                      box_username="ubuntu", box_password="pw",
                                      ssh_public_key="ssh-ed25519 AAAA")
         self.assertEqual([c for c in self.fake.calls if c[1].endswith("/clone")], [])
         self.assertEqual(self.state.resources(kind="team_box")[0]["vmid"], 1401)
+        # Adoption still starts the VM: a run that died after the config PUT must not
+        # resume onto a stopped box.
+        self.assertTrue([c for c in self.fake.calls
+                         if c[1] == f"/nodes/{NODE}/qemu/1401/status/start"])
 
     def test_foreign_vm_is_refused(self):
         self.fake.vms.append({"vmid": 1401, "name": "someone-else", "status": "running",

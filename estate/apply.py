@@ -5,12 +5,13 @@ import time
 
 import requests
 
-from common.utils import BOX_DNS_PRIMARY
-from golden.golden_target_ops import _quote_sshkeys
-from infra.client import proxmox_api, wait_for_proxmox_task
+from common.ssh_ops import quote_sshkeys
+from common.utils import box_dns_primary
+from common.windows_ops import is_windows_template
+from infra.client import node_bridges, proxmox_api, wait_for_proxmox_task
 from infra.lifecycle import start_vm
-from infra.ownership import (MARKER, OWNED, Refusal, clone_marker, destroy_vm_if_exists,
-                             ownership_verdict)
+from infra.ownership import (MARKER, OWNED, Refusal, bridge_owned_by, clone_marker,
+                             destroy_vm_if_exists, ownership_verdict)
 
 ENGINE_CORES = 4
 ENGINE_MEMORY_MB = 4096
@@ -77,6 +78,19 @@ def _adopt(node, vmid, ownership, name):
                f"(missing tags: {sorted(missing)}). A deploy never destroys a leftover range.")
 
 
+def engine_nic_macs(node, vmid):
+    """The MAC of every NIC after net0, in create order — what the netplan pins interfaces by."""
+    config = _vm_config(node, vmid)
+    macs = []
+    index = 1
+    while f"net{index}" in config:
+        match = re.search(r"(?:virtio|e1000|e1000e|vmxnet3)=([0-9A-Fa-f:]{17})",
+                          config[f"net{index}"])
+        macs.append(match.group(1) if match else "")
+        index += 1
+    return macs
+
+
 def _root_disk(config):
     for key in sorted(k for k in config if k.startswith(("scsi", "virtio", "sata", "ide"))):
         value = config[key]
@@ -96,24 +110,41 @@ def ensure_disk_size(node, vmid, disk_gb):
     if key is None:
         raise RuntimeError(f"vmid {vmid} has no root disk to size to {disk_gb}G")
     if disk_gb > current:
-        proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
-                    data={"disk": key, "size": f"{disk_gb}G"})
+        upid = proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
+                           data={"disk": key, "size": f"{disk_gb}G"}).get("data")
+        if upid:
+            wait_for_proxmox_task(node, upid)
     return key
 
 
 def set_discard(node, vmid, key):
-    """Turn on discard for an inherited clone disk: the PUT takes the volume plus options, not the reported `size=`."""
+    """Turn on discard for an inherited clone disk, keeping every other disk option."""
     if key is None:
         return
     current = str(_vm_config(node, vmid).get(key) or "")
     if not current or "discard=on" in current:
         return
-    _configure(node, vmid, {key: current.split(",")[0] + ",discard=on"})
+    # PVE reports the volume plus its options and only `size=` is read-only in a PUT, so keep
+    # the rest (iothread, ssd, cache, aio, backup) instead of rewriting the disk bare.
+    options = [part for part in current.split(",") if part and not part.startswith("size=")]
+    options.append("discard=on")
+    _configure(node, vmid, {key: ",".join(options)})
 
 
-def create_bridge(state, node, name, comment=""):
-    nets = {n.get("iface") for n in proxmox_api("GET", f"/nodes/{node}/network")["data"]}
+def create_bridge(state, node, name, comment="", comp_name="", run_id=""):
+    nets = node_bridges(node)
     if name in nets:
+        # Staged or applied by an earlier attempt: only ours if its comment proves it, and it
+        # must be recorded or a resume's teardown walks past it.
+        if comp_name and not bridge_owned_by(nets[name], comp_name, run_id):
+            raise Refusal(
+                saw=f"bridge {name} on {node} already exists",
+                expected="a free bridge name, or one this run created",
+                remedy=f"pick another team identifier block, or free {name} by hand",
+                detail=f"bridge {name} on {node} exists and is not this run's "
+                       f"(comment: {nets[name]!r})")
+        state.record("bridge", node, name, bridge=name)
+        state.save()
         return False
     # No `bridge_ports`: PVE resolves each entry of the port LIST, so "no ports" is expressed by omitting it.
     proxmox_api("POST", f"/nodes/{node}/network",
@@ -125,7 +156,7 @@ def create_bridge(state, node, name, comment=""):
     upid = proxmox_api("PUT", f"/nodes/{node}/network")["data"]
     if upid:
         wait_for_proxmox_task(node, upid)
-    state.record("bridge", node, name)
+    state.record("bridge", node, name, bridge=name)
     state.save()
     return True
 
@@ -144,16 +175,20 @@ def create_engine(state, ownership, node, *, vmid, template_vmid, team_identifie
                            + ([red_bridge] if red_bridge else [])
         for index, bridge in enumerate(bridges):
             config[f"net{index}"] = f"virtio,bridge={bridge}"
+        # Identity always, DHCP or not: without ciuser/sshkeys nothing can log in to a
+        # DHCP engine, and the old code skipped both whenever mgmt_ip was empty.
+        config.update({
+            "ciuser": username,
+            "sshkeys": quote_sshkeys(ssh_public_key),
+            "nameserver": box_dns_primary(),
+        })
         if mgmt_ip:
-            config.update({
-                "ciuser": username,
-                "sshkeys": _quote_sshkeys(ssh_public_key),
-                "ipconfig0": f"ip={mgmt_ip}/24" + (f",gw={mgmt_gw}" if mgmt_gw else ""),
-                "nameserver": BOX_DNS_PRIMARY,
-            })
+            config["ipconfig0"] = f"ip={mgmt_ip}/24" + (f",gw={mgmt_gw}" if mgmt_gw else "")
         _configure(node, vmid, config)
-        set_discard(node, vmid, ensure_disk_size(node, vmid, ENGINE_DISK_GB))
-        start_vm(node, vmid)
+    # Idempotent tail, re-run on adoption: a run that died between the config PUT and the
+    # start must not resume onto a stopped, undersized engine.
+    set_discard(node, vmid, ensure_disk_size(node, vmid, ENGINE_DISK_GB))
+    start_vm(node, vmid)
     state.record("engine", node, "quotient-engine", vmid=vmid, tags=ownership.tags)
     state.save()
     return vmid
@@ -172,18 +207,18 @@ def create_team_box(state, ownership, target, *, source_vmid, box_username, box_
         for index, bridge in enumerate(bridges):
             config[f"net{index}"] = f"virtio,bridge={bridge}"
         # No cloud-init identity on Windows (bootstrap_windows_box owns it) or on an unmanaged appliance.
-        if not box.get("unmanaged") and "win" not in box["template"].lower():
+        if not box.get("unmanaged") and not is_windows_template(box.get("template", "")):
             config.update({
                 "ciuser": box_username,
                 "cipassword": box_password,
-                "sshkeys": _quote_sshkeys(ssh_public_key),
+                "sshkeys": quote_sshkeys(ssh_public_key),
                 "ipconfig0": f"ip={target['ip']}/24,gw=192.168.{target['identifier']}.1",
                 # Never the team's own dns box: nakon installs bind9 over apt, which needs a working resolver.
-                "nameserver": BOX_DNS_PRIMARY,
+                "nameserver": box_dns_primary(),
             })
         _configure(node, vmid, config)
-        set_discard(node, vmid, ensure_disk_size(node, vmid, box.get("disk_gb")))
-        start_vm(node, vmid)
+    set_discard(node, vmid, ensure_disk_size(node, vmid, box.get("disk_gb")))
+    start_vm(node, vmid)
     state.record("team_box", node, name, vmid=vmid, tags=ownership.tags)
     state.save()
     return vmid

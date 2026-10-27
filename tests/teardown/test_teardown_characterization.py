@@ -223,6 +223,9 @@ class MainSequence(unittest.TestCase):
             patch.object(ownership, "proxmox_api", FakePVE()),
             patch.object(ownership, "wait_for_proxmox_task", lambda *a, **k: None),
             patch.object(infra_client, "live_vmids", lambda: []),
+            # red01.py binds proxmox_api itself: an unpatched binding dials the node, and the
+            # "unknown" verdict it returns now (correctly) fails the teardown.
+            patch("infra.red01.proxmox_api", FakePVE()),
             patch.object(red01_ops, "recorded_identity", lambda *a, **k: {"vmid": 999, "ip": "", "node": ""}),
             # The entry point refuses without the ambient estate identity (verify_clean
             # needs it); this harness exercises the sequence, not the refusal.

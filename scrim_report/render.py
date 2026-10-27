@@ -29,7 +29,10 @@ def build_report(run_dir):
     world = loaders.load_world(run_dir)
     snaps = loaders.load_scoreboard(run_dir)
     labels = host_labels.box_labels(run_dir)
-    rm = red_side.red_metrics(events, t0, world, labels, host_labels.windows_octets(run_dir))
+    teams = host_labels.load_teams(run_dir)
+    host_labels.TEAM_IDENTIFIERS.update(teams)
+    rm = red_side.red_metrics(events, t0, world, labels, host_labels.windows_octets(run_dir),
+                              teams=teams)
     down = blue_side.down_windows(snaps)
     bm = blue_side.blue_metrics(run_dir)
 
@@ -80,7 +83,9 @@ def build_report(run_dir):
         due = injects_due(final, t0, duration_min)
         if due is not None:
             injects_threshold = min(injects_threshold, due) if due else None
-    gate_rows = {"red": gate_table.GATES["red"],
+    windows_boxes = bool(host_labels.windows_octets(run_dir))
+    gate_rows = {"red": [k for k in gate_table.GATES["red"]
+                         if k[0] != "windows_footholds" or windows_boxes],
                  "blue": [k for k in gate_table.GATES["blue"]
                           if k[0] != "injects" or injects_threshold is not None]}
     gates = gate_table.evaluate(
@@ -97,6 +102,8 @@ def build_report(run_dir):
         gates=gate_rows)
     if injects_threshold is None:
         gates.append(("blue", "injects", "n/a (comp ships none)", "-", "n/a", ">="))
+    if not windows_boxes:
+        gates.append(("red", "windows_footholds", "n/a (no Windows boxes)", "-", "n/a", ">="))
     gates_failed = [r for r in gates if r[4] == "FAIL"]
 
     L = []

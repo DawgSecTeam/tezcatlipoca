@@ -40,8 +40,11 @@ def guest_argv(opts, *, node, key, user, command=None, extra=()):
             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
             *extra]
     if opts.mode == "node":
-        proxy = f"ssh -i {key} -o BatchMode=yes -W %h:%p root@{node}"
-        argv.append(f"-o ProxyCommand={proxy}")
+        proxy = (f"ssh -i {key} -o BatchMode=yes -o StrictHostKeyChecking=no "
+                 f"-o UserKnownHostsFile=/dev/null -W %h:%p root@{node}")
+        # Two argv elements: ssh parses `-o` and its value separately, and a single
+        # "-o ProxyCommand=..." token is not a valid option.
+        argv += ["-o", f"ProxyCommand={proxy}"]
     argv.append(f"{user}@{guest_ip(opts)}")
     if command is not None:
         argv.append(command)
@@ -49,8 +52,11 @@ def guest_argv(opts, *, node, key, user, command=None, extra=()):
 
 
 def _node_ssh(node, key, command, timeout=30):
+    # BatchMode plus no known_hosts entry fails closed: a builder host that was never
+    # TOFU'd could not run at all.
     return subprocess.run(
         ["ssh", "-i", str(key), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+         "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
          f"root@{node}", command],
         capture_output=True, text=True, timeout=timeout)
 

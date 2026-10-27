@@ -27,6 +27,13 @@ fi
 echo "==> verifying '$TARGET' is actually present before rewriting"
 git log --oneline --all -- "$TARGET" | head -5 || true
 
+# Capture the blobs BEFORE the rewrite: afterwards the path is gone from every tree, so the
+# old "is it pruned?" check could only ever find nothing and always printed ok.
+old_blobs=$(git rev-list --all | while read -r c; do
+  git rev-parse "$c:$TARGET" 2>/dev/null || true
+done | sort -u)
+echo "==> ${#old_blobs} distinct blob(s) carry '$TARGET' today"
+
 echo "==> rewriting all refs (this rewrites every commit that touched '$TARGET')"
 FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --prune-empty \
   --index-filter "git rm --cached --ignore-unmatch '$TARGET'" \
@@ -50,18 +57,14 @@ done
 [ "$fail" -eq 0 ] && echo "  ok: no ref contains $TARGET"
 
 # Object-level check: the file may be gone from trees while its blob survives.
-echo "  scanning every reachable object for the old blob content..."
-old_blob=""
-for c in $(git rev-list --all); do
-  b=$(git rev-parse "$c:$TARGET" 2>/dev/null || true)
-  [ -n "$b" ] && { old_blob="$b"; break; }
+echo "  checking every blob that carried $TARGET is really gone..."
+for blob in $old_blobs; do
+  if git cat-file -e "$blob" 2>/dev/null; then
+    echo "  FAIL: blob $blob still exists in the object store"
+    fail=1
+  fi
 done
-if [ -n "$old_blob" ] && git cat-file -e "$old_blob" 2>/dev/null; then
-  echo "  FAIL: blob $old_blob is still reachable"
-  fail=1
-else
-  echo "  ok: the old blob is pruned"
-fi
+[ "$fail" -eq 0 ] && echo "  ok: all ${#old_blobs} old blob(s) pruned"
 
 [ "$fail" -eq 0 ] && echo "==> PURGE COMPLETE — now rotate the credential and force-push" || {
   echo "==> PURGE INCOMPLETE"; exit 1; }

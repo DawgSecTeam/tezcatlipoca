@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 from deploy_lib import estate_inputs as dl_estate_inputs
-from deploy_lib import coverage as dl_coverage  # noqa: E402
+from guests import converge_ops as dl_coverage  # noqa: E402
 from infra import gates as dl_gates  # noqa: E402
 from deploy_lib import golden_plan as dl_golden_plan  # noqa: E402
 from nakonops.nakon_run_ops import NakonResult
@@ -132,9 +132,9 @@ class CoveragePersistence(unittest.TestCase):
                  "plant_coverage_failed": {"web01-team101": ["smb-v1"]}}
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "estate-state.json"
-            dl_coverage.record_stage_coverage(
+            dl_coverage.record_stage(
                 state, self._machines(), self._green_result(),
-                lambda: path.write_text(json.dumps(state)))
+                lambda: path.write_text(json.dumps(state)), "final")
             self.assertEqual(state.get("plant_coverage_failed"), {})
             on_disk = json.loads(path.read_text())
             self.assertEqual(on_disk.get("plant_coverage_failed"), {})

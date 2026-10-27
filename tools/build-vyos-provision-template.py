@@ -37,7 +37,6 @@ command. Direct mode restores the deploy-contract eth1 address 192.168.1.1/24 at
 console before `seal`.
 """
 
-import base64
 import os
 import re
 import subprocess
@@ -48,9 +47,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-load_dotenv(".env")
+import os
 
-from net.firewall_ops import generate_vyos_commands, generate_vyos_lan_commands  # noqa: E402
+if not os.environ.get("TEZ_TEST_OFFLINE"):
+    load_dotenv(".env")
+
+from net.firewall_ops import generate_vyos_commands  # noqa: E402
 from infra.client import proxmox_api, wait_for_proxmox_task  # noqa: E402
 from estate import config
 from tools import build_ssh  # noqa: E402

@@ -566,6 +566,10 @@ def compile_profile(profile_path, competitions_dir=None, force=False, dry_run=Fa
             entry["disk_iface"] = b["disk_iface"]
         if b.get("unmanaged"):
             entry["unmanaged"] = True
+        if b.get("in_path"):
+            # The engine's whole firewall bootstrap (transit NICs, phase 5, the cutover) keys
+            # on this flag; dropping it here silently produced a range with no firewall.
+            entry["in_path"] = True
         boxes.append(entry)
 
     services_by_box = {b["name"]: [] for b in boxes}

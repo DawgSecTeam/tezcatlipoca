@@ -1,4 +1,17 @@
-"""The competition's single estate state document (schema v1)."""
+"""The competition's single estate state document (schema v2).
+
+Two views exist and they are strictly separated:
+
+* the **structured** sections (`roster`, `templates`, `placement`, `red`, `resources`,
+  `teardown`, `external`) are owned by the module that writes them (`common.targets`,
+  `engine.template_freeze`, `multinode.placement_record`, `red.red01_ops`, the inventory
+  API here, `teardown`). They are never part of the flat view, so a deploy's flat save can
+  no longer clobber them.
+* the **flat** view (`flatten()`/`absorb()`) is the deploy's bookkeeping dict: identity,
+  secrets, the flat template records, and the `run` catch-all. `absorb(replace=True)`
+  replaces it wholesale, so a key popped from the flat dict is deleted from the document —
+  the old append-only merge left wiped Phase-8 flags behind forever.
+"""
 
 import json
 import time
@@ -7,19 +20,21 @@ from pathlib import Path
 
 from config.config_ops import write_text_atomic
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 STATE_NAME = "estate-state.json"
 
 _LIST_SECTIONS = {"resources"}
+# `red` is written by two owners (red01_ops' identity, tlaloc_ops' run summary) and read
+# through the flat view by teardown and the scrim harness, so it is merged, never replaced.
+_MERGED_FLAT = ("red",)
+# Derived identity: never deleted by an absorb that omits it.
+_NEVER_DELETE = {"comp_name"}
 
-# The deploy's flat keys that live in `identity`/`secrets`/`templates`/`roster`; everything not
-# named lands in `run`, the deploy-bookkeeping catch-all. `absorb` never deletes, so structured
-# keys survive a round trip.
-_SECTIONS = ("identity", "secrets", "roster", "templates", "run")
+# The deploy's flat keys and the section each lives in. Anything else lands in `run`.
 _FLAT_SECTION = {
     "comp_name": "identity", "run_id": "identity", "scoring_vm_id": "identity",
     "engine_mgmt_ip": "identity", "engine_mgmt_gw": "identity", "endpoint": "identity",
-    "node": "identity", "datastore": "identity",
+    "node": "identity", "datastore": "identity", "name": "identity",
     "teams": "secrets", "admin_password": "secrets", "scoring_password": "secrets",
     "postgres_password": "secrets", "redis_password": "secrets", "box_password": "secrets",
     "box_creds": "secrets", "domain_creds": "secrets", "inject_password": "secrets",
@@ -28,6 +43,7 @@ _FLAT_SECTION = {
     "golden_ids_by_slot": "templates", "golden_hashes": "templates",
     "boxes": "roster",
 }
+_FLAT_SECTIONS = ("identity", "secrets", "templates", "roster")
 
 
 def state_path(comp_dir):
@@ -38,12 +54,14 @@ def _now():
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _resource_identity(entry):
+    return (entry["kind"], entry.get("vmid") if entry.get("vmid") is not None
+            else (entry.get("bridge") or entry.get("name")))
+
+
 def _resource_key(entry):
-    if entry.get("vmid") is not None:
-        return (entry["kind"], entry["vmid"])
-    if entry.get("bridge") is not None:
-        return (entry["kind"], entry["bridge"])
-    return (entry["kind"], entry["name"])
+    # Node-scoped: the same bridge name exists on more than one host in a multi-node range.
+    return (_resource_identity(entry), entry.get("node") or "")
 
 
 def _skeleton(comp_dir):
@@ -54,10 +72,10 @@ def _skeleton(comp_dir):
         "secrets": {},
         "roster": {},
         "placement": None,
+        "red": {},
         "templates": {},
         "resources": [],
         "run": {},
-        "external": {},
         "teardown": {},
         "updated_at": "",
     }
@@ -89,15 +107,15 @@ class EstateState:
 
     def save(self):
         self.data["updated_at"] = _now()
-        write_text_atomic(state_path(self.comp_dir), json.dumps(self.data, indent=2))
+        write_text_atomic(state_path(self.comp_dir), json.dumps(self.data, indent=2), mode=0o600)
 
     def section(self, name):
         return self.data.setdefault(name, [] if name in _LIST_SECTIONS else {})
 
     def record(self, kind, node, name, vmid=None, bridge=None, tags=None):
-        key = _resource_key({"kind": kind, "vmid": vmid, "bridge": bridge, "name": name})
         entry = {"kind": kind, "node": node, "name": name, "vmid": vmid, "bridge": bridge,
-                 "tags": list(tags or []), "at": _now()}
+                 "tags": sorted(tags or []), "at": _now()}
+        key = _resource_key(entry)
         entries = self.section("resources")
         for existing in entries:
             if _resource_key(existing) == key:
@@ -105,12 +123,20 @@ class EstateState:
                 return
         entries.append(entry)
 
-    def forget(self, kind, name=None, vmid=None, bridge=None):
-        key = _resource_key({"kind": kind, "vmid": vmid, "bridge": bridge, "name": name})
+    def forget(self, kind, name=None, vmid=None, bridge=None, node=None):
+        """Drop one inventory entry; `node=None` means "on any node"."""
+        wanted = _resource_identity({"kind": kind, "vmid": vmid, "bridge": bridge,
+                                     "name": name})
         entries = self.section("resources")
-        before = len(entries)
-        entries[:] = [e for e in entries if _resource_key(e) != key]
-        return before - len(entries)
+
+        def matches(entry):
+            return (_resource_identity(entry) == wanted
+                    and (node is None or (entry.get("node") or "") == node))
+
+        kept = [e for e in entries if not matches(e)]
+        removed = len(entries) - len(kept)
+        entries[:] = kept
+        return removed
 
     def resources(self, kind=None, node=None):
         return [e for e in self.section("resources")
@@ -121,14 +147,42 @@ class EstateState:
         self.section("run")["last_phase"] = phase
         self.save()
 
-    def absorb(self, flat):
-        for key, value in flat.items():
-            self.section(_FLAT_SECTION.get(key, "run"))[key] = value
+    def absorb(self, flat, replace=True):
+        """Write the flat deploy dict into the document.
+
+        `replace` (the default) makes the document's flat view exactly `flat`: a key absent
+        from it is deleted. Every caller passes a full flattened dict, so this is the only
+        honest reading of `write_flat`.
+        """
+        flat = dict(flat)
+        for section in _FLAT_SECTIONS:
+            target = self.section(section)
+            for key, owner in _FLAT_SECTION.items():
+                if owner != section:
+                    continue
+                if key in flat:
+                    target[key] = flat.pop(key)
+                elif replace and key not in _NEVER_DELETE:
+                    target.pop(key, None)
+        for key in _MERGED_FLAT:
+            if key in flat:
+                self.section(key).update(flat.pop(key))
+        run = self.section("run")
+        if replace:
+            run.clear()
+        run.update(flat)
 
     def flatten(self):
         flat = {}
-        for section in _SECTIONS:
-            flat.update(self.section(section))
+        for key, section in _FLAT_SECTION.items():
+            container = self.data.get(section) or {}
+            if key in container:
+                flat[key] = container[key]
+        for key in _MERGED_FLAT:
+            value = self.data.get(key) or {}
+            if value:
+                flat[key] = dict(value)
+        flat.update(self.data.get("run") or {})
         return flat
 
 

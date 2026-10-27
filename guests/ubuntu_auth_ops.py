@@ -41,7 +41,7 @@ def setup_ubuntu_auth(targets, ctx):
             root_script = re.sub(r"\bsudo ", "", auth_cmd)
             try:
                 res = guest_agent_exec_detached(
-                    config.active().proxmox.node, vmid, root_script,
+                    t.get("node") or config.active().proxmox.node, vmid, root_script,
                     f"/tmp/tz-auth-{vmid}.log", timeout=900)
                 if res.rc == 0:
                     with PRINT_LOCK:

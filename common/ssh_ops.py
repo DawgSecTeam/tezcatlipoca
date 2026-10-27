@@ -23,8 +23,10 @@ def _engine_opts(known_hosts=None, host=None):
             # A silently dropped node link otherwise hangs until the caller's full timeout.
             "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
     if host:
+        # %C hashes (user, host, port) into a fixed-length token: the old `cm-<ip>-22-%r` was
+        # a Unix socket path that overflowed UNIX_PATH_MAX on a deep $HOME.
         opts += ["-o", "ControlMaster=auto",
-                 "-o", f"ControlPath={Path(kh).parent / f'cm-{host}-22-%r'}",
+                 "-o", f"ControlPath={Path(kh).parent / 'cm-%C'}",
                  "-o", "ControlPersist=900"]
     return opts
 
@@ -34,8 +36,10 @@ def engine_ssh_opts(ctx):
 
 
 def gateway_proxy(ctx):
-    opts = " ".join(engine_ssh_opts(ctx))
-    return f"ssh -i {ctx['ssh_key_path']} {opts} -W %h:%p {ctx['vm_username']}@{ctx['scoring_engine_ip']}"
+    import shlex
+    opts = " ".join(shlex.quote(part) for part in engine_ssh_opts(ctx))
+    return (f"ssh -i {shlex.quote(str(ctx['ssh_key_path']))} {opts} -W %h:%p "
+            f"{ctx['vm_username']}@{ctx['scoring_engine_ip']}")
 
 
 def box_ssh_opts(proxy, *, extra_opts=()):
@@ -57,23 +61,22 @@ def box_ssh_argv(ctx, target_ip, user, remote=None, *, extra_opts=()):
 
 
 def box_ssh_retry(ctx, ip, user, remote_cmd, *, timeout, attempts, what):
+    last_err = ""
     for attempt in range(1, attempts + 1):
         try:
-            r = subprocess.run(box_ssh_argv(ctx, ip, user, remote_cmd),
-                               capture_output=True, text=True, timeout=timeout)
+            r = ssh_via_gateway(ctx, ip, remote_cmd, timeout=timeout, user=user)
             if r.returncode == 0:
                 return True, ""
-            err = r.stderr or ""
-            if any(s in err for s in ("Permission denied", "REMOTE HOST IDENTIFICATION",
-                                      "Host key verification failed")):
-                return False, err
+            last_err = r.stderr or r.stdout or ""
+            if any(s in last_err for s in ("Permission denied", "Host key verification failed")):
+                return False, last_err
         except subprocess.TimeoutExpired:
-            pass
+            last_err = f"timeout after {timeout}s"
         if attempt < attempts:
             with PRINT_LOCK:
                 print(f"    {what} attempt {attempt}/{attempts} failed for {ip}, retrying in 15s...")
             time.sleep(15)
-    return False, ""
+    return False, last_err
 
 
 def forget_engine_host_key(ip, known_hosts=None):
@@ -159,12 +162,15 @@ def wait_for_ssh(key, user, host, timeout=300):
 
 
 def wait_for_boxes_ssh(ctx, targets, timeout=300):
-    node = config.active().proxmox.node
+    default_node = config.active().proxmox.node
     print("  Waiting for team boxes to accept SSH via gateway...")
     deadline = time.time() + timeout
 
     def _probe(t):
         ip = t["ip"]
+        # Each box may live on its own host in a multi-node range: the guest-agent channel is
+        # node-scoped, so ask the box's node, never the engine's.
+        node = t.get("node") or default_node
         windows = is_windows_template(t["box"]["template"])
         while time.time() < deadline:
             try:
@@ -180,9 +186,12 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
             except Exception:
                 pass
             time.sleep(10)
+        # Diagnose OUTSIDE the print lock: it is a 10 s API/guest poll, and holding the lock
+        # across it stalls every other worker's progress line.
+        diagnosis = diagnose_unreachable_box(node, t["vmid"])
         with PRINT_LOCK:
             print(f"    WARNING: {ip} not reachable within timeout — continuing")
-            print(diagnose_unreachable_box(node, t["vmid"]))
+            print(diagnosis)
             record_degradation("box not reachable within timeout", f"{ip} (vmid {t['vmid']})")
         return False
 
@@ -236,9 +245,11 @@ def wait_for_http(url, timeout=120):
     while time.time() < deadline:
         attempt += 1
         try:
-            requests.get(url, timeout=5)
-            print(f"    {url} responded (after {attempt} attempt(s))")
-            return True
+            r = requests.get(url, timeout=5)
+            # A 5xx means "up but not serving yet" — the classic Quotient/portal boot race.
+            if r.status_code < 500:
+                print(f"    {url} responded (after {attempt} attempt(s))")
+                return True
         except requests.exceptions.RequestException:
             pass
         time.sleep(3)

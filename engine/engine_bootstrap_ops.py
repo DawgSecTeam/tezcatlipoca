@@ -4,7 +4,7 @@ import base64
 import re
 import time
 
-from engine.engine_cmd_ops import _run_engine_cmd
+from engine.engine_cmd_ops import _run_engine_cmd, start_quotient
 from engine.engine_health_ops import install_range_healthcheck
 
 
@@ -60,14 +60,14 @@ def _patch_quotient_injects_cmd():
 
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
     # Grow the root to the disk we sized before the packages/Docker/Quotient build.
-    from engine.engine_identity_ops import _GROW_ROOT_CMD
-    from common.utils import DNS_FIX_CMD
-    _run_engine_cmd(ctx, _GROW_ROOT_CMD, check=False, timeout=120,
+    from guests.root_disk_ops import grow_root_command
+    from common.utils import dns_fix_cmd
+    _run_engine_cmd(ctx, grow_root_command(), check=False, timeout=120,
                     step="grow engine root filesystem")
     # The engine image carries resolved.conf.d with 8.8.8.8 baked in (and a tailnet search
     # domain); on a network that filters 8.8.8.8 every apt/git step fails while the gateway
     # resolver answers (live: run-deba55da "Temporary failure resolving" on the engine).
-    _run_engine_cmd(ctx, DNS_FIX_CMD, timeout=60, step="fix engine DNS")
+    _run_engine_cmd(ctx, dns_fix_cmd(), timeout=60, step="fix engine DNS")
     _run_engine_cmd(ctx, (
         # unattended-upgrades holds the dpkg/archives locks past Lock::Timeout and re-fires
         # mid-upgrade; stopping the units alone let apt-daily-upgrade spawn apt-get between
@@ -166,22 +166,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
                     timeout=1800, step="compose build")
 
     print("  Starting Quotient Docker containers...")
-    # 600s: the fresh volume's Postgres initdb is a cold start on every build, and
-    # on a loaded node it still misses docker compose's health window; the containers
-    # keep starting, so retry instead of failing the deploy (live: run-3d569d1f).
-    last = None
-    for attempt in range(3):
-        try:
-            _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose up -d", timeout=600,
-                            step="compose up")
-            last = None
-            break
-        except Exception as e:  # noqa: BLE001 - the DB health window is a race
-            last = e
-            print(f"    compose up attempt {attempt + 1} failed ({e}); retrying")
-            time.sleep(15)
-    if last is not None:
-        raise last
+    start_quotient(ctx)
 
     _install_firewall_and_healthcheck(ctx)
     return {"quotient_head": quotient_head, "quotient_ref": quotient_ref or ""}

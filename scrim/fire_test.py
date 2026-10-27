@@ -7,7 +7,7 @@ from common.targets import frozen_roster
 from estate import config
 from scrim import compworld
 from scrim import core
-from scrim import procs
+from common import procs
 from scrim import quotient_api
 from scrim.core import log
 
@@ -176,7 +176,7 @@ def run_fire_test(args, comp, creds, ssh_web01, sudo_web01):
         r = procs.run_tree(["ssh", "-i", creds["KEY_PATH"], *core.SSH_NOCHECK,
                             f"{creds['VM_USER']}@{creds['ENGINE_IP']}",
                             f"curl -sm 10 -o /dev/null -w '%{{http_code}}' "
-                            f"http://192.168.{creds['TEAM1_ID']}.4:{port}/"],
+                            f"http://{web_ip}:{port}/"],
                            timeout=45, check=False)
         return (r.stdout or "").strip()
 

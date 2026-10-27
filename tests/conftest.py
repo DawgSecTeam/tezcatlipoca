@@ -1,6 +1,8 @@
 """Test-process isolation for the two deliberate process-globals: `estate.config` and the `TEZ_*` environment."""
 
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -13,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Locks live under ~/.tezcatlipoca/locks and would contend with a REAL deploy on a
 # shared ops host; point home at a temp dir instead.
 _HOME = tempfile.mkdtemp(prefix="tez-tests-home-")
+atexit.register(shutil.rmtree, _HOME, True)
 Path.home = classmethod(lambda cls: Path(_HOME))
 
 # Must capture before any test module imports: load_dotenv() at module level writes the

@@ -5,7 +5,7 @@ from pathlib import Path
 from estate import config
 from estate import state as estate_state
 from scrim import core
-from scrim import procs
+from common import procs
 from scrim.core import log
 from common.comp_paths import comps_root, resolve_comp_dir
 from common.utils import load_users_config

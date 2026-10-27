@@ -20,7 +20,7 @@ from redeploy.redeploy_gate_ops import load_deployed_range
 from redeploy.redeploy_context import RedeployContext
 from redeploy.redeploy_light_ops import mode_reconfigure, mode_resync, mode_rollback
 from redeploy.redeploy_plant_ops import prepare_nakon_assets
-from redeploy.redeploy_rebuild_ops import mode_rebuild, reconcile_estate_state
+from redeploy.redeploy_rebuild_ops import mode_rebuild
 from redeploy.redeploy_reset_ops import mode_reset
 from redeploy.redeploy_select_ops import select_targets
 from common.utils import competition_name, load_compfile, pick_competition, valid_comp_name
@@ -87,7 +87,7 @@ def main():
                              "passwords via the guest agent, touching nothing else. "
                              "engine-recovery = re-clone the engine VM from the engine "
                              "template (fresh empty scoring DB; re-seed with "
-                             "--from-phase 7); ignores box selection flags. "
+                             "--from-phase 8); ignores box selection flags. "
                              "reset = cheapest-that-works ladder per box: tz-ready "
                              "rollback, then tz-base rollback + replant, then golden "
                              "rebuild — escalating only the boxes each rung leaves "
@@ -95,12 +95,6 @@ def main():
     parser.add_argument("--dry-run", action="store_true", dest="dry_run",
                         help="Print the resolved targets and their snapshots, then exit.")
     parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
-    parser.add_argument("--reconcile-state", action="store_true", dest="reconcile_state",
-                        help="With --mode rebuild/reset: re-sync the recorded inventory to the "
-                             "recreated VM (state rm + import, node/vmid ID) so teardown "
-                             "and refresh work against the live box. NOTE: the bpg provider "
-                             "still plans a replacement for imported VMs (ForceNew computed "
-                             "attrs) — state hygiene, not a plan-clean guarantee.")
     parser.add_argument("--reset-event", action="store_true", dest="reset_event",
                         help="With rollback-ready/rollback-base: also restart the event from the "
                              "engine template (fresh scoring DB) and re-run phase 7, so scores "
@@ -146,9 +140,6 @@ def main():
         return
     if args.reset_event and args.mode not in ("rollback-ready", "rollback-base", "reset"):
         raise SystemExit("  ERROR: --reset-event only applies to rollback-ready/rollback-base/reset.")
-    if args.reconcile_state and args.mode not in ("rebuild", "reset"):
-        raise SystemExit("  ERROR: --reconcile-state only applies to rebuild/reset (it "
-                         "imports boxes that were recreated from templates).")
 
     targets = select_targets(comp_dir, teams, boxes, args)
     if not targets:
@@ -200,7 +191,8 @@ def main():
             print(f"  ERROR: {len(missing)} selected box(es) have no '{needed}' snapshot:")
             for t in missing:
                 print(f"    {describe_target(t)}")
-            print("\n  " + snapshot_support_hint(node, missing[0]["vmid"]))
+            print("\n  " + snapshot_support_hint(missing[0].get("node") or node,
+                                                missing[0]["vmid"]))
             raise SystemExit(1)
 
     if not args.yes:
@@ -224,16 +216,6 @@ def main():
         nakon_config_path, nakon_bundle = prepare_nakon_assets(comp_dir, boxes)
 
     done, levels = MODES[args.mode](targets, rctx, nakon_config_path, nakon_bundle)
-
-    if args.reconcile_state:
-        if args.mode == "rebuild":
-            to_import = done
-        else:
-            to_import = [t for t in done if levels.get(t["vm_name"]) == "golden rebuild"]
-        if to_import:
-            reconcile_estate_state(to_import, rctx)
-        else:
-            print("  --reconcile-state: nothing was rebuilt from templates — nothing to import.")
 
     if args.reset_event:
         print("\n  --reset-event: restarting the event from the engine template...")

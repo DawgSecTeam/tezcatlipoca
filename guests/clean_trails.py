@@ -5,11 +5,47 @@ import os
 import re
 import shlex
 import subprocess
+from pathlib import Path
+
+import time
 
 from estate import state as estate_state
+from estate import config
+from common import procs
 from common.targets import frozen_roster
-from scrim import core, procs
-from scrim.core import log
+from common.windows_ops import is_windows_template
+
+SSH_NOCHECK = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+
+
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def _vm_username():
+    return config.active().engine.username
+
+
+def _read_comp_json(comp, name):
+    return json.loads((Path(comp) / name).read_text())
+
+
+def _is_windows_box(box):
+    return is_windows_template(box.get("template") or "")
+
+
+def _engine_proxy(key, user, engine):
+    return (f"ssh -i {key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+            f"-W %h:%p {user}@{engine}")
+
+
+def box_ssh_base(creds, connect_timeout=None):
+    """ssh argv prefix reaching team boxes over the engine jump (host appended by caller)."""
+    base = ["ssh", "-i", creds["KEY_PATH"], *SSH_NOCHECK]
+    if connect_timeout:
+        base += ["-o", f"ConnectTimeout={connect_timeout}"]
+    base += ["-o", f"ProxyCommand={_engine_proxy(creds['KEY_PATH'], creds['VM_USER'], creds['ENGINE_IP'])}"]
+    return base
 
 # Windows wipe budget: Remove-Item -Recurse over Temp/LogFiles is simply slow, and this
 # ScrimTimeout-ed on both Windows boxes live.
@@ -82,18 +118,30 @@ _CHECK_CMD_MAX = 300          # shell length we are willing to relay to a box
 RED01_WORLD = "/var/lib/tlaloc/world.json"
 
 
+def creds_for(ssh_key, engine_ip, box_username, box_password):
+    return {"KEY_PATH": ssh_key, "VM_USER": _vm_username(), "ENGINE_IP": engine_ip,
+            "BOX_USER": box_username, "BOX_PW": box_password}
+
+
 def creds_for_deploy(ctx):
-    return {"KEY_PATH": ctx.ssh_key_abs, "VM_USER": core.vm_username(),
-            "ENGINE_IP": ctx.engine_mgmt_ip, "BOX_USER": ctx.box_username,
-            "BOX_PW": ctx.box_password}
+    return creds_for(ctx.ssh_key_abs, ctx.engine_mgmt_ip, ctx.box_username,
+                     ctx.box_password)
+
+
+def targets_from(managed_targets):
+    """Wipe targets from the deploy's target records (the box record nests the name)."""
+    return [{"ip": t["ip"],
+             "name": (t.get("box") or {}).get("name") or "",
+             "windows": is_windows_template((t.get("box") or {}).get("template", ""))}
+            for t in managed_targets]
 
 
 def _windows_boxes(comp):
     try:
-        boxes = core.read_comp_json(comp, "boxes.json")
+        boxes = _read_comp_json(comp, "boxes.json")
     except Exception:                                        # noqa: BLE001 - best effort
         return set()
-    return {b["name"] for b in boxes if core.is_windows_box(b)}
+    return {b["name"] for b in boxes if _is_windows_box(b)}
 
 
 # fw01 skipped: the in-path firewall is an appliance with no shell to clean — skipping
@@ -177,7 +225,7 @@ def _run_windows_script(creds, ip, script, timeout=WIN_WIPE_TIMEOUT):
     # -EncodedCommand dies above cmd.exe's 8191-char limit and `-Command -` parses stdin line by
     # line, so multi-line constructs break; a staged .ps1 + -File has neither cliff. The script
     # must stay ASCII.
-    base = core.box_ssh_base(creds, connect_timeout=15)
+    base = box_ssh_base(creds, connect_timeout=15)
     env = {**os.environ, "SSHPASS": creds.get("BOX_PW") or ""}
     remote_path = "C:/Windows/Temp/.tz-wipe.ps1"
     import tempfile
@@ -207,7 +255,7 @@ def _run_windows_script(creds, ip, script, timeout=WIN_WIPE_TIMEOUT):
 
 def _clean_linux(creds, ip, skip_paths=()):
     script = _linux_skip_block(list(skip_paths)) + LINUX_SCRIPT
-    base = core.box_ssh_base(creds, connect_timeout=15)
+    base = box_ssh_base(creds, connect_timeout=15)
     argv, stdin_text = procs.box_sudo_stdin(base, f"{creds['BOX_USER']}@{ip}",
                                             creds["BOX_PW"], script)
     r = procs.run_tree(argv, timeout=180, check=False, stdin_text=stdin_text)
@@ -271,7 +319,7 @@ def plant_integrity(comp, creds, artifacts):
                                            _windows_integrity_script(arts),
                                            timeout=120).stdout or "")
             else:
-                base = core.box_ssh_base(creds, connect_timeout=15)
+                base = box_ssh_base(creds, connect_timeout=15)
                 argv, stdin_text = procs.box_sudo_stdin(
                     base, f"{creds['BOX_USER']}@{ip}", creds["BOX_PW"],
                     _linux_integrity_script(arts))

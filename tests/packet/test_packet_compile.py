@@ -214,10 +214,16 @@ class ScoreOnlyAndCredlistPins(unittest.TestCase):
         lists = {c["CredlistName"] for c in conf["CredlistSettings"]["Credlist"]}
         self.assertEqual(lists, {"linux.credlist", "domain.credlist"})
 
-    def test_score_only_pin_needs_port(self):
-        with self.assertRaises(SystemExit):
-            build_event_conf(CTX, {"ad01": [
-                {"name": "score/tcp", "score_only": True, "display": "x"}]})
+    def test_score_only_pin_defaults_its_slice_port_and_needs_nothing_else(self):
+        # Every slice now carries its own defaults, so a display-only score pin is valid;
+        # the port comes from the slice (tcp -> 1, dns -> 53, ...).
+        conf = build_event_conf(CTX, {"ad01": [
+            {"name": "score/dns", "score_only": True, "display": "ad-dns"}]})
+        ad = next(b for b in conf["box"] if b["name"] == "ad01")
+        dns = ad["Dns"][0]
+        self.assertEqual(dns["Port"], 53)
+        self.assertEqual(dns["Record"][0]["Kind"], "A")
+        self.assertEqual(dns["Display"], "ad-dns")
 
     def test_credlist_override_on_non_cred_check_rejected(self):
         with self.assertRaises(SystemExit):

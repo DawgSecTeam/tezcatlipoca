@@ -83,23 +83,22 @@ class Resync(unittest.TestCase):
 
 
 class Rollback(unittest.TestCase):
-    def test_base_rollback_reconfigures_and_retakes_the_ready_snapshot(self):
+    def test_base_rollback_runs_the_shared_post_base_convergence(self):
+        # The convergence itself (predomain -> harden -> domains -> final -> late -> tz-ready)
+        # is exercised in redeploy/test_redeploy_hardening; here we only prove the rollback
+        # path reaches it, in place of the old postclone-then-domains order.
         with patch.object(light, "list_snapshots", return_value={SNAP_BASE, SNAP_READY}), \
                 patch.object(light, "delete_snapshot"), \
                 patch.object(light, "rollback_snapshot"), \
                 patch.object(light.pipeline_api, "wait_for_boxes_ssh") as ssh, \
                 patch.object(light.pipeline_api, "wait_for_cloud_init") as ci, \
-                patch.object(light, "run_nakon_and_harden") as harden, \
-                patch.object(light, "rerun_domain_configs", return_value=True), \
-                patch.object(light, "take_snapshot") as snap, quiet():
+                patch.object(light, "post_base_converge") as converge, quiet():
             done = light.mode_rollback([_t(LIN)], _rctx(), SNAP_BASE, "cfg", "b",
                                        reconfigure=True)
         self.assertEqual(len(done), 1)
         ssh.assert_called_once()
         ci.assert_called_once()
-        harden.assert_called_once()
-        snap.assert_called_once()
-        self.assertEqual(snap.call_args.args[2], SNAP_READY)
+        converge.assert_called_once()
 
 
     def test_all_rollbacks_failing_is_fatal_and_domain_failure_keeps_ready_snapshot_off(self):
@@ -111,12 +110,10 @@ class Rollback(unittest.TestCase):
                 patch.object(light, "rollback_snapshot"), \
                 patch.object(light.pipeline_api, "wait_for_boxes_ssh"), \
                 patch.object(light.pipeline_api, "wait_for_cloud_init"), \
-                patch.object(light, "run_nakon_and_harden"), \
-                patch.object(light, "rerun_domain_configs", side_effect=RuntimeError("dc")), \
-                patch.object(light, "take_snapshot") as snap, quiet():
+                patch.object(light, "post_base_converge",
+                             side_effect=RuntimeError("dc")), quiet():
             with self.assertRaises(RuntimeError):
                 light.mode_rollback([_t(LIN)], _rctx(), SNAP_BASE, "c", "b", True)
-        snap.assert_not_called()
 
 
 

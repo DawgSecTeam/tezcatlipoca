@@ -47,7 +47,7 @@ def load_red_events(run_dir):
     t0 = load_event_start(run_dir)
     if t0 is not None:
         events = [e for e in events
-                  if t0 - 120 <= timefmt.parse_ts(e.get("ts", "")) <= t0 + 8 * 3600]
+                  if t0 - 120 <= timefmt.parse_ts(e.get("ts") or "") <= t0 + 8 * 3600]
     events.sort(key=lambda e: timefmt.parse_ts(e.get("ts", "1970")))
     return events, t0
 

@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 
 from scrim import core
-from scrim import procs
+from common import procs
 from scrim import quotient_api
 from scrim import scoreboard_monitor
 from scrim.core import log

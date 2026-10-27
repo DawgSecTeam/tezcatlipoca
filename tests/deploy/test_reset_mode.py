@@ -13,8 +13,10 @@ from unittest.mock import MagicMock, patch
 
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
+from tests._deploy_patch import fake_nakon_result  # noqa: E402
 
 import pipeline_api  # noqa: E402
+from guests import converge_ops  # noqa: E402
 from redeploy import redeploy_light_ops  # noqa: E402
 from redeploy import redeploy_plant_ops  # noqa: E402
 from redeploy import redeploy_rebuild_ops  # noqa: E402
@@ -308,60 +310,47 @@ class ScoredPortsTests(unittest.TestCase):
 
 
 
-# mode_rebuild must stamp ownership onto the VM it recreates, not inherit a golden's
-# tags (a reused golden carries a stale run-<id>).
-class RebuildStampingTests(unittest.TestCase):
+# mode_rebuild must hand the clone to the SAME creator the deploy uses, with the golden as
+# the source and this run's ownership — a hand-rolled clone had already drifted from it.
+class RebuildDelegationTests(unittest.TestCase):
     def _run_rebuild(self, target, state):
-        calls = []
+        calls = {}
 
-        def fake_pve(method, path, **kw):
-            calls.append((method, path, kw))
-            if method == "GET" and path == "/cluster/resources":
-                return {"data": [{"name": target["box"]["template"], "template": 1,
-                                  "tags": "template", "vmid": 9001}]}
-            if method == "GET" and path.endswith("/config"):
-                return {"data": {}}
-            return {"data": "task-ok"}
+        def fake_create(state_doc, ownership, t, **kw):
+            calls["ownership"] = ownership
+            calls["target"] = t
+            calls["source"] = kw["source_vmid"]
 
-        comp_name = "resetcomp"
         with tempfile.TemporaryDirectory() as tmp:
-            comp_dir = Path(tmp) / comp_name
+            comp_dir = Path(tmp) / "resetcomp"
             comp_dir.mkdir()
             env = {"TEZ_PROXMOX_NODE": "pve", "TEZ_SSH_PUBLIC_KEY": "ssh-ed25519 AAA",
-                   "TEZ_PROXMOX_TEMPLATE_VM_ID": "1000", "TEZ_ENGINE_USERNAME": "ops"}
+                   "TEZ_ENGINE_USERNAME": "ops"}
             with patch.dict(os.environ, env), \
-                 patch.object(redeploy_rebuild_ops, "proxmox_api", side_effect=fake_pve), \
                  patch.object(redeploy_rebuild_ops, "destroy_vm_if_exists"), \
-                 patch.object(redeploy_rebuild_ops, "wait_for_proxmox_task"), \
-                 patch.object(redeploy_rebuild_ops, "stored_template_hash", return_value="abc"), \
-                 patch.object(redeploy_rebuild_ops, "start_vm"), \
-                 patch.object(redeploy_rebuild_ops, "take_snapshot"), \
-                 patch.object(redeploy_rebuild_ops, "timed", return_value=nullcontext()), \
+                 patch.object(redeploy_rebuild_ops.estate_apply, "create_team_box",
+                              side_effect=fake_create), \
+                 patch.object(redeploy_rebuild_ops, "stored_template_hash",
+                              return_value="abc"), \
+                 patch.object(redeploy_rebuild_ops, "post_base_converge"), \
                  patch.object(pipeline_api, "wait_for_boxes_ssh"), \
-                 patch.object(pipeline_api, "wait_for_cloud_init"), \
-                 patch.object(pipeline_api, "fix_services_on_boxes"), \
-                 patch.object(pipeline_api, "ensure_nat_forwarding"), \
-                 patch.object(redeploy_rebuild_ops, "rerun_domain_configs", return_value=True):
+                 patch.object(pipeline_api, "wait_for_cloud_init"):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
-                    redeploy_rebuild_ops.mode_rebuild([target], _rctx(ctx=CTX, comp_dir=comp_dir, state=state),
-                                          comp_dir / "cfg", comp_dir / "bundle")
-        return calls, buf.getvalue(), comp_dir.name
+                    redeploy_rebuild_ops.mode_rebuild(
+                        [target], _rctx(ctx=CTX, comp_dir=comp_dir, state=state),
+                        comp_dir / "cfg", comp_dir / "bundle")
+        return calls, comp_dir.name
 
-    def test_clone_carries_the_marker_description_and_full_ownership_tags(self):
+    def test_the_clone_comes_from_the_slot_golden_with_this_runs_ownership(self):
         t2 = _target(LINUX_BOX, 2104, team="team2", identifier=102)
-        state = {"pipeline_version": 3, "box_password": "pw",
-                 "run_id": "run-beefcafe", "golden_template_ids": {"web01": 9150}}
-        calls, _out, comp_name = self._run_rebuild(t2, state)
-
-        clone = next(kw for m, p, kw in calls if m == "POST" and p.endswith("/clone"))
-        self.assertEqual(clone["data"]["description"], clone_marker(comp_name))
-
-        put = next(kw for m, p, kw in calls if m == "PUT" and p.endswith("/config"))
-        self.assertEqual(set(put["data"]["tags"].split(";")),
-                         ownership_tags(comp_name, "run-beefcafe"))
-
-
+        state = {"box_password": "pw", "run_id": "run-beefcafe",
+                 "golden_template_ids": {"web01": 9150}}
+        calls, comp_name = self._run_rebuild(t2, state)
+        self.assertEqual(calls["source"], 9150)
+        self.assertEqual(calls["ownership"].tags,
+                         set(ownership_tags(calls["ownership"].comp, "run-beefcafe")))
+        self.assertEqual(calls["target"]["node"], "pve")
 
 
 # A comp whose plants are all golden-stage has an empty postclone stage, and building a
@@ -382,9 +371,10 @@ class PrepareAssetsTests(unittest.TestCase):
              patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
              patch.object(pipeline_api, "setup_ubuntu_auth"), \
              patch.object(pipeline_api, "fix_dns_on_boxes"), \
+             patch.object(pipeline_api, "prep_apt_on_boxes"), \
              patch.object(pipeline_api, "ensure_nat_forwarding"), \
-             patch.object(pipeline_api, "run_nakon",
-                          return_value=SimpleNamespace(failed=[])) as p_run, \
+             patch.object(converge_ops, "run_nakon",
+                          return_value=fake_nakon_result()) as p_run, \
              patch.object(pipeline_api, "fix_services_on_boxes") as p_fix:
             stage = Path(tmp) / ".nakon-postclone.json"
             stage.write_text(json.dumps({"machines": [{"name": n} for n in stage_machines]}))
@@ -470,9 +460,10 @@ class FailedStepsTests(unittest.TestCase):
              patch.dict(os.environ, {"TEZ_ENGINE_USERNAME": "ops"}), \
              patch.object(pipeline_api, "setup_ubuntu_auth"), \
              patch.object(pipeline_api, "fix_dns_on_boxes"), \
+             patch.object(pipeline_api, "prep_apt_on_boxes"), \
              patch.object(pipeline_api, "ensure_nat_forwarding"), \
-             patch.object(pipeline_api, "run_nakon",
-                          return_value=MagicMock(failed=failed)), \
+             patch.object(converge_ops, "run_nakon",
+                          return_value=fake_nakon_result(failed)), \
              patch.object(pipeline_api, "fix_services_on_boxes"):
             cfg = Path(tmp) / "cfg"
             cfg.write_text(json.dumps({"machines": [{"name": T1["machine"]}]}))

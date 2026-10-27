@@ -80,7 +80,10 @@ def _local_files(source, pattern, dest_dir):
         raise FileNotFoundError(str(root / pattern))
     written = []
     for src in matches:
-        dest = dest_dir / src.name
+        # Preserve the glob's subdirectory (`cycles/*`, `submissions/*`): flattening put two
+        # different `sub-1.md` files on the same path.
+        relative = src.relative_to(root) if src != root else Path(src.name)
+        dest = dest_dir / relative
         if src.is_dir():
             shutil.copytree(src, dest, dirs_exist_ok=True)
             for path in dest.rglob("*"):
@@ -88,6 +91,7 @@ def _local_files(source, pattern, dest_dir):
                     os.chmod(path, 0o600)
                     written.append(path)
             continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
         seal_local_file(src, dest)
         written.append(dest)
     return written

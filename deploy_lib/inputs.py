@@ -78,8 +78,7 @@ def load_prior_deploy_state(ctx, comp_dir, from_phase):
 #     ownership, so it is never silently reset); the refusals that depend on state content
 #     are gates.check_resume_gates, which prepare() runs right after this.
     ctx.state_path = estate_state.state_path(comp_dir)
-    ctx.estate = estate_state.EstateState.load(comp_dir)
-    ctx.previous_state = ctx.estate.flatten()
+    ctx.previous_state = estate_state.load_flat(comp_dir)
     ctx.resuming = from_phase > 1
 
 

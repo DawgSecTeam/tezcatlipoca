@@ -14,7 +14,7 @@ import urllib3
 
 from estate import config
 from estate import state as estate_state
-from infra.ownership import Refusal
+from infra.ownership import Refusal, parse_vm_tags
 from multinode.placement_record import activate_placement, read_placement, record_of
 from teardown.machinery import load_ownership, pre_stop_windows_boxes
 
@@ -98,6 +98,13 @@ def _refresh_portal_config(comp_dir, team_key, log):
 def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
     comp_dir = Path(comp_dir)
     env = dict(env if env is not None else os.environ)
+    # Activate the placement BEFORE the ownership gate reads the ambient endpoint: a
+    # multi-node range's engine host is only in the placement record, so load_ownership
+    # against the ambient config refused its own range.
+    early_placement = read_placement(comp_dir)
+    if early_placement:
+        activate_placement(early_placement)
+        env.update(config.proxmox_env())
     deployed_state, ownership = load_ownership(comp_dir)
 
     teams = json.loads((comp_dir / "teams.json").read_text())
@@ -132,10 +139,10 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
     document = estate_state.EstateState.load(comp_dir)
     vmids, bridges = team_resources(document, team_key, team)
     if not vmids:
-        raise Refusal(saw="no team_box instances for this team in the recorded inventory",
-                      expected="the linked clones the deploy built",
-                      remedy="the team's VMs are not in this competition's inventory — "
-                             "check the node by hand before proceeding")
+        # A retry after a partial run: the clones are already gone and the inventory
+        # forgot them, but the team still owes its Quotient deactivation and conf refresh.
+        log(f"  Team '{team_key}': no clones left in the recorded inventory — finishing the "
+            f"deactivation and refresh only (re-run of an interrupted teardown).")
 
     log(f"  Team '{team_key}' (identifier {identifier}): {len(vmids)} clone(s), "
         f"{len(bridges)} bridge(s) — ownership run id '{ownership.run_id}'.")
@@ -161,7 +168,10 @@ def run_team_teardown(comp_dir, team_key, *, name=None, env=None, log=print):
         except Exception as e:  # noqa: BLE001
             problems.append(f"could not verify on {node}: {e}")
             continue
-        alive = [v for v in vms if (v.get("name") or "").startswith(prefix)]
+        # Tag-proof too: team1's VMs are named `team1-<box>` in EVERY competition, so a
+        # name match alone reported a concurrent range's box as this one's survivor.
+        alive = [v for v in vms if (v.get("name") or "").startswith(prefix)
+                 and set(ownership.tags) <= parse_vm_tags(v.get("tags"))]
         if alive:
             problems.append(f"still on {node}: " + ", ".join(
                 f"{v.get('name')} (vmid {v['vmid']})" for v in alive))

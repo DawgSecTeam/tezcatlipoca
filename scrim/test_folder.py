@@ -4,7 +4,7 @@ from pathlib import Path
 from artifacts_lib import artifacts_ops
 from common.comp_paths import resolve_comp_dir
 from scrim import core
-from scrim import procs
+from common import procs
 from scrim import red_link
 from scrim.core import log
 from estate import config

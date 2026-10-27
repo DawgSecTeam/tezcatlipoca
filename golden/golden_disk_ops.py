@@ -1,7 +1,6 @@
 """Golden root-disk sizing and in-guest root filesystem expansion."""
 
 import re
-import shlex
 import time
 
 from infra.client import proxmox_api
@@ -42,48 +41,14 @@ def ensure_golden_disk_size(node, vmid, disk_gb):
     print(f"    golden {vmid}: {key} grown {cur_gb}G -> {disk_gb}G")
 
 
-# cloud-init only expands a PLAIN partition+fs: LVM keeps its original root LV and btrfs needs
-# its own grow ('/dev/sda3[/root]' also breaks the partition-digit parse). Alpine/Windows skipped.
 def expand_guest_root_disks(targets, ctx):
-    script = (
-        "command -v growpart >/dev/null || { echo 'growpart unavailable - skipping'; exit 0; }; "
-        "set -e; "
-        # Golden clones can run minutes with the LV mounted but no /dev/dm-N node (udev
-        # late under load), so resize2fs fails; dmsetup mknodes materializes it.
-        "command -v dmsetup >/dev/null 2>&1 && dmsetup mknodes 2>/dev/null || true; "
-        "ROOT_SRC=$(findmnt -no SOURCE /); "
-        "SRC=${ROOT_SRC%%\\[*}; "
-        "case \"$(stat -f -c %T /)\" in "
-        "btrfs) GROW_FS=\"btrfs filesystem resize max /\";; "
-        "xfs) GROW_FS=\"xfs_growfs /\";; "
-        "*) GROW_FS=\"resize2fs $SRC\";; "
-        "esac; "
-        "case \"$SRC\" in "
-        "/dev/mapper/*|/dev/dm-*) "
-        "PV=$(pvs --noheadings -o pv_name | tr -d ' ' | head -1); "
-        "DISK=$(basename \"$PV\" | sed 's/[0-9]*$//'); "
-        "PART=$(basename \"$PV\" | grep -o '[0-9]*$'); "
-        "if [ -n \"$DISK\" ] && [ -n \"$PART\" ]; then growpart \"/dev/$DISK\" \"$PART\" || true; fi; "
-        "pvresize \"$PV\" || true; "
-        "LV=$(lvs --noheadings -o lv_path | tr -d ' ' | head -1); "
-        "lvextend -l +100%FREE \"$LV\" || true; "
-        ";; "
-        "/dev/*) "
-        "DISK=$(basename \"$SRC\" | sed 's/[0-9]*$//'); "
-        "PART=$(basename \"$SRC\" | grep -o '[0-9]*$'); "
-        "if [ -n \"$DISK\" ] && [ -n \"$PART\" ]; then growpart \"/dev/$DISK\" \"$PART\" || true; fi; "
-        ";; "
-        "*) echo 'unrecognized root layout - skipping'; exit 0; ;; "
-        "esac; "
-        "$GROW_FS; "
-        "df -h /"
-    )
+    from guests.root_disk_ops import grow_root_command
     for t in targets:
         # Retried across the whole boot window: a fresh golden's SSH can be dark for minutes
         # under load, and a skipped expansion dies later on ENOSPC.
         r = None
         for attempt, backoff in enumerate((15, 30, 45, 60, 60, 60, 60, 60), 1):
-            r = ssh_via_gateway(ctx, t["ip"], f"sudo -H sh -c {shlex.quote(script)}",
+            r = ssh_via_gateway(ctx, t["ip"], grow_root_command(),
                                 timeout=120, user=ctx.get("box_username", "ubuntu"))
             if r.returncode == 0:
                 break

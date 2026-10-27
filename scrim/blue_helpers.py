@@ -158,19 +158,25 @@ def scorch_script(comp):
             continue
         ip = f"192.168.$MY_TID.{b['last_octet']}"
         for pin in services:
-            if isinstance(pin, str):
-                pin = {"name": pin}
-            port = pin.get("port")
+            if isinstance(pin, dict) and pin.get("plant_only"):
+                # plant_only pins are NOT scored: probing them builds an oracle that
+                # disagrees with the scoreboard.
+                continue
+            # Resolve through Quotient's own pin table so the probe matches the emitted
+            # check (port, scheme, path, status) instead of guessing from the display name.
+            from quotient.setup import _resolve_pin
+            _name, check_key, cfg = _resolve_pin(pin)
+            if check_key is None:
+                continue
+            port = cfg.get("Port")
             if not port:
                 continue
-            if pin.get("score_only") or pin.get("plant_only"):
-                kind = "code" if pin.get("display") in ("http", "https") else "port"
-            else:
-                kind = "code" if pin.get("display") in ("http", "https") else (
-                    "ssh" if pin.get("display") == "ssh" else "port")
-            if kind == "code":
-                http_specs.append(f"{box}|{ip}|{port}")
-            elif kind == "ssh":
+            if check_key == "Web":
+                url = (cfg.get("Url") or [{}])[0]
+                http_specs.append(
+                    f"{box}|{ip}|{port}|{cfg.get('Scheme') or 'http'}|"
+                    f"{url.get('Path') or '/'}|{url.get('Status') or 200}")
+            elif check_key in ("Ssh", "Ftp", "Smtp", "Imap", "Sql"):
                 ssh_specs.append(f"{box}|{ip}|{port}")
             else:
                 port_specs.append(f"{box}|{ip}|{port}")
@@ -187,10 +193,13 @@ def scorch_script(comp):
         return "\n".join(lines) + "\n"
     if http_specs:
         lines.append("for spec in " + " ".join(f'"{x}"' for x in http_specs) + "; do")
-        lines.append('  IFS="|" read -r box ip port <<<"$spec"')
-        lines.append('  r=$($ENGINE_RUN "curl -sm 5 -o /dev/null -w \'%{http_code}\' http://$ip:$port/" 2>/dev/null)')
-        lines.append('  if [ "$r" = 200 ]; then echo "UP   $box http:$port (HTTP $r)"; '
-                     'else echo "DOWN $box http:$port (HTTP ${r:-no answer})"; fi; done')
+        lines.append('  IFS="|" read -r box ip port scheme path want <<<"$spec"')
+        lines.append('  extra=""; [ "$scheme" = https ] && extra="-k"')
+        lines.append('  r=$($ENGINE_RUN "curl -sm 5 $extra -o /dev/null -w \'%{http_code}\' '
+                     '$scheme://$ip:$port$path" 2>/dev/null)')
+        lines.append('  if [ "$r" = "$want" ]; then echo "UP   $box $scheme:$port$path '
+                     '(HTTP $r)"; else echo "DOWN $box $scheme:$port$path (HTTP '
+                     '${r:-no answer}, want $want)"; fi; done')
     if port_specs:
         lines.append("for spec in " + " ".join(f'"{x}"' for x in port_specs) + "; do")
         lines.append('  IFS="|" read -r box ip port <<<"$spec"')

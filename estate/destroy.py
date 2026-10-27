@@ -110,6 +110,9 @@ def destroy_estate(state, *, full=True, nodes=None, log=print):
     comp_name = ownership_identity(state.comp_dir, identity.get("comp_name"))
     run_id = identity.get("run_id") or ""
     refused, skipped, killed, kept = [], [], [], []
+    # Snapshot BEFORE the tiers forget their entries: the unrecorded-bridge sweep below reads
+    # `state.resources()`, which is empty by then (and the node list is needed either way).
+    recorded_nodes = sorted({r["node"] for r in state.resources() if r.get("node")})
     for tier in TIERS:
         for kind in tier:
             if not full and kind in _KEPT_WHEN_TEAMS_ONLY:
@@ -131,7 +134,8 @@ def destroy_estate(state, *, full=True, nodes=None, log=print):
             skipped += tier_skipped
             kept += tier_kept
     # A bridge created but never recorded (the state write failed) is still ours if its comment proves it.
-    for node in (nodes or []) if run_id and state.resources() else []:
+    sweep_nodes = nodes if nodes is not None else recorded_nodes
+    for node in sweep_nodes if run_id else []:
         for iface, comment in node_bridges(node).items():
             if not iface.startswith("vmbr") or not bridge_owned_by(
                     comment, comp_name, run_id):

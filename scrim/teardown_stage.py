@@ -63,7 +63,7 @@ def teardown_red(args, env):
         ownership=Ownership(competition_name(comp_path), flat.get("run_id") or ""),
         engine_ip=flat.get("engine_mgmt_ip") or "",
         engine_user=estate_config.active().engine.username,
-        ssh_key=core.ssh_key_path(), env=env, red_ip=identity.get("ip"))
+        ssh_key=core.ssh_key_path(), env=env, red_ip=identity.get("ip"), vmid=vmid)
     still = _red_vm_still_exists(vmid)
     if still:
         raise RuntimeError(f"red01 vmid {vmid} is STILL PRESENT after destroy — the "
