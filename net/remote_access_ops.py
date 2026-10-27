@@ -76,10 +76,60 @@ def load_roster(comp_dir):
     return roster
 
 
-def render_policy(full_access_users, comps):
+def _strip_hujson(text):
+    # acl.hujson is huJSON: // comments (own lines) + trailing commas. Strict
+    # json.loads chokes on both; strip them the same way headscale-ldap-sync does.
+    lines = []
+    for ln in text.splitlines():
+        in_str, i, res = False, 0, []
+        while i < len(ln):
+            ch = ln[i]
+            if ch == '"' and (i == 0 or ln[i - 1] != "\\"):
+                in_str = not in_str
+            if not in_str and ln[i:i + 2] == "//":
+                break
+            res.append(ch)
+            i += 1
+        lines.append("".join(res))
+    return re.sub(r",(\s*[}\]])", r"\1", "\n".join(lines))
+
+
+def _read_live_grants():
+    # Grants in the LIVE policy that this module did not generate (i.e. not the
+    # full-access row and not comp-* rows): club-wide grants such as
+    # team-friends/alumni -> 192.168.100.0/24. render_policy used to regenerate
+    # the file from scratch and silently drop them (2026-10-23: 3rd occurrence,
+    # team-friends default-DENIED until hand-restored) — so every re-apply now
+    # re-emits them verbatim. A read failure is fatal: rendering without them
+    # would just re-strip the policy.
+    env = _headscale_env()
+    pw = env["TEZ_HEADSCALE_SSH_PASSWORD"]
+    r = _hs_ssh(f"sudo -S -p '' cat {POLICY_FILE}", pw, input_text=pw + "\n",
+                check=False)
+    if r.returncode != 0 or not r.stdout.strip():
+        raise SystemExit(f"  ERROR: cannot read live headscale policy {POLICY_FILE} "
+                         f"before re-render — refusing to regenerate without the "
+                         f"externally-managed grants (would re-strip the policy)")
+    try:
+        policy = json.loads(_strip_hujson(r.stdout))
+    except ValueError as e:
+        raise SystemExit(f"  ERROR: live headscale policy {POLICY_FILE} does not "
+                         f"parse as huJSON: {e}")
+    preserved = []
+    for g in policy.get("grants", []):
+        srcs = g.get("src", [])
+        if "group:full-access" in srcs or any(s.startswith("comp-") for s in srcs):
+            continue  # this module owns those rows
+        preserved.append(g)
+    return preserved
+
+
+def render_policy(full_access_users, comps, preserved_grants=None):
     # The WHOLE headscale ACL policy, regenerated every time; this module is the only writer of acl.hujson.
     # Grants key on the participant USERNAME, not a node tag: headscale v0.29 builds routers' packet
     # filters for user sources but NOT tag sources, so a tag-sourced dial black-holes elsewhere.
+    # preserved_grants: externally-managed grants (e.g. team-friends -> 192.168.100.0/24)
+    # carried over verbatim from the live policy — never dropped by a re-render.
     out = []
     out.append("{")
     out.append("  // Managed by tezcatlipoca (remote_access_ops.render_policy) — do not")
@@ -95,6 +145,8 @@ def render_policy(full_access_users, comps):
     out.append('  "autoApprovers": {"routes": {"192.168.0.0/16": ["tag:range-router"]}},')
     out.append('  "grants": [')
     out.append('    {"src": ["group:full-access"], "dst": ["*"], "ip": ["*"]},')
+    for g in (preserved_grants or []):
+        out.append(f"    {json.dumps(g)},")
     for comp in sorted(comps, key=lambda c: c["comp_id"]):
         ip = comp["engine_ip"]
         scoreboard = f'"{ip if ip.startswith("10.0.0.") else "10.0.0." + ip}"'
@@ -311,7 +363,8 @@ def _apply_policy(full_access, comps):
     # Render, stage, validate, restart; the WireGuard data plane flows through a control-plane restart.
     env = _headscale_env()
     pw = env["TEZ_HEADSCALE_SSH_PASSWORD"]
-    policy = render_policy(full_access, comps)
+    preserved = _read_live_grants()
+    policy = render_policy(full_access, comps, preserved_grants=preserved)
     remote = (f"cat > /tmp/acl.next.hujson <<'TEZEOF'\n{policy}TEZEOF\n"
               f"sudo -S -p '' cp /tmp/acl.next.hujson /home/sysadmin/headscale/config/acl.hujson")
     _hs_ssh(remote, pw, input_text=pw + "\n", timeout=60)
