@@ -198,7 +198,16 @@ def _apt_prelude():
 
 
 def _exec(node, vmid, script, timeout=300):
-    rc, out, err = guest_agent_exec_root(node, vmid, script, timeout=timeout)
+    for attempt in range(3):
+        try:
+            rc, out, err = guest_agent_exec_root(node, vmid, script, timeout=timeout)
+            break
+        except RuntimeError as exc:
+            if "lost exec pid" not in str(exc) or attempt == 2:
+                raise
+            wait_for_guest_agent(node, vmid, timeout=300)
+    else:
+        raise RuntimeError("red01 guest command could not be retried")
     if rc != 0:
         raise RuntimeError(f"guest command failed on red01 (rc {rc}): "
                            f"{(err or out or '')[:300]}")
