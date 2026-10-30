@@ -86,6 +86,16 @@ class FlatBridgeTest(unittest.TestCase):
         # An undeclared key is deploy bookkeeping and lands in run, never dropped.
         self.assertEqual(self.state.data["run"]["nakon_failed_steps"], ["x"])
 
+    def test_flat_view_finds_the_engine_address_a_multinode_deploy_recorded(self):
+        # A multi-node deploy keeps the engine's address in `placement` (it is a per-node choice
+        # there), not in `identity` — and `verify`/every resume reads it from this flat view.
+        self.state.absorb({"run_id": "run-abc12345", "scoring_vm_id": 1500})
+        self.state.data["placement"] = {"engine_mgmt_ip": "10.0.0.252",
+                                        "engine_mgmt_gw": "10.0.0.1"}
+        flat = self.state.flatten()
+        self.assertEqual(flat["engine_mgmt_ip"], "10.0.0.252")
+        self.assertEqual(flat["engine_mgmt_gw"], "10.0.0.1")
+
     def test_round_trip_is_lossless_and_survives_a_reload(self):
         flat = {"run_id": "run-abc12345", "last_phase": 8, "teams": {"team1": {"identifier": 101}},
                 "admin_password": "pw", "boxes": [{"name": "web01"}], "started": True,

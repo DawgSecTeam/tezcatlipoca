@@ -183,6 +183,13 @@ class EstateState:
             if value:
                 flat[key] = dict(value)
         flat.update(self.data.get("run") or {})
+        # A multi-node deploy records the engine's address per placement, not in `identity`
+        # (it is a per-node choice there) — without this, verify and every resume read a state
+        # document with no scoring engine ("no scoring_engine_ip").
+        placement = self.data.get("placement") or {}
+        for key in ("engine_mgmt_ip", "engine_mgmt_gw"):
+            if not flat.get(key) and placement.get(key):
+                flat[key] = placement[key]
         return flat
 
 
