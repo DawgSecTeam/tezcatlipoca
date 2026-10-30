@@ -91,9 +91,18 @@ def bootstrap_windows_box(node, vmid, ip, gateway, dns_server, admin_password, t
 $ErrorActionPreference = 'Stop'
 $adapter = Get-NetAdapter | Where-Object {{ $_.Status -eq 'Up' }} | Select-Object -First 1
 if (-not $adapter) {{ throw "no up NetAdapter found" }}
-Remove-NetIPAddress -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
-Remove-NetRoute -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
-New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress '{ip}' -PrefixLength 24 -DefaultGateway '{gateway}'
+# A clone inherits the base template's static address, so the re-assign below is a
+# remove-then-add of the SAME address, which raced and died with "Instance MSFT_NetIPAddress
+# already exists" while the box was already correctly addressed. Desired address present = done.
+if (-not (Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object {{ $_.IPAddress -eq '{ip}' }})) {{
+    Remove-NetIPAddress -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-NetRoute -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
+    New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress '{ip}' -PrefixLength 24 -DefaultGateway '{gateway}'
+}}
+if (-not (Get-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)) {{
+    New-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -NextHop '{gateway}' | Out-Null
+}}
 Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses '{dns_server}'
 
 net user {WINDOWS_ADMIN_USER} "{admin_password}"
