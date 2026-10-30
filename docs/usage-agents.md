@@ -202,9 +202,11 @@ per-run engine worktree at the pinned ref and runs the same drivers against a pe
 workspace (`--comp-dir`), so sessions never contend over a checkout and never eat each
 other's state. `watch_run` subscribes the session: stage events (deploy `[N/8]` phases,
 scrim stages) are pushed as they complete — wait for the push instead of polling logs,
-and use `get_run_events(since=N)` to recover anything missed across a reconnect. A second
-run of the same competition is refused at submit (parallel elsewhere, fail-fast on real
-collisions).
+and use `get_run_events(since=N)` to recover anything missed across a reconnect. Runs are
+parallel, **including two of the same competition** — each gets its own workspace and run-id tag
+set; the engine's preflight/locks are the collision authority and refuse provable clashes
+(vmids, engine mgmt IPs, a second deploy against one scoring engine). Give concurrent ranges
+distinct `--scoring-vmid` and `--team-identifiers`.
 
 ## Long-running deploys
 
