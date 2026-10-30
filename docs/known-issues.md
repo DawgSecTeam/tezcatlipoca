@@ -21,3 +21,42 @@ so a box that failed to boot or a service that did not start on any other team p
 first Linux box already has a recorded target; widening it is a loop over `team_keys()` instead of a
 single pick, but the check's runtime grows with the team count and it currently runs inside the same
 timeout as the scoreboard gates.
+
+### A failed deploy's own bridge blocks the retry (placement probe)
+
+The deploy's placement probe counts anything already on the target vmid/bridge as a collision,
+including the *same competition's* leftovers from the deploy that just failed. Evidence: after a
+phase-3 failure left engine vmid `1500` and `vmbr120` behind, every retry died at
+`no eligible node for team(s) team1 … vmid collisions: [1500], bridge collisions: ['vmbr120']`
+and the only way forward was to destroy the failed workspace, which throws away the goldens and
+engine template that run had already built. The single-node path handles this (phase 1 reclaims,
+and `check_collisions` reports such a VM as reclaimable); the multi-node probe does not, and
+bridges carry no ownership tags so it cannot tell ours from a stranger's by tag alone. The
+engine's mgmt-IP gate had the same blind spot for the engine-template slot and is fixed
+(`infra/collisions._own_build_vmids`); the placement probe needs the equivalent — provisionally,
+skip a bridge whose name matches one this plan would create when the node's engine VM carries
+this competition's tag.
+
+### `verify` passes with a scored service down
+
+Every service verdict is reported `[informational]`, so a range whose SIEM ingest port is closed
+still ends `RESULT: PASS — competition looks healthy`. Live: `team1: 6/7 services UP, DOWN:
+splunk01-ingest` alongside a PASS summary. A scored service being down should fail the run (or
+at least the summary line should not read PASS); the split exists so an unscored service cannot
+fail an otherwise healthy range, but it currently also hides the scored ones.
+
+### The queue cannot resume a failed deploy (`--from-phase`)
+
+`--from-phase` is unusable through the dashboard: `deploy` is not a `RANGE_ACTION`, so a
+resubmitted deploy seeds a fresh workspace and the driver dies with
+`--from-phase 2 but …/run-<id>/comp/estate-state.json doesn't exist`. `redeploy` is not a
+substitute — its modes act on a settled range, not on the phases a failed deploy never reached.
+Recovering a half-built range therefore means either a full destroy+deploy (rebuilding templates
+that were already proven) or a manual driver run in a new worktree. A `resume` run action that
+resolves the owning workspace and passes the highest completed phase would cover it.
+
+### The run's stage label lags the driver's real phase
+
+`GET /api/runs/<id>.stage` trails the engine: a run sat at `phase 6/8 repair_sweep` through the
+whole red01/Mythic install (real phase 7) and only jumped to `phase 8/8 seed` on completion.
+`watch_run` subscribers therefore read a stale phase for the longest single step of a deploy.
