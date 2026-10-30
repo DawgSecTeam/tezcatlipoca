@@ -38,6 +38,29 @@ class BoxSshArgv(unittest.TestCase):
         self.assertEqual(argv[-1], "ubuntu@192.168.1.5")
 
 
+class GatewayProxyEscaping(unittest.TestCase):
+    # OpenSSH 10 percent-expands a ProxyCommand string itself and makes an escape its
+    # ProxyCommand table lacks fatal (`vdollar_percent_expand: unknown key %C`). %C belongs to
+    # ControlPath, so a single % killed every box hop in ~10ms with rc 255 and empty stdout.
+    # The doubled form survives one outer expansion as the literal %C the inner ssh needs.
+
+    def setUp(self):
+        self.proxy = ssh_ops.gateway_proxy(CTX)
+
+    def test_controlpath_percent_arrives_doubled(self):
+        self.assertIn("cm-%%C", self.proxy)
+        self.assertNotIn("cm-%C", self.proxy)
+
+    def test_one_outer_expansion_leaves_a_valid_inner_controlpath(self):
+        inner = self.proxy.replace("%%", "%")
+        self.assertIn("ControlPath=", inner)
+        self.assertIn("cm-%C", inner)
+        self.assertNotIn("%%", inner)
+
+    def test_jump_escapes_for_the_inner_w_are_left_for_ssh(self):
+        self.assertIn("-W %h:%p", self.proxy)
+
+
 
 if __name__ == "__main__":
     unittest.main()

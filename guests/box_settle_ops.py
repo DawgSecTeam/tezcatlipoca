@@ -91,13 +91,18 @@ def wait_boxes_cloud_init(ctx, targets, timeout=None, run=None):
     def _one(t):
         ip = t["ip"]
         tail = ""
+        err = ""
         while True:
             try:
                 r = run(ctx, ip, _CLOUD_INIT_CHECK, timeout=20, user=user)
                 verdict = _cloud_init_verdict(r.returncode, r.stdout)
                 tail = (r.stdout or "").strip() or tail
-            except Exception:
+                # rc!=0 with no stdout is a dead hop, not a busy box; ssh's reason is only on
+                # stderr, and losing it made a broken channel read as a 25-minute cloud-init run.
+                err = (getattr(r, "stderr", None) or "").strip() or err
+            except Exception as exc:
                 verdict = "running"
+                err = f"{type(exc).__name__}: {exc}"
             if verdict == "done":
                 with PRINT_LOCK:
                     print(f"    {ip}: cloud-init done")
@@ -112,7 +117,8 @@ def wait_boxes_cloud_init(ctx, targets, timeout=None, run=None):
                 raise RuntimeError(
                     f"cloud-init on {ip} still running after {timeout}s — refusing to open "
                     f"the build session against a box whose boot-time package_upgrade can "
-                    f"bounce sshd mid-build (last status: {tail[-300:]})")
+                    f"bounce sshd mid-build (last status: "
+                    f"{tail[-300:] or 'never read; the hop itself said: ' + err[-200:]})")
             time.sleep(_CLOUD_INIT_POLL)
 
     results = run_concurrent(targets, _one)

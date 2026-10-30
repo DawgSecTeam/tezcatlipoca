@@ -37,7 +37,12 @@ def engine_ssh_opts(ctx):
 
 def gateway_proxy(ctx):
     import shlex
-    opts = " ".join(shlex.quote(part) for part in engine_ssh_opts(ctx))
+    # The outer ssh percent-expands a ProxyCommand before the shell sees it, and OpenSSH 10
+    # makes an escape its ProxyCommand table lacks fatal — %C belongs to ControlPath only. Left
+    # single, every box hop died in ~10ms with rc 255 and empty stdout, which the settle gate
+    # read as "cloud-init still running". Doubling it hands the inner ssh a literal %C, so its
+    # socket hash (and the multiplexing) is unchanged.
+    opts = " ".join(shlex.quote(part) for part in engine_ssh_opts(ctx)).replace("%", "%%")
     return (f"ssh -i {shlex.quote(str(ctx['ssh_key_path']))} {opts} -W %h:%p "
             f"{ctx['vm_username']}@{ctx['scoring_engine_ip']}")
 
@@ -85,7 +90,7 @@ def forget_engine_host_key(ip, known_hosts=None):
     kh = known_hosts or DEFAULT_KNOWN_HOSTS
     if Path(kh).exists():
         subprocess.run(["ssh-keygen", "-R", ip, "-f", kh], capture_output=True, text=True)
-    for sock in Path(kh).parent.glob(f"cm-{ip}-*"):
+    for sock in _master_sockets(kh, ip):
         try:
             subprocess.run(["ssh", "-o", f"ControlPath={sock}", "-O", "exit", f"x@{ip}"],
                            capture_output=True, timeout=5)
@@ -95,6 +100,16 @@ def forget_engine_host_key(ip, known_hosts=None):
             sock.unlink()
         except OSError:
             pass
+
+
+def _master_sockets(kh, ip):
+    # The socket is named by ssh's own %C hash, so the old `cm-<ip>-*` glob could never match it;
+    # `ssh -G` prints the expanded ControlPath, letting ssh keep ownership of the hash algorithm.
+    r = subprocess.run(["ssh", "-G", "-o", f"ControlPath={Path(kh).parent / 'cm-%C'}",
+                        f"{config.active().engine.username}@{ip}"],
+                       capture_output=True, text=True, timeout=10)
+    return [Path(line.split(" ", 1)[1]) for line in (r.stdout or "").splitlines()
+            if line.startswith("controlpath ") and Path(line.split(" ", 1)[1]).exists()]
 
 
 def ssh_via_gateway(ctx, target_ip, cmd, timeout=60, user="ubuntu"):
