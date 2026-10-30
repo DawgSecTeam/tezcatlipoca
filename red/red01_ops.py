@@ -159,6 +159,21 @@ def _exit_codes(*names):
     return f"echo {' '.join(names)}"
 
 
+def _estate_ubuntu_template(node):
+    """This estate's Ubuntu base, by the configured template vmid's own name.
+
+    DEFAULT_TEMPLATE hardcodes the field node's 'base-ubuntu24.04-fix'; the realm ships the same
+    image as 'base-ubuntu24.04', so a red01 deploy there died with "template not found". Which
+    name exists is an estate fact (proxmox.template_vm_id already names the right vmid per node)."""
+    want = int(config.active().proxmox.template_vm_id or 0)
+    if not want:
+        return None
+    for vm in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]:
+        if int(vm["vmid"]) == want and vm.get("template"):
+            return vm.get("name")
+    return None
+
+
 def find_template(node, name):
     for vm in proxmox_api("GET", f"/nodes/{node}/qemu")["data"]:
         if vm.get("template") and vm.get("name") == name:
@@ -224,7 +239,7 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
         if not ip:
             raise RuntimeError(f"no free address in the red band for red01 "
                                f"(uncheckable: {unchecked})")
-    template = template or DEFAULT_TEMPLATE
+    template = template or _estate_ubuntu_template(node) or DEFAULT_TEMPLATE
     pub_path = Path(str(ssh_key) + ".pub")
     pub_key = pub_path.read_text(encoding="utf-8").strip() if pub_path.is_file() else ""
     if not pub_key:
