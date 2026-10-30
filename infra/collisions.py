@@ -315,13 +315,34 @@ def running_guest_ips(vms, skip_vmids, ours_tags=None):
     return takers, unchecked
 
 
+def _own_build_vmids(vms, engine_vmid, ours_tags):
+    """The engine vmid, plus the engine-template slot when it holds THIS competition's
+    unconverted build VM. That VM boots on the planned mgmt IP and phase 2 reclaims it, so
+    counting it as a squatter made one failed build refuse every later deploy with "pick
+    another TEZ_ENGINE_MGMT_IP" — while check_collisions reported the same VM as reclaimable.
+    A foreign VM in the slot is still a collision (phase 2 refuses to destroy it)."""
+    from multinode import placement_record as placement_ops
+    from common.constants import ENGINE_TEMPLATE_NAME
+    skip = {engine_vmid}
+    own_tag = next((t for t in (ours_tags or ()) if t.startswith("comp-")), None)
+    for vm in vms:
+        if vm.get("vmid") != placement_ops.engine_template_vmid(engine_vmid):
+            continue
+        tags = parse_vm_tags(vm.get("tags"))
+        if (vm.get("name") or "") == ENGINE_TEMPLATE_NAME and not vm.get("template") \
+                and not any(t.startswith("comp-") and t != own_tag for t in tags):
+            skip.add(vm["vmid"])
+    return skip
+
+
 def engine_mgmt_ip_gate(node, vms, engine_vmid, engine_mgmt_ip, ours_tags=None):
     """Static engine mgmt IP must not collide with any running guest on the mgmt L2 (cluster-wide,
     since the L2 spans nodes). An unverifiable address is not free: the DEFAULT ip is refused
     (nobody chose it), while an explicitly set one gets a loud warning."""
     # Our own engine from a prior failed attempt holds the planned mgmt IP until that run is
     # destroyed or resumed — skipped by vmid too: a run-id-less state file gives no tag.
-    takers, unchecked = running_guest_ips(vms, {engine_vmid}, ours_tags)
+    takers, unchecked = running_guest_ips(vms, _own_build_vmids(vms, engine_vmid, ours_tags),
+                                          ours_tags)
     if engine_mgmt_ip in takers:
         raise SystemExit(
             f"  ERROR: static engine mgmt IP {engine_mgmt_ip} is already answered by a "

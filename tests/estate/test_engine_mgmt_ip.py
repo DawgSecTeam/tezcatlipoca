@@ -167,6 +167,28 @@ class SelfCollisionsAreNotForeign(unittest.TestCase):
         with self.assertRaises(SystemExit):
             _gate(vms, _Cluster({1100: ["10.0.0.250"]}), "10.0.0.250", ours_tags=ours)
 
+    def test_a_failed_builds_template_leftover_is_not_a_squatter(self):
+        # The engine-template slot's build VM boots on the planned mgmt IP and phase 2 reclaims
+        # it; counting it as a squatter made one failed build refuse every later deploy with
+        # "pick another TEZ_ENGINE_MGMT_IP" while check_collisions offered it as reclaimable.
+        # An unconverted clone wears the base image's tags — no comp tag of ours.
+        vms = [_vm(2540, "proxmox", "engine-template", tags="tezcatlipoca")]
+        out = _gate(vms, _Cluster({2540: ["10.0.0.250"]}), "10.0.0.250",
+                    ours_tags={"tezcatlipoca", "comp-ours"})
+        self.assertIn("is free", out)
+
+    def test_a_foreign_vm_in_the_template_slot_still_blocks(self):
+        vms = [_vm(2540, "proxmox", "engine-template", tags="tezcatlipoca,comp-fixture")]
+        with self.assertRaises(SystemExit):
+            _gate(vms, _Cluster({2540: ["10.0.0.250"]}), "10.0.0.250",
+                  ours_tags={"tezcatlipoca", "comp-ours"})
+
+    def test_a_foreign_name_in_the_template_slot_still_blocks(self):
+        vms = [_vm(2540, "proxmox", "someone-elses-box", tags="tezcatlipoca")]
+        with self.assertRaises(SystemExit):
+            _gate(vms, _Cluster({2540: ["10.0.0.250"]}), "10.0.0.250",
+                  ours_tags={"tezcatlipoca", "comp-ours"})
+
 
 class JumpGateSharesTheScan(unittest.TestCase):
     def _plan(self, vms):

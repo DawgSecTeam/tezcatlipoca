@@ -135,10 +135,12 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
         "sudo chmod 600 /opt/quotient/.env",
         timeout=30, step="push quotient .env")
 
-    # Restart only `quotient`: restarting the postgres/redis services too makes Quotient come
-    # up while Postgres is still in recovery, which is the boot race the template path retries.
-    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose restart quotient",
+    # Restart only the app service: restarting the postgres/redis services too makes Quotient
+    # come up while Postgres is still in recovery, which is the boot race the template path
+    # retries. The service is `server` in quotient's compose file; `quotient` is only the
+    # container-name prefix, so naming it here made compose exit 1 with "no such service".
+    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose restart server",
                     # A container restart can run past a minute on a loaded node.
-                    timeout=300, step="restart quotient")
+                    timeout=300, step="restart quotient server")
 
     print("  Event configuration pushed to scoring engine")
