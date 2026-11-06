@@ -59,26 +59,37 @@ def _image_map_gate(creds, ctx):
 
 
 def _leftover_gate(creds, ctx):
-    """A range of this competition already standing is a refusal, never reaped — the
-    same rule as a comp-tagged VM on PVE. Anything carrying tz-comp=<slug> refuses."""
+    """A range of this competition already standing is a refusal, never reaped — EXCEPT
+    this run's own interrupted attempt (same comp, same run id), which phase 1 reclaims
+    the way the proxmox flow reclaims its interrupted clones: a comp dir keeps one run
+    id, so tz-run == ours is a crash leftover, not a live concurrent range."""
     from common.constants import comp_slug
+    from providers.gcp import naming
     slug = comp_slug(ctx.comp_name)
-    leftovers = []
+    # The gates run BEFORE the secrets mint mints/reuses the run id, so the identity comes
+    # from the same source the mint reads: the state document's persisted run id.
+    mine_hex = naming.run_hex((ctx.previous_state or {}).get("run_id")
+                              or getattr(ctx, "run_id", ""))
+    others, ours = [], []
     for info in compute.instances(creds, [(LABEL_COMP, slug)]):
         run = (info.get("labels") or {}).get(LABEL_RUN) or "?"
-        leftovers.append(f"instance {info['name']} (run {run})")
+        (ours if run == mine_hex else others).append(f"instance {info['name']} (run {run})")
     for info in (gapi(creds, "GET", "global/images",
                      params={"filter": f"labels.{LABEL_COMP}={slug}",
                              "maxResults": 500}).get("items") or []):
         run = (info.get("labels") or {}).get(LABEL_RUN) or "?"
-        leftovers.append(f"image {info['name']} (run {run})")
-    if leftovers:
+        (ours if run == mine_hex else others).append(f"image {info['name']} (run {run})")
+    if others:
         raise SystemExit(
-            f"  ERROR: this competition already has a gcp range standing:\n      - "
-            + "\n      - ".join(leftovers)
+            f"  ERROR: this competition already has a gcp range standing (another run):\n      - "
+            + "\n      - ".join(others)
             + "\n      A deploy never destroys a leftover range. Reclaim it with "
               f"destroy-competition.py (--comp-dir {ctx.comp_dir}), or resume the run "
               f"that owns it.")
+    if ours:
+        print(f"  Preflight: {len(ours)} interrupted piece(s) of THIS run standing — "
+              f"phase 1 reclaims them")
+    return ours
 
 
 def _nic_gate(ctx):

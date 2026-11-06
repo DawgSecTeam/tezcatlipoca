@@ -438,7 +438,7 @@ class PreflightTest(GcpBase):
         import types
         return types.SimpleNamespace(
             comp_name=comp, comp_dir=Path(self.tmp.name), boxes=boxes, teams=teams,
-            placement=None,
+            placement=None, previous_state={"run_id": ""},
             all_targets=[{"box": b} for b in boxes])
 
     def test_matrix_refuses_windows_inpath_and_unmanaged(self):
@@ -504,3 +504,44 @@ class HashLabelTest(GcpBase):
         # the reuse compare goes through the same clamp, so stamps match expectations
         self.assertEqual(image_ops.image_hash(self.fake.images["tz-c1-0e6474eb-engine-img"]),
                          image_ops.hash_value(digest))
+
+
+class ReclaimOursRefuseOthersTest(GcpBase):
+    def _ctx(self, comp="c1", run="run-x", prior=None):
+        import types
+        return types.SimpleNamespace(
+            comp_name=comp, comp_dir=Path(self.tmp.name), run_id=run,
+            previous_state=prior if prior is not None else {"run_id": run},
+            boxes=[], teams={"team1": {"identifier": 101}}, placement=None,
+            all_targets=[])
+
+    def test_reclaim_sweeps_this_runs_instances_and_leaves_others(self):
+        import types
+        self.fake.add_instance("tz-c1-abc123-mine", "c1", "run-abc123", unit=1010)
+        self.fake.add_instance("tz-c1-other12d-theirs", "c1", "run-other12d", unit=1020)
+        ctx = types.SimpleNamespace(comp_name="c1", run_id="run-abc123")
+        pipeline.reclaim_interrupted(ctx)
+        self.assertNotIn("tz-c1-abc123-mine", self.fake.instances)
+        self.assertIn("tz-c1-other12d-theirs", self.fake.instances)
+
+    def test_the_leftover_gate_reads_the_persisted_run_id(self):
+        boxes = [{"name": "web01", "template": "base-ubuntu24.04-fix", "cpu": 1,
+                  "memory_mb": 1024}]
+        (Path(self.tmp.name) / "Compfile").write_text("name c1\nremote_access 0\n")
+        # our own crash leftover (state's run id), another comp's machine standing
+        self.fake.add_instance("tz-c1-abc123-mine", "c1", "run-abc123", unit=1010)
+        self.fake.add_instance("tz-c2-42424-a-live", "c2", "run-00042424", unit=1030)
+        # run_capacity_preflight gates BEFORE the mint: ctx.run_id is empty, the
+        # persisted previous_state carries it
+        self.assertEqual(
+            preflight._leftover_gate({}, self._ctx(run="", prior={"run_id": "run-abc123"})),
+            ["instance tz-c1-abc123-mine (run abc123)"])
+
+    def test_the_leftover_gate_refuses_a_standing_range_of_another_run(self):
+        boxes = [{"name": "web01", "template": "base-ubuntu24.04-fix", "cpu": 1,
+                  "memory_mb": 1024}]
+        self.fake.add_instance("tz-c1-abcd1234-live", "c1", "run-abcd1234", unit=1030)
+        with self.assertRaises(SystemExit) as caught:
+            preflight._leftover_gate({}, self._ctx(run="run-x"))
+        self.assertIn("another run", str(caught.exception))
+        self.assertIn("tz-c1-abcd1234-live", str(caught.exception))

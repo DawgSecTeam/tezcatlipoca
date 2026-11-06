@@ -55,10 +55,20 @@ def _instance_name(prefix, target):
 # ---- phase 1 ----
 
 def reclaim_interrupted(ctx):
-    # GCP creates are atomic and labeled up front, so the PVE clone-marker reclaim (a
-    # VM built between the clone POST and the tag PUT) has no analog: anything that
-    # exists carries the full ownership set, which preflight and teardown classify.
-    print("  Reclaim: gcp creates are atomic and labeled — no marker reclaim needed")
+    """This same run's crash leftovers: everything carrying our full ownership set that a
+    failed attempt created and never recorded (instances only — an interrupted run's
+    IMAGES carry the right hash stamps and are its resume-usable state, exactly like the
+    proxmox kept-template reuse). Anything of another run is not touched here; the
+    preflight already refused over it."""
+    creds = _creds()
+    ours = [i for i in compute.instances(creds)
+            if naming.owned(i, ctx.comp_name, ctx.run_id)]
+    if not ours:
+        print("  Reclaim: nothing of this run left standing")
+        return
+    for info in ours:
+        instance_ops.delete(creds, info["name"])
+        print(f"  reclaiming {info['name']} (this run's interrupted attempt)")
 
 
 # ---- phase 2: the engine template image ----
