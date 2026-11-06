@@ -20,6 +20,8 @@ quotient/__pycache__/
 .claude
 __pycache__/
 proxmox
+# GCP service-account credential files for the gcp deploy provider (config names the path)
+.gcp-sa*.json
 deploy.log
 deploy-*.log
 logs/
