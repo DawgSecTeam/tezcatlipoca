@@ -62,12 +62,19 @@ def satellite_route_commands(routes):
     ]
 
 
-def _iface(name, mac):
+def _iface_name(index, platform="proxmox"):
+    """PVE numbers NICs from PCI slot 0x13 (ens19+); GCE's udev names nic0.. as ens4+."""
+    return f"ens{19 + index}" if platform == "proxmox" else f"ens{5 + index}"
+
+
+def _iface(name, mac, platform="proxmox"):
     """Pin the interface by MAC when the MAC is known.
 
     `ens<N>` is positional and only holds while every NIC sits on PCI bus 0 (slots 0x12-0x1f,
     `net0..net13`). Past that udev names the interface something else and every address in
     this file lands on nothing — a silent loss of engine→team routing on a big range.
+    On gcp the API exposes no MAC at all: the CREATE order is the udev order (ens4+), so
+    the name pin is the deterministic one.
     """
     lines = [f"    {name}:"]
     if mac:
@@ -87,15 +94,15 @@ def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None, mac
 
     index = 0
     for identifier in team_identifiers:
-        lines += _iface(f"ens{18 + index + 1}", mac(index))
+        lines += _iface(_iface_name(index, platform), mac(index), platform)
         lines.append(f'      addresses: ["{engine_team_gateway(identifier, platform)}/24"]')
         index += 1
     for identifier in transit_identifiers:
-        lines += _iface(f"ens{18 + index + 1}", mac(index))
+        lines += _iface(_iface_name(index, platform), mac(index), platform)
         lines.append(f'      addresses: ["172.31.{identifier}.1/30"]')
         index += 1
     if red_segment:
-        lines += _iface(f"ens{18 + index + 1}", mac(index))
+        lines += _iface(_iface_name(index, platform), mac(index), platform)
         lines.append(f'      addresses: ["{red_segment["gw"]}/24"]')
     return "\n".join(lines)
 

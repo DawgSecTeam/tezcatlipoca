@@ -176,7 +176,7 @@ class FakeGcp:
                     "disks": [{"boot": True, "source": f"disk/{data['name']}"}],
                     "tags": data.get("tags") or {},
                     "networkInterfaces": [
-                        {"networkIP": n["networkIP"], "macAddress": f"42:00:00:00:00:0{i}",
+                        {"networkIP": n["networkIP"],
                          "accessConfigs": n.get("accessConfigs") or []}
                         for i, n in enumerate(nics)]}
             self.instances[data["name"]] = info
@@ -620,8 +620,12 @@ class TeamAddressTest(unittest.TestCase):
                                                  "gw": "10.200.0.2"}, platform="gcp")
         self.assertIn('192.168.101.2/24', gcp)
         self.assertIn('10.200.0.2/24', gcp)
+        # GCE exposes no MACs: the pin is the interface NAME, ens5+ in create order
+        self.assertRegex(gcp, r"(?m)^    ens5:")
+        self.assertFalse(gcp.count("macaddress"))
         pve = netplan_yaml(["101"])
         self.assertIn('192.168.101.1/24', pve)
+        self.assertIn("ens19:", pve)
 
     def test_red_dnat_targets_follow_the_platform_anchor(self):
         from red import red01_ops

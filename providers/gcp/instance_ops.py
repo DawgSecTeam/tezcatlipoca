@@ -98,9 +98,14 @@ def delete(creds, name):
 
 
 def nic_macs(creds, name):
-    """MACs after NIC0 (the mgmt NIC), in create order — the netplan's pin indexes."""
+    """MACs after NIC0 (the mgmt NIC), in create order — the netplan's pin indexes.
+
+    This project's instance GET does not expose macAddress (not even as a fields
+    selection), so the readback pads empty strings and the netplan pins by NAME —
+    GCE udev names NICs ens4+ in create order, which is just as deterministic.
+    """
     info = compute.instance(creds, name)
-    return [n["macAddress"] for n in (info.get("networkInterfaces") or [])[1:]]
+    return [n.get("macAddress") or "" for n in (info.get("networkInterfaces") or [])[1:]]
 
 
 def primary_nic_info(creds, name):
