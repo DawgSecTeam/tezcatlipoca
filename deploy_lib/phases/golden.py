@@ -2,32 +2,38 @@
 
 from functools import partial
 
+import providers
+
 from common.constants import SNAP_BASE
 from golden.golden_target_ops import _template_vmid_map
-from golden.golden_ops import build_golden_set, windows_plan_features
+from golden.golden_ops import windows_plan_features
 from guests.apt_dns_ops import fix_dns_on_boxes, prep_apt_on_boxes
 from guests.ubuntu_auth_ops import setup_ubuntu_auth
-from nakonops.nakon_config_ops import generate_slot_golden_config
+from nakonops.nakon_config_ops import generate_slot_golden_config  # noqa: F401  (slot goldens print their anchor in the proxmox provider)
 from multinode.placement_record import record_of
 from common.ssh_ops import wait_for_boxes_ssh, wait_for_cloud_init
 from engine.template_freeze import load_template_hashes, save_template_hashes
 from common.timing import timed
 from common.utils import is_unmanaged, run_concurrent
-from common.windows_ops import bootstrap_windows_box
+from common.windows_ops import bootstrap_windows_box  # bound here: tests patch the phase's proxmox call
 
 from guests.converge_ops import record_coverage
-from deploy_lib.golden_plan import golden_rebuild_gate
+from deploy_lib.golden_plan import golden_rebuild_gate  # noqa: F401  (patch seam for the resume tests)
 from deploy_lib.phases._snapshots import snap_base
 
 
 def boot_win(ctx, t):
     print(f"    Bootstrapping Windows box {t['ip']} (vmid {t['vmid']})...")
-    gw = f"192.168.{t['identifier']}.1"
     box_name = (t.get("box") or {}).get("name") or t.get("name")
+    features = windows_plan_features(ctx.comp_dir, box_name)
     with timed(ctx.comp_dir, 4, "bootstrap_windows", t["ip"]):
-        bootstrap_windows_box(t.get("node", ctx.node), t["vmid"], t["ip"], gw,
-                              "8.8.8.8", ctx.box_password,
-                              features=windows_plan_features(ctx.comp_dir, box_name))
+        if providers.platform_of_ctx(ctx) == providers.PROXMOX:
+            gw = f"192.168.{t['identifier']}.1"
+            bootstrap_windows_box(t.get("node", ctx.node), t["vmid"], t["ip"], gw,
+                                  "8.8.8.8", ctx.box_password,
+                                  features=features)
+        else:
+            providers.of_ctx(ctx).windows_bootstrap(ctx, t, features=features)
 
 
 def golden_coverage_recorder(ctx):
@@ -46,50 +52,8 @@ def golden_coverage_recorder(ctx):
 
 
 def build_goldens(ctx, stored):
-    # slot 0 is the engine node's map; drift rebuilds unless frozen, matching hashes short-circuit
-    _golden_coverage = golden_coverage_recorder(ctx)
-
-    # slot-0 goldens exist only when the engine node hosts teams — its vmbr<id> bridges live on the satellite hosts
-    engine_has_teams = bool(
-        ctx.placement is None
-        or ctx.placement["team_nodes"] and any(
-            n == ctx.placement["engine_node"]
-            for n in ctx.placement["team_nodes"].values()))
-    golden_ids = {}
-    if engine_has_teams:
-        golden_rebuild_gate(ctx.comp_dir, ctx.node, 0, ctx.boxes, ctx.engine_vmid,
-                            stored, ctx.golden_hashes, ctx.golden_inputs, ctx.comp_name,
-                            run_tag=ctx.reclaim_tag)
-        golden_ids = build_golden_set(ctx.node, ctx.teams, ctx.boxes, ctx.tf_ctx, ctx.comp_dir,
-                                      ctx.engine_vmid, ctx.box_password,
-                                      ctx.golden_config_path, ctx.ssh_key, ctx.scoring_user,
-                                      ctx.scoring_ip, jobs=ctx.nakon_jobs,
-                                      golden_hashes=ctx.golden_hashes, unbooted=ctx.unbooted,
-                                      run_id=ctx.run_id, coverage=_golden_coverage)
-    golden_ids_by_slot = {0: golden_ids}
-    if ctx.placement and ctx.placement["satellites"]:
-        # built ON each satellite from its own templates — linked clones can't cross hosts
-        # on separate storages. The plant rides the engine's gateway path; the jump routes + SNATs it there.
-        for sat in ctx.placement["satellites"]:
-            sat_rec = record_of(ctx.placement, sat["name"])
-            slot = sat["slot"]
-            anchor = sat["anchor_identifier"]
-            golden_rebuild_gate(ctx.comp_dir, sat_rec.node, slot, ctx.boxes,
-                                ctx.engine_vmid, stored, ctx.golden_hashes,
-                                ctx.golden_inputs, ctx.comp_name,
-                                run_tag=ctx.reclaim_tag)
-            slot_config = generate_slot_golden_config(ctx.comp_dir, ctx.boxes,
-                                                      ctx.unbooted, anchor, slot)
-            print(f"  Golden set on satellite '{sat['name']}' (slot {slot}, "
-                  f"anchor 192.168.{anchor}.0/24)...")
-            with timed(ctx.comp_dir, 4, "golden_build", f"sat{slot}"):
-                golden_ids_by_slot[slot] = build_golden_set(
-                    sat_rec.node, ctx.teams, ctx.boxes, ctx.tf_ctx, ctx.comp_dir, ctx.engine_vmid,
-                    ctx.box_password, slot_config, ctx.ssh_key, ctx.scoring_user, ctx.scoring_ip,
-                    jobs=ctx.nakon_jobs, golden_hashes=ctx.golden_hashes,
-                    unbooted=ctx.unbooted, slot=slot, anchor_identifier=anchor,
-                    run_id=ctx.run_id, coverage=_golden_coverage)
-    return golden_ids, golden_ids_by_slot
+    return providers.of_ctx(ctx).build_golden_sets(ctx, stored,
+                                                   golden_coverage_recorder(ctx))
 
 
 def record_golden_set(ctx, golden_ids, golden_ids_by_slot):

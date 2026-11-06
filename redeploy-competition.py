@@ -101,9 +101,6 @@ def main():
                              "reset and injects re-open anchored at now. Use for scrim reruns.")
     args = parser.parse_args()
 
-    # Redeploy and teardown both reuse the ambient estate identity.
-    config.require_proxmox_identity()
-
     comp_name = args.competition
     if comp_name is not None and not valid_comp_name(comp_name):
         raise SystemExit(f"  ERROR: invalid competition name {comp_name!r} — use "
@@ -123,6 +120,12 @@ def main():
     comp_dir = resolve_comp_dir(comp_name, args.comp_dir)
     # Display only (ownership: the state document); without this a --comp-dir run prints "comp".
     comp_name = comp_name or competition_name(comp_dir)
+
+    # The ambient estate identity follows the recorded platform; an unreadable workspace
+    # defaults to proxmox, so a missing identity refuses before anything else runs.
+    import providers
+    providers.require_identity(providers.platform_from_state(comp_dir))
+
     if not comp_dir.is_dir():
         raise SystemExit(f"  ERROR: no such competition: {comp_dir}")
 

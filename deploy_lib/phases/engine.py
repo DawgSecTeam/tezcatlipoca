@@ -1,23 +1,17 @@
-"""Phases 2 and 3: the engine template + the engine and its bridges, then per-deploy engine prep."""
+"""Phases 2 and 3: the engine, its template/image lifecycle and bridges, then per-deploy engine prep."""
 
 
-from common.constants import (DEFAULT_ENGINE_MGMT_GW, ENGINE_TEMPLATE_NAME,
-                              ownership_tags)
-from engine.engine_bootstrap_ops import bootstrap_scoring_engine
+import providers
+
+from common.constants import DEFAULT_ENGINE_MGMT_GW
 from engine.engine_event_ops import push_event_conf
 from engine.engine_health_ops import ensure_nat_forwarding
 from engine.engine_identity_ops import prepare_engine_from_template
 from common.ssh_ops import quote_sshkeys
 from net.jump_ops import build_jump_vms, red_segment_from_env
-from infra.ownership import destroy_vm_if_exists, retag_ownership
-from multinode.placement_record import record_of, resolved_mgmt_bridge
+from multinode.placement_record import record_of
 from multinode.routing_ops import verify_satellite_routing
 from common.ssh_ops import forget_engine_host_key, wait_for_ssh
-from engine.engine_template_ops import build_engine_template, destroy_engine_template, find_engine_template
-from engine.template_freeze import (
-    engine_hash_inputs, frozen_gate, hash_from_inputs, load_template_hashes, save_template_hashes,
-    template_stamp_current,
-)
 from common.timing import timed
 from common.utils import compfile_flag, compfile_value
 
@@ -35,70 +29,7 @@ def engine_build_ctx(ctx):
 
 
 def ensure_engine_template(ctx):
-    quotient_ref = compfile_value(ctx.comp_dir / "Compfile", "quotient_ref")
-    engine_inputs = engine_hash_inputs(
-        int(config.active().require("proxmox.template_vm_id")), quotient_ref,
-        bootstrap_scoring_engine)
-    engine_hash = hash_from_inputs(engine_inputs)
-    stored = load_template_hashes(ctx.comp_dir)
-    tmpl = find_engine_template(ctx.node, ctx.engine_vmid)
-    rebuild = True
-    if tmpl:
-        entry = stored.get("engine") or {}
-        # the node's own hash stamp decides reuse, not this worktree's file — a fresh
-        # workspace still adopts the template a --teams-only teardown kept
-        if template_stamp_current(ctx.node, tmpl, engine_hash):
-            if entry.get("hash") != engine_hash:
-                print("  Engine template reuses on the node's hash stamp (no local hash "
-                      f"record in this worktree) — keeping (vmid {tmpl})")
-            else:
-                print(f"  Engine template hash matches — reusing (vmid {tmpl})")
-            rebuild = False
-        elif not frozen_gate(ctx.comp_dir, entry.get("inputs"), engine_inputs,
-                             "engine template"):
-            # frozen + code-only drift: frozen_gate warned; keep the frozen template.
-            rebuild = False
-    if rebuild:
-        if tmpl:
-            print("  Engine template hash differs — rebuilding...")
-            # the build VM needs the planned mgmt IP and on a phase-2 resume the old engine
-            # still holds it (phase 1 leaves a run's VMs alone); apply #1 recreates it as a clone
-            destroy_vm_if_exists(ctx.node, ctx.engine_vmid, expect_tags=ctx.reclaim_tags)
-            # The kept template carries the run that BUILT it, not the one replacing it, so a
-            # rebuild reclaims this competition's template rather than refusing its own cache.
-            left = destroy_engine_template(
-                ctx.node, ctx.engine_vmid,
-                expect_tags=ownership_tags(ctx.comp_name, None, "engine-template"))
-            if left:
-                from infra.ownership import Refusal
-                raise Refusal(
-                    saw="; ".join(left),
-                    expected="the engine-template slot free, or a template this run owns",
-                    remedy="let the run that owns it finish (or run its teardown), then "
-                           "resume the deploy",
-                    detail="cannot rebuild the engine template over another run's VM: "
-                           + "; ".join(left))
-        with timed(ctx.comp_dir, 2, "engine_template_build"):
-            tmpl, build_info = build_engine_template(
-                ctx.node, ctx.comp_dir, ctx.engine_vmid,
-                int(config.require("proxmox.template_vm_id")),
-                engine_build_ctx(ctx), ctx.postgres_password, ctx.redis_password, quotient_ref,
-                engine_hash, engine_inputs, run_id=ctx.run_id,
-                mgmt_bridge=resolved_mgmt_bridge(ctx.placement))
-        ctx.state["engine_build_info"] = build_info
-    elif tmpl:
-        # a kept template carries the earlier run's tag; re-stamp to THIS run so the next
-        # teardown's strict guard and preflight recognize it
-        retag_ownership(ctx.node, tmpl, ctx.comp_tags | {"engine-template"})
-    save_template_hashes(ctx.comp_dir, engine={"hash": engine_hash, "inputs": engine_inputs})
-    ctx.state["engine_template_vmid"] = tmpl
-    ctx.state["engine_template_hash"] = engine_hash
-    ctx.save_state()
-    # the teardown destroys what the document records, in the one order linked clones survive
-    document = ctx.document()
-    document.record("engine_template", ctx.node, ENGINE_TEMPLATE_NAME, vmid=tmpl)
-    document.save()
-    return tmpl
+    providers.of_ctx(ctx).engine_template(ctx)
 
 
 def build_satellite_jumps(ctx, apply_ctx):
@@ -148,7 +79,9 @@ def phase2_engine_template(ctx):
     if ctx.placement and ctx.placement["satellites"]:
         build_satellite_jumps(ctx, apply_ctx)
     # teardown's ownership refusal compares the loaded endpoint against this record
-    ctx.state["deployed_endpoint"] = config.active().proxmox.endpoint.rstrip("/")
+    ctx.state["deployed_endpoint"] = (providers.endpoint_label(ctx.platform)
+                                      if ctx.platform == providers.GCP
+                                      else config.active().proxmox.endpoint.rstrip("/"))
 
 
 def phase3_prepare_engine(ctx):

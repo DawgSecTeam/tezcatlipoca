@@ -18,6 +18,11 @@ _SPEC = {
     "proxmox.mgmt_bridge": "vmbr0",
     "proxmox.tls_fingerprint": "",
     "proxmox.ca_bundle": "",
+    "gcp.credentials_path": ".gcp-sa.json",
+    "gcp.zone": "",
+    "gcp.ingress_sources": "",
+    # template name -> {"image": "<name>", "project": "<image project>"} (stock or custom)
+    "gcp.image_map": {},
     "ssh.public_key": "",
     "ssh.private_key_path": "",
     "engine.username": "sysadmin",
@@ -89,6 +94,9 @@ def ssh_key_path():
 def _coerce(key, default, raw):
     if isinstance(default, bool):
         return str(raw).strip().lower() in _TRUE
+    if isinstance(default, dict):
+        # A table (gcp.image_map) reads from the toml alone; env strings cannot carry it.
+        return dict(raw) if isinstance(raw, dict) else {}
     if isinstance(default, int):
         return _number(int, key, raw)
     if isinstance(default, float):
@@ -146,7 +154,7 @@ class Config:
         self.path = resolved if resolved.is_absolute() else REPO_ROOT / resolved
         self._file = _read_toml(self.path)
         self._overrides = {}
-        for prefix in ("proxmox", "ssh", "engine", "headscale", "portal", "knobs"):
+        for prefix in ("proxmox", "gcp", "ssh", "engine", "headscale", "portal", "knobs"):
             setattr(self, prefix, _Section(self, prefix))
 
     def get(self, key):
@@ -225,6 +233,29 @@ def require_proxmox_identity():
         f"estate identity in {cfg.path} (or export TEZ_PROXMOX_ENDPOINT / "
         f"TEZ_PROXMOX_API_TOKEN) — teardown's verify_clean needs it even when nodes.json "
         f"supplied the deploy's endpoint.")
+
+
+def gcp_credentials_path():
+    """The GCP service-account key, anchored at the checkout root like the SSH key."""
+    raw = Path(active().get("gcp.credentials_path"))
+    return str(raw if raw.is_absolute() else (REPO_ROOT / raw).resolve())
+
+
+def require_gcp_identity():
+    """The gcp platform's ambient identity: zone + readable service-account key."""
+    cfg = active()
+    missing = []
+    if not cfg.get("gcp.zone"):
+        missing.append("gcp.zone")
+    key = Path(gcp_credentials_path())
+    if not key.is_file():
+        missing.append(f"the service-account key at {key} (gcp.credentials_path)")
+    if missing:
+        raise ConfigError(
+            f"  ERROR: gcp identity incomplete: {', '.join(missing)}. Set it in {cfg.path} "
+            f"(or TEZ_GCP_ZONE / TEZ_GCP_CREDENTIALS) — the gcp provider needs both to "
+            f"authenticate and place the run.")
+    key.stat()  # also surfaces permission errors eagerly
 
 
 def proxmox_env():

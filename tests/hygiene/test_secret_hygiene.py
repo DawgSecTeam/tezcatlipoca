@@ -22,6 +22,9 @@ INTERNAL_ENV = {
     # consumed by the generated shell, so the staleness check would flag it.
     "TEZ_ENGINE_MGMT_IP_IS_DEFAULT": "deploy_lib/estate_inputs.py default marker (same process)",
     "TEZ_ENGINE_MGMT_IP_IS_AUTO_SELECTED": "deploy_lib/prepare.py auto-selected marker (same process)",
+    # Platform selection handed to a driver run by the dashboard (or an operator shell);
+    # the state document records the resolved platform for every later tool.
+    "TEZ_PLATFORM": "tezcatlipoca-dashboard -> providers/__init__.py platform handoff",
     "ENGINE_IP": "scrim.env handoff written by run-agent-scrim.py",
     "MY_TEAM": "scrim.env handoff written by run-agent-scrim.py",
     "JAR": "scrim.env handoff written by run-agent-scrim.py",

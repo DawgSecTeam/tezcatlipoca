@@ -80,10 +80,14 @@ def main(argv=None):
 
     load_dotenv(ENV_PATH)
 
-    from estate import config
-    config.require_proxmox_identity()
-
     comp_dir = Path(args.comp_dir).resolve()
+
+    # The ambient estate identity follows the recorded platform; a workspace that cannot
+    # be read defaults to proxmox (the pre-split behavior), so a missing identity still
+    # refuses before anything else runs.
+    import providers
+    providers.require_identity(providers.platform_from_state(comp_dir))
+
     if not comp_dir.is_dir():
         print(f"ERROR: competition directory not found: {comp_dir}", file=sys.stderr)
         return 2

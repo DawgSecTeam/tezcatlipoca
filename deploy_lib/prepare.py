@@ -2,6 +2,8 @@
 
 import os
 
+import providers
+
 from config.config_prompts import confirm_deploy
 
 from deploy_lib.configs import generate_stage_configs_and_hashes
@@ -35,6 +37,10 @@ def _select_engine_mgmt_ip(ctx):
 def _resolve_engine_mgmt_ip(ctx, override):
     from common.constants import DEFAULT_ENGINE_MGMT_GW
     from estate import config
+    if ctx.platform == providers.GCP:
+        # No shared L2 to hold one: the engine's address is the PUBLIC IP phase 2 reserves
+        # and records in the document. Nothing to scan, nothing to pin.
+        return engine_mgmt_ip_from_env("")
     from multinode.placement_record import engine_record
     record = engine_record(ctx.placement) if ctx.placement else None
     recorded = ((record.engine_mgmt_ip if record else "")
@@ -72,9 +78,9 @@ def _record_placement_identities(ctx):
 
 def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
             team_node=None, engine_node=None, force_from_phase=False, nodes_path=None,
-            team_identifiers=None, engine_mgmt_ip=None):
+            team_identifiers=None, engine_mgmt_ip=None, platform=None):
 # Deliberately no write lock here: deploy() holds it across the whole run. The frozen
-# gate still runs here so a config-class freeze refuses before any Proxmox mutation.
+# gate still runs here so a config-class freeze refuses before any estate mutation.
 # Preflight runs BEFORE the credential mint: aborting after minting leaves state with
 # creds no engine ever received — every login 401s until state is restored by hand.
     ctx = DeployContext(comp_dir=comp_dir, from_phase=from_phase, assume_yes=assume_yes)
@@ -86,6 +92,8 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     load_competition_spec(ctx, comp_dir)
 
     load_prior_deploy_state(ctx, comp_dir, from_phase)
+    ctx.platform = providers.platform_from_env(platform, ctx.previous_state)
+    ctx.state["platform"] = ctx.platform
     # Gate 1 (gates.py): refuse an unsound resume before anything else keys on it.
     check_resume_gates(comp_dir, ctx.state_path, ctx.previous_state, from_phase,
                        force=force_from_phase)

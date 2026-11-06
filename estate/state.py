@@ -35,6 +35,7 @@ _FLAT_SECTION = {
     "comp_name": "identity", "run_id": "identity", "scoring_vm_id": "identity",
     "engine_mgmt_ip": "identity", "engine_mgmt_gw": "identity", "endpoint": "identity",
     "node": "identity", "datastore": "identity", "name": "identity",
+    "platform": "identity",
     "teams": "secrets", "admin_password": "secrets", "scoring_password": "secrets",
     "postgres_password": "secrets", "redis_password": "secrets", "box_password": "secrets",
     "box_creds": "secrets", "domain_creds": "secrets", "inject_password": "secrets",

@@ -77,6 +77,12 @@ def build_parser():
                              "node, datastore, engine_base_vmid, token_env, …). Replaces the "
                              "ambient ./nodes.json; the node endpoints/tokens/datastore come from "
                              "this list, not from .env. Passed per run by the dashboard.")
+    parser.add_argument("--platform", dest="platform", default=None,
+                        choices=("proxmox", "gcp"),
+                        help="The estate backend this range deploys onto (default proxmox; "
+                             "recorded in the state document, so every later tool — verify, "
+                             "destroy, scrim — follows the recorded platform). One range runs "
+                             "entirely on one platform.")
     parser.add_argument("--replant-goldens", action="store_true", dest="replant_goldens",
                         help="ignore (and clear) the per-box golden plant checkpoints so "
                              "every golden is rolled back and re-planted. A checkpoint is "
@@ -201,7 +207,12 @@ def main():
 
     # every lifecycle path (teardown's verify_clean) reads the ambient estate identity a nodes.json-only deploy lacks; --plan-only runs none, so it is exempt
     if not args.plan_only:
-        config.require_proxmox_identity()
+        import providers
+        platform = providers.platform_from_env(args.platform)
+        if platform == providers.GCP:
+            config.require_gcp_identity()
+        else:
+            config.require_proxmox_identity()
 
     print("Tezcatlipoca - CTF Range Deployment")
     print("=" * 40)
@@ -219,4 +230,5 @@ def main():
            scoring_vmid=args.scoring_vmid, team_node=args.team_node, engine_node=args.engine_node,
            force_from_phase=args.force_from_phase, nodes_path=args.nodes,
            team_identifiers=args.team_identifiers, engine_mgmt_ip=args.engine_mgmt_ip,
-           hold_start=args.hold_start, replant_goldens=args.replant_goldens)
+           hold_start=args.hold_start, replant_goldens=args.replant_goldens,
+           platform=args.platform)

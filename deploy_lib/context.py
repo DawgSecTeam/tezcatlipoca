@@ -55,6 +55,7 @@ class DeployContext:
     inject_password: Optional[str] = None
     placement: Optional[dict] = None
     node: str = ""
+    platform: str = "proxmox"
     engine_vmid: int = SCORING_ENGINE_VMID
     engine_mgmt_ip: Optional[str] = None
     boxes: list = field(default_factory=list)

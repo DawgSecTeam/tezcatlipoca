@@ -1,12 +1,9 @@
-"""Phase 1: reclaim this competition's interrupted clones (untagged VMs carrying its clone marker), then reset the comp dir."""
+"""Phase 1: reclaim this competition's interrupted clones, then reset the comp dir."""
 
 from pathlib import Path
 
+import providers
 from estate import state as estate_state
-from engine.template_freeze import engine_template_vmid
-from infra.client import proxmox_api
-from infra.ownership import MARKER, destroy_vm_if_exists, ownership_verdict
-from multinode.placement_record import golden_vmid_for_slot, record_of
 
 
 def reset_domain_markers(comp_dir):
@@ -16,39 +13,8 @@ def reset_domain_markers(comp_dir):
         stale.unlink()
 
 
-def planned_vmids(ctx):
-    # The reclaim scan is filtered to these — phase 1 never hunts a node for things to delete.
-    satellites = (ctx.placement or {}).get("satellites", [])
-    slots = [0] + [s["slot"] for s in satellites]
-    return ({t["vmid"] for t in ctx.all_targets}
-            | {ctx.engine_vmid, engine_template_vmid(ctx.engine_vmid)}
-            | {golden_vmid_for_slot(ctx.engine_vmid, slot, i)
-               for slot in slots for i in range(len(ctx.boxes))}
-            | {s["jump_vmid"] for s in satellites})
-
-
 def reclaim_interrupted_clones(ctx):
-    # Only the MARKER verdict (clone marker, no tags) is destroyed: OWNED is a live
-    # range (preflight refused it), MISSING/UNPROVEN is another run's or unknowable.
-    wanted = planned_vmids(ctx)
-    nodes = [ctx.node] + [record_of(ctx.placement, s["name"]).node
-                          for s in (ctx.placement or {}).get("satellites", [])]
-    for node in dict.fromkeys(nodes):
-        try:
-            vms = proxmox_api("GET", f"/nodes/{node}/qemu")["data"]
-        except Exception as e:
-            print(f"  WARNING: could not scan {node} for interrupted clones ({e}) — "
-                  f"proceeding")
-            continue
-        for vm in vms:
-            if vm["vmid"] not in wanted:
-                continue
-            verdict, _ = ownership_verdict(node, vm["vmid"], vm.get("tags"), ctx.reclaim_tags)
-            if verdict != MARKER:
-                continue
-            print(f"  vmid {vm['vmid']} carries this competition's clone marker but no tags "
-                  f"(lock={vm.get('lock') or 'none'}) — reclaiming")
-            destroy_vm_if_exists(node, vm["vmid"], expect_tags=ctx.reclaim_tags)
+    providers.of_ctx(ctx).reclaim_interrupted(ctx)
 
 
 def phase1_cleanup(ctx):

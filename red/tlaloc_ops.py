@@ -525,7 +525,8 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                  c2_operation=block.get("c2_operation"),
                  llm=llm)
     print("  red01      : provisioning (clone + network + engine rules)...")
-    identity = red01_ops.deploy(
+    import providers
+    identity = providers.of_ctx(ctx).red01_deploy(
         comp_dir, engine_vmid=getattr(ctx, "engine_vmid", None),
         ssh_key=ssh_key, ownership=ownership,
         placement=getattr(ctx, "placement", None),
@@ -653,7 +654,8 @@ def destroy_tlaloc_red(comp_dir, *, ownership, engine_ip="", engine_user="sysadm
                   f"— the box still holds it")
         print(f"  red01      : stopping {UNIT} before teardown...")
         _ssh_run(ssh_key, red_ip, unit_stop_command(), runner=runner, timeout=180)
-    removed = red01_ops.destroy(
+    import providers
+    removed = providers.resolve(providers.platform_from_state(comp_dir)).red01_destroy(
         comp_dir, ownership=ownership, vmid=identity.get("vmid"),
         node=identity.get("node"), engine_ip=engine_ip, ssh_key=ssh_key,
         engine_user=engine_user, runner=runner)

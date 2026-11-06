@@ -1,6 +1,8 @@
 """Enumerate every VM the deploy touches and split them into the phases' work lists."""
 
 
+import providers
+
 from common.targets import enumerate_targets, persist_targets
 from common.utils import is_unmanaged
 from common.windows_ops import is_windows_template
@@ -8,14 +10,18 @@ from estate import config
 
 
 def enumerate_deploy_targets(ctx, comp_dir):
-# Enumerate every VM this deploy will touch, onto `ctx`.
+# Enumerate every VM this run will touch, onto `ctx`.
 #
-#     node is read from the env here (the engine's host, already selected by placement);
-#     all_targets keeps every positional vmid, while the Linux/Windows work lists drop
-#     unmanaged boxes — pfSense/appliances have no plant/pre-domain/fix_services/cloud-init,
-#     they clone from their own template and self-configure (but must stay in all_targets
+#     node is the hosting scope on the roster (the engine's PVE host, or the gcp zone —
+#     everything on one platform lives inside one zone per range); all_targets keeps
+#     every positional vmid, while the Linux/Windows work lists drop unmanaged boxes —
+#     pfSense/appliances have no plant/pre-domain/fix_services/cloud-init, they clone
+#     from their own template and self-configure (but must stay in all_targets
 #     for vmid arithmetic).
-    ctx.node = config.active().proxmox.node
+    if ctx.platform == providers.GCP:
+        ctx.node = config.active().gcp.zone
+    else:
+        ctx.node = config.active().proxmox.node
     ctx.all_targets = enumerate_targets(ctx.teams, ctx.boxes,
                                            placement=ctx.placement, default_node=ctx.node)
     persist_targets(comp_dir, ctx.all_targets, ctx.boxes)

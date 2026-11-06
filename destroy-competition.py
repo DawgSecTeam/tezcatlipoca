@@ -136,15 +136,16 @@ def main():
                              "VMs (irreversible — there is no freeze record left to consult)")
     args = parser.parse_args()
 
-    # verify_clean reads the ambient estate identity; a deploy survives on nodes.json alone.
+    # verify_clean reads the ambient estate identity. The orphan path walks PVE tags
+    # (proxmox only); a workspace teardown follows the platform its state records.
     from estate import config
-    config.require_proxmox_identity()
 
     print("=" * 64)
     print("  COMPETITION TEARDOWN")
     print("=" * 64)
 
     if args.orphan_comp or args.orphan_run:
+        config.require_proxmox_identity()
         sys.exit(orphan_reclaim(args))
 
     if args.comp_dir:
@@ -170,6 +171,11 @@ def main():
             sys.exit()
 
         comp_dir = resolve_comp_dir(competition)
+
+    # The ambient estate identity follows the recorded platform, once the workspace is known.
+    import providers
+    providers.require_identity(providers.platform_from_state(comp_dir))
+
     name, scenario, difficulty = load_compfile(comp_dir / "Compfile")
     missing = [f for f in ("teams.json", "boxes.json") if not (comp_dir / f).exists()]
     if missing and not estate_state.load_flat(comp_dir).get("run_id"):

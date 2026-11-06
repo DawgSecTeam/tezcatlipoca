@@ -5,6 +5,8 @@ import json
 import subprocess
 import sys
 
+import providers
+
 from common.constants import NAKON_DIR, PIPELINE_VERSION, SCORING_ENGINE_VMID
 from infra.collisions import (check_collisions, check_mgmt_bridge, check_placement,  # noqa: F401
                               engine_mgmt_ip_gate, jump_mgmt_ip_gate, share_mgmt_bridge)
@@ -60,7 +62,11 @@ def check_stale_estate_state(comp_dir, comp_name, previous_state, engine_vmid, f
     from estate import config as estate_config
     if from_phase > 2 or not previous_state:
         return
-    cur_endpoint = estate_config.active().proxmox.endpoint.rstrip("/")
+    platform = previous_state.get("platform") or providers.PROXMOX
+    if platform == providers.GCP:
+        cur_endpoint = providers.endpoint_label(platform)
+    else:
+        cur_endpoint = estate_config.active().proxmox.endpoint.rstrip("/")
     prev_endpoint = (previous_state.get("deployed_endpoint")
                      or previous_state.get("endpoint") or "").rstrip("/")
     prev_engine = previous_state.get("scoring_vm_id")
@@ -95,10 +101,15 @@ def run_capacity_preflight(ctx, comp_dir, from_phase):
 
 
 def run_range_gates(ctx, comp_dir, from_phase):
-    """Local stale-estate check first, then the Proxmox-querying preflight; both before the
-    fresh-secret mint, so a refusal never leaves a desynced credential set."""
+    """Local stale-estate check first, then the platform's capacity/collision preflight; both
+    before the fresh-secret mint, so a refusal never leaves a desynced credential set."""
+    platform = providers.platform_of_ctx(ctx)
     check_stale_estate_state(comp_dir, ctx.comp_name, ctx.previous_state,
                              ctx.engine_vmid, from_phase)
+    if platform != providers.PROXMOX:
+        from providers.gcp import preflight
+        preflight.run_capacity_preflight(ctx, comp_dir, from_phase)
+        return
     run_capacity_preflight(ctx, comp_dir, from_phase)
 
 
@@ -120,11 +131,20 @@ def guard_resume_from_phase(from_phase, last_phase, state_path, force=False):
 
 
 def _artifact_probes(comp_dir):
-    """Test seam for guard_resume_existence's probes; resolved at call time so a patch lands."""
-    from infra.client import live_vmids
-    from estate.state import team_vmids
-    return {"vmids_from_state": lambda: team_vmids(comp_dir),
-            "vm_exists": live_vmids}
+    """Test seam for guard_resume_existence's probes; resolved at call time so a patch lands.
+
+    The liveness probe is platform-typed: a recorded range's own identity decides which
+    backend can see its machines.
+    """
+    from providers import platform_from_state, resolve
+    impl = resolve(platform_from_state(comp_dir))
+
+    def vmids_from_state():
+        from estate.state import team_vmids
+        return team_vmids(comp_dir)
+
+    return {"vmids_from_state": vmids_from_state,
+            "vm_exists": impl.live_unit_numbers}
 
 
 def guard_resume_existence(from_phase, comp_dir, state, force=False,

@@ -10,7 +10,7 @@ from deploy_lib.prepare import prepare
 def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmid=None,
            team_node=None, engine_node=None, force_from_phase=False, nodes_path=None,
            team_identifiers=None, engine_mgmt_ip=None, hold_start=False,
-           replant_goldens=False):
+           replant_goldens=False, platform=None):
 # scoring_vmid is persisted to the state document and reused on resume, so concurrent
     # competitions on one node keep their own engine. hold_start likewise lives in the
     # state file (the argument only mints it), so a resume of a held deploy stays held.
@@ -23,7 +23,8 @@ def deploy(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vmi
     ctx = prepare(comp_dir, num_teams=num_teams, assume_yes=assume_yes, from_phase=from_phase,
                   scoring_vmid=scoring_vmid, team_node=team_node, engine_node=engine_node,
                   force_from_phase=force_from_phase, nodes_path=nodes_path,
-                  team_identifiers=team_identifiers, engine_mgmt_ip=engine_mgmt_ip)
+                  team_identifiers=team_identifiers, engine_mgmt_ip=engine_mgmt_ip,
+                  platform=platform)
     if ctx is None:
         return
 

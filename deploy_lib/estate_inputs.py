@@ -3,6 +3,8 @@
 import json
 import os
 
+import providers
+
 from config.config_ops import write_text_atomic
 from common.constants import DEFAULT_ENGINE_MGMT_GW, DEFAULT_ENGINE_MGMT_IP
 from estate import config
@@ -39,15 +41,23 @@ def build_estate_inputs(ctx, comp_dir):
     document = ctx.document()
     # teardown/verify/redeploy read host and engine coordinates from this section, not env.
     cfg = config.active()
+    platform = getattr(ctx, "platform", "") or "proxmox"
+    if platform == "gcp":
+        endpoint, node, datastore = (providers.endpoint_label(platform),
+                                      cfg.gcp.zone, "")
+    else:
+        endpoint, node, datastore = (cfg.proxmox.endpoint.rstrip("/"),
+                                      cfg.proxmox.node, cfg.proxmox.datastore)
     document.section("identity").update({
         "comp_name": ctx.comp_name,
         "name": ctx.name,
         "run_id": ctx.run_id,
+        "platform": platform,
         "scoring_vm_id": ctx.engine_vmid,
         "engine_mgmt_ip": ctx.engine_mgmt_ip or "",
-        "endpoint": cfg.proxmox.endpoint.rstrip("/"),
-        "node": cfg.proxmox.node,
-        "datastore": cfg.proxmox.datastore,
+        "endpoint": endpoint,
+        "node": node,
+        "datastore": datastore,
     })
     document.section("roster")["boxes"] = ctx.boxes
     document.save()

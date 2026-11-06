@@ -19,9 +19,10 @@ if str(_REPO) not in sys.path:
 
 # Every package a deploy phase can bind a step name from. `estate`, `guests`, `engine`,
 # `golden`, `nakonops`, `multinode` and `net` hold most of the real implementations now; walking
-# only deploy_lib/infra silently missed them.
+# only deploy_lib/infra silently missed them. `providers` holds the platform dispatch layer's
+# call-side helpers.
 _PACKAGES = ("deploy_lib", "infra", "estate", "golden", "engine", "guests", "nakonops",
-             "multinode", "net", "red", "portal")
+             "multinode", "net", "red", "portal", "providers")
 
 
 def _modules():

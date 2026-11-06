@@ -1,5 +1,6 @@
 """Multi-node placement: parse --team-node, resolve placement, take the engine lock."""
 
+import providers
 
 from nakonops.nakon_lock_ops import acquire_engine_lock
 from multinode.placement_record import activate_placement
@@ -28,6 +29,15 @@ def apply_engine_placement(ctx, comp_dir, team_node, engine_node, nodes_path=Non
     # Env must point at the engine's host before the endpoint-keyed lock and any node-scoped
     # call, so placement resolves first. A recorded placement wins; a resume without one
     # adopts its deployed endpoint instead of re-balancing a live range.
+    if providers.platform_of_ctx(ctx) != providers.PROXMOX:
+        # One zone per range is the gcp model (config gcp.zone): no PVE nodes to place
+        # across, no per-node endpoints to activate, and no nodes.json to read. A
+        # placement recorded by an old proxmox range never survives the platform gate.
+        ctx.placement = None
+        ctx.state["multi_node"] = False
+        ctx.save_state()
+        acquire_engine_lock(ctx.engine_vmid)
+        return
     ctx.placement, _engine_record = resolve_placement(
         comp_dir, ctx.engine_vmid, ctx.teams, ctx.boxes, ctx.comp_name,
         team_overrides=parse_team_node(team_node), engine_override=engine_node,

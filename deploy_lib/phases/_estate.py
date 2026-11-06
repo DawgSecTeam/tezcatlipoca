@@ -1,10 +1,10 @@
 """Estate plumbing shared by the deploy phases; stubbed by tests/_deploy_patch.dpatch."""
 
+import providers
 
 from common.constants import DEFAULT_ENGINE_MGMT_GW
 from engine.engine_template_ops import _discover_vm_ipv4
 from infra.guest_exec import wait_for_guest_agent
-from multinode.placement_record import resolved_mgmt_bridge
 from estate import config
 
 ENGINE_NAME = "quotient-engine"
@@ -43,76 +43,12 @@ def has_in_path_firewall(ctx):
     return any(box.get("in_path") for box in ctx.boxes)
 
 
-def _team_bridges(ctx, document, node, identifiers, in_path):
-    from estate import apply as estate_apply
-    from infra.ownership import bridge_comment
-    for identifier in identifiers:
-        estate_apply.create_bridge(
-            document, node, f"vmbr{identifier}",
-            comment=bridge_comment(ctx.comp_name, ctx.run_id,
-                                   f"Quotient team {identifier} — isolated, no uplink"),
-            comp_name=ctx.comp_name, run_id=ctx.run_id)
-        if in_path:
-            estate_apply.create_bridge(
-                document, node, f"vmbrW{identifier}",
-                comment=bridge_comment(ctx.comp_name, ctx.run_id,
-                                       f"Quotient team {identifier} — transit to in-path "
-                                       f"firewall"),
-                comp_name=ctx.comp_name, run_id=ctx.run_id)
-
-
 def create_engine_and_bridges(ctx):
-    # Bridges before the engine; the cold boot surfaces the engine's team NICs.
-    from estate import apply as estate_apply, engine_setup
-    from infra.ownership import Ownership, bridge_comment
-    from common.constants import red_bridge_name
-    from common.utils import stages_red
-    cfg = config.active()
-    document = ctx.document()
-    ownership = Ownership(ctx.comp_name, ctx.run_id)
-    teams = slot_team_identifiers(ctx)
-    transit = teams if has_in_path_firewall(ctx) else []
-    in_path = has_in_path_firewall(ctx)
-    _team_bridges(ctx, document, ctx.node, teams, in_path)
-    # A satellite's team boxes live on ITS host: vmbr<id> must exist there or the clone's
-    # NIC cannot attach (qmstart: "bridge does not exist"). Preflight already requires the
-    # name to be free on that host.
-    from multinode.placement_record import record_of
-    for sat in (ctx.placement or {}).get("satellites", []):
-        sat_node = record_of(ctx.placement, sat["name"]).node
-        sat_ids = [ctx.teams[key]["identifier"] for key in sat.get("teams") or []]
-        _team_bridges(ctx, document, sat_node, sat_ids, in_path)
-    red_bridge = red_bridge_name(ctx.run_id) if stages_red(ctx.comp_dir) else None
-    if red_bridge:
-        estate_apply.create_bridge(
-            document, ctx.node, red_bridge,
-            comment=bridge_comment(ctx.comp_name, ctx.run_id,
-                                   "Quotient red segment — engine + red01 only, no uplink"),
-            comp_name=ctx.comp_name, run_id=ctx.run_id)
-    estate_apply.create_engine(
-        document, ownership, ctx.node, vmid=ctx.engine_vmid,
-        template_vmid=int(ctx.state["engine_template_vmid"]),
-        team_identifiers=teams, transit_identifiers=transit,
-        mgmt_ip=ctx.engine_mgmt_ip or "",
-        mgmt_gw=(config.active().engine.mgmt_gw or DEFAULT_ENGINE_MGMT_GW),
-        mgmt_bridge=resolved_mgmt_bridge(ctx.placement),
-        username=cfg.engine.username,
-        ssh_public_key=cfg.ssh.public_key,
-        red_bridge=red_bridge)
-    engine_setup.cold_boot(ctx.node, ctx.engine_vmid)
-    # Read back after the cold boot: the NICs exist in the config from the PUT, but the
-    # MAC list is what the netplan pins, and it must match the guests the boot surfaces.
-    ctx.engine_nic_macs = estate_apply.engine_nic_macs(ctx.node, ctx.engine_vmid)
+    providers.of_ctx(ctx).create_estate(ctx)
 
 
 def create_team_boxes(ctx, sources):
-    from estate import apply as estate_apply
-    from infra.ownership import Ownership
-    cfg = config.active()
-    estate_apply.create_team_boxes(
-        ctx.document(), Ownership(ctx.comp_name, ctx.run_id), ctx.all_targets,
-        sources=sources, box_username=ctx.box_username, box_password=ctx.box_password,
-        ssh_public_key=cfg.ssh.public_key)
+    providers.of_ctx(ctx).apply_team_boxes(ctx, sources)
 
 
 def configure_engine_network(ctx, engine_ctx):

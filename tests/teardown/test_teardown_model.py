@@ -434,7 +434,7 @@ class JournalLifecycle(unittest.TestCase):
                 boxes=[], reclaim_tags=set(), placement=None, teams={"team1": {"identifier": "101"}},
                 golden_hashes={}, comp_name="c1", reclaim_tag="run-x",
                 run_id="run-x")
-            with patch.object(cleanup, "proxmox_api", return_value={"data": []}):
+            with patch("infra.client.proxmox_api", return_value={"data": []}):
                 cleanup.phase1_cleanup(ctx)
             self.assertEqual(
                 estate_state.EstateState.load(comp).section("teardown"), {},

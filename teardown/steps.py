@@ -179,12 +179,13 @@ class RedStep(Step):
             engine_ip=ctx.deployed_state.get("engine_mgmt_ip") or "",
             engine_user=estate_config.active().engine.username,
             ssh_key=str(estate_config.ssh_key_path()), env=ctx.env)
-        from infra import red01
+        import providers
         # Ownership proof, not presence: a recycled vmid holding a FOREIGN VM is not our
         # failure (the destroy refused it, correctly), and reporting it as one stranded the
         # teardown. Only a VM still carrying this run's tags is an unclean red01.
-        verdict = red01.occupant_verdict(vmid, ctx.ownership.comp,
-                                         getattr(ctx.ownership, "run_id", None))
+        verdict = providers.resolve(
+            providers.platform_from_state(ctx.comp_dir)).red01_occupant_verdict(
+                vmid, ctx.ownership.comp, getattr(ctx.ownership, "run_id", None))
         if verdict == "ours":
             return StepResult(self.name, "failed",
                               f"red01 vmid {vmid} is STILL PRESENT after destroy — "
@@ -208,13 +209,14 @@ class PreStopStep(Step):
     destructive = True
 
     def run(self, ctx):
-        from teardown.machinery import pre_stop_windows_boxes
+        import providers
         from multinode.placement_record import record_of
         # team_nodes maps teams to RECORD names; the API path needs the PVE node name.
         team_nodes = {k: record_of(ctx.placement, v).node
                       for k, v in (ctx.placement or {}).get("team_nodes", {}).items()} or None
-        pre_stop_windows_boxes(ctx.teams, ctx.boxes, ctx.default_node,
-                               team_nodes=team_nodes, ownership=ctx.ownership)
+        providers.resolve(providers.platform_from_state(ctx.comp_dir)).pre_stop_boxes(
+            ctx.teams, ctx.boxes, ctx.default_node,
+            team_nodes=team_nodes, ownership=ctx.ownership)
         return StepResult(self.name, "ok")
 
 
@@ -225,26 +227,29 @@ class EstateStep(Step):
     destructive = True
 
     def run(self, ctx):
-        from estate import destroy as estate_destroy, state as estate_state
-        from teardown.machinery import sweep_tagged_leftovers, teardown_templates
+        import providers
+        from estate import state as estate_state
+        from teardown.machinery import teardown_templates
+        impl = providers.resolve(providers.platform_from_state(ctx.comp_dir))
         print("\nDestroying this deploy's recorded estate...")
         document = estate_state.EstateState.load(ctx.comp_dir)
         recorded_templates = bool(document.resources("golden")
                                   or document.resources("engine_template"))
-        summary = estate_destroy.destroy_estate(document, full=ctx.full, nodes=ctx.nodes)
+        summary = impl.destroy_estate(document, full=ctx.full, nodes=ctx.nodes)
         if summary["refused"]:
             return StepResult(self.name, "failed", "; ".join(
                 f"{r['entry']['kind']} {r['entry']['name']}: {r['reason']}"
                 for r in summary["refused"]))
         # A VM created but never recorded (a crash between clone and record) is invisible to the
         # inventory; the run-id-scoped sweep is the net for it.
-        sweep_tagged_leftovers(ctx.nodes, ctx.ownership, keep_templates=not ctx.full)
+        impl.sweep_tagged_leftovers(ctx.nodes, ctx.ownership, keep_templates=not ctx.full)
         # A range deployed before the inventory existed has no template records, so its
         # goldens and engine template die by vmid math instead. A kept template another run
         # owns is reported and left for that range, never made this teardown's failure.
         kept = [f"{e['kind']} {e['name']} (vmid {e['vmid']}) kept: {e['reason']}"
                 for e in summary["kept"]]
-        if ctx.full and not recorded_templates:
+        # The vmid-math fallback is a PVE-era affordance; a gcp range always records its images.
+        if impl.PLATFORM == "proxmox" and ctx.full and not recorded_templates:
             kept += teardown_templates(
                 ctx.comp_dir, ctx.deployed_state, ctx.ownership, ctx.boxes,
                 ctx.placement, full=True)

@@ -2,6 +2,8 @@
 
 from functools import partial
 
+import providers
+
 from common.constants import RED_SEGMENT_GW, RED_SEGMENT_SUBNET, SNAP_BASE
 from net.firewall_ops import (bootstrap_firewalls, cut_over_engine, firewall_kind,
                           verify_in_path, write_team_configs)
@@ -19,6 +21,14 @@ def phase5_firewall_bootstrap(ctx):
     if not fw_targets:
         print("[5/8] No in-path firewall in this lineup — skipping.")
         return
+    if providers.platform_of_ctx(ctx) != providers.PROXMOX:
+        # In-path appliances are PVE clones (pfSense cannot run on GCP at all; the VyOS
+        # image path lands with the gcp firewall workstream). A lineup that asks for one
+        # is refused here rather than half-deploying an unrouteable team.
+        raise SystemExit(
+            "  ERROR: an in-path firewall box is only supported on the proxmox platform "
+            "today (pfSense cannot run on GCP; VyOS-on-GCP is pending). Remove the "
+            "in_path box from boxes.json or deploy this range on proxmox.")
     kind = firewall_kind(fw_targets[0]["box"].get("template", ""))
     print("[5/8] Bootstrapping the in-path firewalls (SSH config push → engine cutover)...")
     print(f"  Firewall kind: {kind}"
