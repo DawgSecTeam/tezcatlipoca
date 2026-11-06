@@ -26,7 +26,14 @@ MGMT_PORTS = ("22", "80")  # driver SSH + the scoreboard's listener
 
 def ensure_network(document, *, comp_name, run_id, team_identifiers,
                    in_path=False, red=False, record=print):
-    """Idempotent create of the whole stack; records each piece in the document."""
+    """Idempotent create of the whole stack; records each piece in the document.
+
+    The engine's mgmt address is an EPHEMERAL external IP taken at instance-create:
+    this project refuses instances.insert's STATIC regional-address attach with "not
+    found in region" for addresses its own list confirms exist (every reference shape
+    refused, live 2026-11-06) — the deploy records the realized address in the state
+    document, same contract the proxmox flow has with its mgmt IP.
+    """
     creds = compute.session()
     prefix = naming.prefix(comp_name, run_id)
     labels = naming.labels(comp_name, run_id)
@@ -63,12 +70,10 @@ def ensure_network(document, *, comp_name, run_id, team_identifiers,
     _ensure_router_nat(creds, prefix, mgmt, record)
 
     net_link = f"projects/{creds['project_id']}/global/networks/{vpc}"
-    address = _ensure_engine_address(creds, prefix, record=record)
     _ensure_mgmt_rule(creds, prefix, net_link, labels, record)
 
     document.save()
-    return {"vpc": vpc, "mgmt_subnet": mgmt,
-            "engine_public_ip": (address or {}).get("address") or ""}
+    return {"vpc": vpc, "mgmt_subnet": mgmt, "engine_public_ip": ""}
 
 
 def _ensure_router_nat(creds, prefix, mgmt_subnet, record):
@@ -94,17 +99,6 @@ def _ensure_router_nat(creds, prefix, mgmt_subnet, record):
             raise
     record(f"  network: Cloud NAT ready on {router}")
     return router
-
-
-def _ensure_engine_address(creds, prefix, record=print):
-    name = naming.address_name(prefix, "engine")
-    found = compute.address(creds, name)
-    if found is None:
-        record(f"  network: reserving the engine's public address {name}")
-        compute.wait_op(creds, gapi(creds, "POST", f"regions/{compute.region()}/addresses", data={
-            "name": name, "addressType": "EXTERNAL", "region": compute.region()}))
-        found = compute.address(creds, name)
-    return found
 
 
 def _ensure_mgmt_rule(creds, prefix, net_link, labels, record):

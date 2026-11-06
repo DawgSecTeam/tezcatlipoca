@@ -90,3 +90,16 @@ Known-open beyond the matrix (these greet you with a clear refusal at use time):
 
 Also pending: the dashboard's web UI has no platform toggle yet — `platform` rides the MCP tool
 and the HTTP API's `params` dict.
+
+### gcp: instances.insert refuses the static regional-address attach on this project
+
+Every reference shape of a real, RESERVED, PREMIUM external IPv4 address — the
+www/compute-host full URLs the API itself returns, the relative form (which `subnetwork`
+accepts), and the bare name — is refused by `instances.insert` with "The specified external IP
+address … was not found in region 'us-central1'", against addresses the same project's list
+confirms exist. Probed live 2026-11-06 with both a range reservation and a fresh short-named
+one, full-URL subnets alongside (probe instances deleted; the reservations cleaned). Ephemeral
+external IPv4 works on every instance unaided. The deploy therefore attaches the engine's
+mgmt address as EPHEMERAL at create and records the realized IP in the state document — a
+range never outlives its own instances, and a resume reuses the same engine. Revisit a static
+pin only if the API starts accepting its own reservations.

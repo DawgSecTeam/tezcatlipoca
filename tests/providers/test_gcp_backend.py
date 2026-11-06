@@ -150,13 +150,23 @@ class FakeGcp:
             self.instances[name]["status"] = "TERMINATED"
             return self._op()
         if p == f"zones/{self.zone}/instances":
+            nics = []
+            for index, n in enumerate(data["networkInterfaces"]):
+                nic = dict(n)
+                access = nic.get("accessConfigs") or []
+                if access:
+                    # GCE auto-assigns the ephemeral external IP when natIP is absent
+                    access[0] = dict(access[0])
+                    access[0].setdefault("natIP", f"34.59.10.{len(self.instances) + index + 1}")
+                    nic["accessConfigs"] = access
+                nics.append(nic)
             info = {"name": data["name"], "labels": data["labels"], "status": "RUNNING",
                     "disks": [{"boot": True, "source": f"disk/{data['name']}"}],
                     "tags": data.get("tags") or {},
                     "networkInterfaces": [
                         {"networkIP": n["networkIP"], "macAddress": f"42:00:00:00:00:0{i}",
                          "accessConfigs": n.get("accessConfigs") or []}
-                        for i, n in enumerate(data["networkInterfaces"])]}
+                        for i, n in enumerate(nics)]}
             self.instances[data["name"]] = info
             return self._op()
         raise AssertionError(f"unfake'd POST {p}")
@@ -293,7 +303,8 @@ class EnsureNetworkTest(GcpBase):
             "tz-c1-0e6474eb-net-mgmt", "tz-c1-0e6474eb-net-red",
             "tz-c1-0e6474eb-net-t101", "tz-c1-0e6474eb-net-t102"])
         self.assertIn("tz-c1-0e6474eb-fw-mgmt", self.fake.firewalls)
-        self.assertEqual(net["engine_public_ip"], "192.0.2.10")
+        # no static reservation: the engine takes its EPHEMERAL address at create
+        self.assertEqual(net["engine_public_ip"], "")
         self.assertEqual([r["name"] for r in document.resources("network")], [net["vpc"]])
 
     def test_idempotent_second_pass_adds_nothing(self):
@@ -545,3 +556,33 @@ class ReclaimOursRefuseOthersTest(GcpBase):
             preflight._leftover_gate({}, self._ctx(run="run-x"))
         self.assertIn("another run", str(caught.exception))
         self.assertIn("tz-c1-abcd1234-live", str(caught.exception))
+
+
+class CreateEngineTest(GcpBase):
+    def test_engine_create_takes_nic_order_and_records_the_ephemeral_public_ip(self):
+        doc = _Document()
+        import types
+
+        def save_state():
+            doc.save()
+
+        ctx = types.SimpleNamespace(
+            comp_name="c1", run_id="run-0e6474eb", comp_dir=Path(self.tmp.name),
+            placement=None, boxes=[], teams={"team1": {"identifier": 101}},
+            engine_vmid=1000, engine_mgmt_ip="", state={},
+            document=lambda: doc, save_state=save_state)
+        pipeline.create_estate(ctx)
+        engine = "tz-c1-0e6474eb-quotient-engine"
+        info = self.fake.instances[engine]
+        nics = info["networkInterfaces"]
+        # NIC order is create order: mgmt (ephemeral public), team gateway (.1), red gw
+        self.assertEqual(len(nics), 3)
+        self.assertEqual(nics[0]["networkIP"], network_ops.MGMT_ENGINE_IP)
+        self.assertTrue(nics[0]["accessConfigs"][0].get("natIP"))
+        self.assertEqual(nics[1]["networkIP"], "192.168.101.1")
+        self.assertEqual(nics[2]["networkIP"], "10.200.0.1")
+        # the realized ephemeral address is the run's recorded mgmt identity
+        self.assertEqual(ctx.engine_mgmt_ip, nics[0]["accessConfigs"][0]["natIP"])
+        self.assertEqual(doc.document.data["identity"]["engine_mgmt_ip"],
+                         ctx.engine_mgmt_ip)
+        self.assertIn(engine, [r["name"] for r in doc.resources("engine")])

@@ -187,7 +187,7 @@ def create_estate(ctx):
     username = config.active().engine.username
     if compute.instance(creds, engine_name) is None:
         nics = [instance_ops.nic(net["mgmt_subnet"], MGMT_ENGINE_IP,
-                                 external=_engine_address(creds, prefix))]
+                                 external="EPHEMERAL")]
         for identifier in teams:
             nics.append(instance_ops.nic(naming.subnet_name(prefix, "t", identifier),
                                          f"192.168.{identifier}.1"))
@@ -220,19 +220,6 @@ def create_estate(ctx):
     # is the FIRST TEAM NIC, so handler MACs start after NIC0, as on proxmox.
     ctx.engine_nic_macs = instance_ops.nic_macs(creds, engine_name)
     print(f"  Engine: {engine_name} at {primary['public']} (mgmt)")
-
-
-def _engine_address(creds, prefix):
-    info = compute.address(creds, naming.address_name(prefix, "engine"))
-    if not info:
-        raise RuntimeError("the engine's reserved address is missing — ensure_network ran"
-                          " out of order")
-    # natIP takes the FULL URL on the compute.googleapis.com host — the field rejects
-    # both the relative form (subnetwork accepts) and the www.googleapis.com selfLinks
-    # the GET hands back, so construct the documented shape from the reserved name.
-    return (f"https://compute.googleapis.com/compute/v1/projects/{creds['project_id']}"
-            f"/regions/{compute.region()}"
-            f"/addresses/{naming.address_name(prefix, 'engine')}")
 
 
 # ---- phase 4: goldens ----
