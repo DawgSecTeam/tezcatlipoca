@@ -256,8 +256,8 @@ def require_gcp_identity():
     if missing:
         raise ConfigError(
             f"  ERROR: gcp identity incomplete: {', '.join(missing)}. Set it in {cfg.path} "
-            f"(or TEZ_GCP_ZONE / TEZ_GCP_CREDENTIALS) — the gcp provider needs both to "
-            f"authenticate and place the run.")
+            f"(or TEZ_GCP_ZONE / TEZ_GCP_CREDENTIALS_PATH) — the gcp provider needs both "
+            f"to authenticate and place the run.")
     key.stat()  # also surfaces permission errors eagerly
 
 

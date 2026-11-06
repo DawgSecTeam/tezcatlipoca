@@ -60,3 +60,33 @@ resolves the owning workspace and passes the highest completed phase would cover
 `GET /api/runs/<id>.stage` trails the engine: a run sat at `phase 6/8 repair_sweep` through the
 whole red01/Mythic install (real phase 7) and only jumped to `phase 8/8 seed` on completion.
 `watch_run` subscribers therefore read a stale phase for the longest single step of a deploy.
+
+### gcp provider: the v1 matrix gaps (the Linux range is the cut)
+
+The gcp backend deploys the Linux stack end to end (engine, goldens, boxes, red01, teardown).
+Refused at preflight by NAME until each lands — never a silent half-deploy:
+
+- **Windows + AD boxes** — the boot-time channel moves from the QEMU guest agent to
+  `startup-script-ps1` on stock GCE images, and the DC boxes' unbooted-golden semantics map to
+  reusing the stock image; both are unproven. Refusal: _"Windows boxes need the gcp boot-time
+  channel"_.
+- **In-path firewalls** — pfSense cannot run on GCP at all; VyOS needs an imported appliance
+  image tier, not the PVE clone path. Refusal names the box.
+- **unmanaged appliance boxes** — same tier, no gcp path.
+
+Known-open beyond the matrix (these greet you with a clear refusal at use time):
+
+- **redeploy's rollback modes** — a machine image restores by RECREATING the instance; the redeploy
+  engine still assumes in-place rollback. `--mode reconfigure` is the only mode wired for gcp.
+- **scrim harness on gcp** — `run-agent-scrim.py` does not forward the platform to its internal
+  deploy; the dashboard's `platform` param covers deploy/plan only. red01's management channel
+  (public-IP SSH, firewalled) works; the harness just needs the pass-through.
+- **portal consoles on gcp** — there is no VNC on GCP, so the portal's vncproxy tier has no gcp
+  path. A browser-SSH console gateway is the pending design; `portal 1` ranges deploy on proxmox
+  only for now.
+- **restore points reboot** — a machine image requires a stopped instance, so taking `tz-base`/
+  `tz-ready` reboots the box (disk-equivalent restore state, which is what redeploy restores
+  anyway; documented in the architecture map).
+
+Also pending: the dashboard's web UI has no platform toggle yet — `platform` rides the MCP tool
+and the HTTP API's `params` dict.

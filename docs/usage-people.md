@@ -77,6 +77,20 @@ their env forms over the profile. Set `TEZ_TEAM_IDENTIFIERS` when the host's liv
 with the default block (start value in `collect_teams()`, `config/config_ops.py`); see
 [environment-facts.md § vmid occupancy](environment-facts.md#vmid-occupancy).
 
+The Google Cloud platform adds a `[gcp]` section (same precedence rules; env names
+`TEZ_GCP_ZONE`, `TEZ_GCP_CREDENTIALS_PATH`, `TEZ_GCP_INGRESS_SOURCES`, `TEZ_GCP_MAX_ENGINE_NICS`):
+`zone` (one zone per range — everything the run creates lives inside it), `credentials_path`
+(the service-account key, relative paths against the checkout root; the run queue materializes
+its per-run copy and points this at it), `ingress_sources` (the operator egress CIDRs allowed
+onto the engine's SSH + scoreboard — the engine's public IP is the run's management address, so
+the preflight refuses without it), `max_engine_nics` (the configured NIC ceiling, since the
+machineTypes API does not expose per-family limits — the create call asserts the real one), and
+`[gcp.image_map]`: every `boxes.json` template name plus the engine and red01 bases →
+`{ project, image }`, where a family resolves to its newest non-deprecated build. GCP stock
+image families (which exist today): `ubuntu-2404-lts-amd64`, `debian-13`, `windows-2025`,
+`rhel-10-0-eus`, `centos-stream-9`, `fedora-cloud-44-x86-64`; there is no alpine project on GCP.
+Deploy with `--platform gcp`; the state document records the platform so verify/destroy follow.
+
 Generated per competition, not config: the team roster with passwords, the box list, the box
 login and the event name are read or minted from the competition dir (`collect_teams()`,
 `users.json`, the box picker) into the state document, `teams.json` and `credentials.txt` — a

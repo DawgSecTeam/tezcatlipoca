@@ -269,8 +269,13 @@ def stages_red(comp_dir):
 
 def env_summary():
 # Placement and --engine-mgmt-ip move host/address in-process — the ambient env is stale.
+    import os
+
     from estate import config
     cfg = config.active()
+    platform = os.environ.get("TEZ_PLATFORM", "").strip()
+    if platform == "gcp":
+        return f"platform=gcp zone={cfg.gcp.zone or '?'} (one VPC per run)"
     mgmt = cfg.engine.mgmt_ip if cfg.is_set("engine.mgmt_ip") else ""
     return (f"endpoint={cfg.proxmox.endpoint or '?'} node={cfg.proxmox.node or '?'} "
             f"datastore={cfg.proxmox.datastore or '?'} "

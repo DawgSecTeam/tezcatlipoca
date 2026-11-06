@@ -94,6 +94,9 @@ def prepare(comp_dir, num_teams=None, assume_yes=False, from_phase=1, scoring_vm
     load_prior_deploy_state(ctx, comp_dir, from_phase)
     ctx.platform = providers.platform_from_env(platform, ctx.previous_state)
     ctx.state["platform"] = ctx.platform
+    # The flag path must reach env_summary and driver children exactly like the
+    # queue's TEZ_PLATFORM handoff does (the ambient env cannot undo it).
+    os.environ["TEZ_PLATFORM"] = ctx.platform
     # Gate 1 (gates.py): refuse an unsound resume before anything else keys on it.
     check_resume_gates(comp_dir, ctx.state_path, ctx.previous_state, from_phase,
                        force=force_from_phase)

@@ -8,6 +8,7 @@ Non-interactive driving: flags, pre-authored configs, machine-readable validatio
 |---|---|
 | `--competition NAME` | Deploys straight away if `Compfile` + `boxes.json` exist; otherwise creates it |
 | `--teams N` | 1–154 (`MAX_TEAMS`) |
+| `--platform proxmox\|gcp` | The estate backend this range deploys onto (default proxmox — pre-split equivalents; absent = proxmox). Recorded in `identity.platform`, so verify/destroy/scrim follow the run's own record. A gcp run needs `[gcp]` config (zone, credentials path, ingress sources, image map) and takes no `--nodes` |
 | `--yes` | Skip the confirm prompt |
 | `--scenario TEXT`, `--difficulty N` | New competitions only (difficulty 1–10) |
 | `--box-username NAME` | New competitions only; default `ubuntu`. Written to `users.json` |

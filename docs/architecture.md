@@ -14,6 +14,33 @@ There is one pipeline version. The deploy refuses a state document written by a 
 (`redeploy/redeploy_gate_ops.py` reads it through `estate.state.read_flat`, the same reader every
 other tool uses).
 
+## Platform providers
+
+A range deploys onto ONE platform — `proxmox` or `gcp` — picked per run (`--platform`, or the
+queue's `platform` param, recorded in `identity.platform`; a document without the field is a
+pre-split proxmox range). The phase modules own ordering, printing and the through-the-engine
+SSH work; every estate-touching step dispatches through `providers.of_ctx(ctx)`, so the request
+side never picks an implementation the driver did not record. The platform concept map:
+
+| Pipeline noun | Proxmox | GCP |
+|---|---|---|
+| team networks | `vmbr<id>` bridges, comment ownership | one VPC per run (name = `tz-<comp>-<run8>`), a subnet per team; the engine holds each subnet's `.1` |
+| isolation / NAT | engine iptables on `FORWARD`/`POSTROUTING` | the same engine iptables (GCP's implied cross-subnet deny doubles it); egress via Cloud NAT |
+| ownership | PVE tags + clone marker; MARKER verdict for interrupted clones | labels `tz-comp`/`tz-run`/`tz-role`/`tz-unit` on every instance and image; creates are atomic, so the marker class has no analog |
+| engine mgmt address | static `10.0.0.x` on the flat L2 | the engine's reserved public IP, firewalled to `gcp.ingress_sources` (SSH + scoreboard) |
+| templates | full clone → `qm template`, hash on the description | custom images from the stopped build VM, hash on a label (`tezcatlipoca-m4`) |
+| team boxes | linked clones of the golden | instances booting the golden image with a pinned `networkIP` per NIC |
+| restore points | disk-only `qm snapshot` (`tz-base`/`tz-ready`) | machine images of the stopped instance (taking one reboots the box; the restored state is disk-equivalent) |
+| pre-network exec | QEMU guest agent (`guest_exec`) | none — identity and first-boot config ride instance metadata (cloud-init on the GCE datasource) |
+| base images | `proxmox.template_vm_id` + `template` tag | `[gcp.image_map]`: boxes.json template name → stock family (newest non-deprecated) or a pinned build |
+| preflight | vmid/bridge/headroom/`run_preflight` | `providers/gcp/preflight`: platform matrix, image-map resolution, leftover label sweep, NIC ceiling, quotas, headscale |
+| teardown | `estate/destroy.py` tiers + sweeps | `providers/gcp` destroy tiers (instances → images → machine images → the VPC last, after its subnets empty) |
+
+The vmid stays the pipeline's positional unit identity on both platforms (frozen roster, reorder
+refusal); on gcp it rides the generator's NAME and the `tz-unit` label, which is what resume-guard
+and teardown probes read. GCP's per-run VPCs never route to each other, so concurrent ranges may
+reuse identical team CIDRs.
+
 Per-symbol rationale: [internals.md](internals.md). Open problems: [known-issues.md](known-issues.md).
 
 ## Layout
@@ -22,7 +49,8 @@ Per-symbol rationale: [internals.md](internals.md). Open problems: [known-issues
 |---|---|
 | `*-competition.py`, `compile-packet.py`, `sync-template.py`, `generate-packet.py`, `run-schedule.py` | Thin CLIs. Hyphenated, so not importable; `pipeline_api.py` is the import surface for `redeploy-competition.py` |
 | `deploy_lib/` | Deploy pipeline: `cli`, `runner` (`deploy()`), `prepare`, `context`, `placement`, `estate_inputs`, `golden_plan`, …; `phases/` holds the eight phase functions |
-| `infra/` | Everything that touches Proxmox: API `client`, `guest_exec`, `lifecycle`, `ownership`, `console`, `gates` (all pre-flight/ownership/state-version refusals, `run_preflight`) |
+| `providers/` | The platform layer between the pipeline and estate mutation: `providers/proxmox` is today's code (verbatim), `providers/gcp` is the Compute Engine backend (one VPC per run, label ownership, goldens as hash-stamped images, machine-image restore points). One range runs on ONE platform, recorded in the state document's `identity.platform` |
+| `infra/` | Everything that touches Proxmox: API `client`, `guest_exec`, `lifecycle`, `ownership`, `console`, `gates` (all pre-flight/ownership/state-version refusals, `run_preflight`) — the proxmox provider's implementation home |
 | `nakonops/` | Nakon surface: config generation, pin validation, bundle build, engine flock, `run_nakon` |
 | `golden/` | Golden set: build, plant, convert to template, slot arithmetic, disk sizing |
 | `engine/` | Engine template lifecycle (hash, freeze, build) and engine bootstrap/identity/health/event steps |

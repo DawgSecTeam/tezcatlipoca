@@ -20,6 +20,29 @@ public_key = "ssh-ed25519 CHANGEME range-automation"
 # Relative paths resolve against the checkout root.
 private_key_path = "proxmox"
 
+# The Google Cloud platform (create-competition.py --platform gcp). One run owns one
+# zone; the engine worktree needs nothing but the service-account key file's path —
+# the run queue points TEZ_GCP_CREDENTIALS_PATH at the per-run copy it materializes.
+[gcp]
+# Relative paths resolve against the checkout root; the run queue overrides by env.
+credentials_path = ".gcp-sa.json"
+zone = "us-central1-a"
+# Comma list of OPERATOR egress CIDRs allowed onto the engine's SSH + scoreboard (the
+# engine's public IP is the run's management address). Without it the gcp preflight
+# refuses: the driver could not reach its own range.
+# ingress_sources = "203.0.113.7/32,198.51.100.0/24"
+# machineTypes does not expose per-family NIC limits, so preflight trusts this ceiling
+# (8 on the e2/n2/C-series families) and the instance create asserts the real one.
+# max_engine_nics = 8
+
+# A boxes.json template name -> the stock GCP image family behind it, for every box this
+# range deploys, plus the two engine-internal bases. A family resolves to its newest
+# non-deprecated build; a name ending -v<digits> pins a concrete build.
+[gcp.image_map]
+# "base-ubuntu24.04-fix" = { project = "ubuntu-os-cloud", image = "ubuntu-2404-lts-amd64" }
+# "engine-base" = { project = "ubuntu-os-cloud", image = "ubuntu-2404-lts-amd64" }
+# "red01-base" = { project = "ubuntu-os-cloud", image = "ubuntu-2404-lts-amd64" }
+
 [engine]
 username = "sysadmin"
 # Static mgmt IP for the engine; empty keeps the built-in default (constants.py).
