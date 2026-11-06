@@ -188,15 +188,17 @@ def create_estate(ctx):
     if compute.instance(creds, engine_name) is None:
         nics = [instance_ops.nic(net["mgmt_subnet"], MGMT_ENGINE_IP,
                                  external="EPHEMERAL")]
+        # The VCP owns each subnet's .1 (the gateway); the engine holds .2 per team and
+        # the range's default VPC ROUTE points at it, so it stays the router.
         for identifier in teams:
             nics.append(instance_ops.nic(naming.subnet_name(prefix, "t", identifier),
-                                         f"192.168.{identifier}.1"))
+                                         utils.engine_team_gateway(identifier, PLATFORM)))
         if has_in_path_firewall(ctx):
             for identifier in teams:
                 nics.append(instance_ops.nic(naming.subnet_name(prefix, "w", identifier),
                                              f"172.31.{identifier}.1"))
         if stages_red(ctx.comp_dir):
-            nics.append(instance_ops.nic(naming.subnet_name(prefix, "red"), RED_SEGMENT_GW))
+            nics.append(instance_ops.nic(naming.subnet_name(prefix, "red"), "10.200.0.2"))
         instance_ops.create(
             creds, engine_name,
             image=f"projects/{creds['project_id']}/global/images/{engine_image}",
@@ -204,9 +206,11 @@ def create_estate(ctx):
             labels=ownership_labels(ctx.comp_name, ctx.run_id, "engine",
                                      unit=ctx.engine_vmid),
             disk_gb=40, network_tags=(network_ops.ENGINE_TAG,),
+            can_ip_forward=True,   # the range's router: the VPC default route lands here
             meta=instance_ops.metadata(username, _ssh_public_key()))
         document.record("engine", compute.zone(), engine_name, vmid=ctx.engine_vmid)
         document.save()
+        network_ops.ensure_engine_route(creds, prefix, engine_name)
     # The engine's PUBLIC ip is the run's mgmt address (firewalled to ingress_sources)
     # and the address every later tool records as the scoring engine.
     primary = instance_ops.primary_nic_info(creds, engine_name)
@@ -582,8 +586,9 @@ def _pub_of(key):
 
 
 def _red01_user_data(pub):
-    # cloud-init owns identity; the static red-segment ROUTE rides the same file so it
-    # survives reboots exactly like the proxmox netplan (the pinned NICs need no more).
+    # Identity only: both NICs lease their pinned addresses from GCE DHCP, and the VPC
+    # default route (next hop: the engine) carries red-to-team and egress traffic — the
+    # guest needs no static route of its own.
     return (
         "#cloud-config\n"
         "users:\n"
@@ -592,16 +597,6 @@ def _red01_user_data(pub):
         "    shell: /bin/bash\n"
         "    ssh_authorized_keys:\n"
         f"      - {pub}\n"
-        "write_files:\n"
-        "  - path: /etc/netplan/51-tlaloc-red.yaml\n"
-        "    permissions: '0600'\n"
-        "    content: |\n"
-        "      network:\n"
-        "        version: 2\n"
-        "        ethernets:\n"
-        "          ens5:\n"
-        "            routes:\n"
-        f"              - to: 192.168.0.0/16\n                via: {RED_SEGMENT_GW}\n"
     )
 
 

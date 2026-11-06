@@ -47,7 +47,7 @@ def metadata(ssh_user=None, ssh_public_key="", cloud_config=""):
 
 
 def create(creds, name, *, image, machine, nics, labels, disk_gb=0,
-           network_tags=(), meta=None, log=print):
+           network_tags=(), meta=None, can_ip_forward=False, log=print):
     log(f"  instance  : creating {name} ({machine}, {len(nics)} NIC(s))")
     body = {
         "name": name,
@@ -59,6 +59,10 @@ def create(creds, name, *, image, machine, nics, labels, disk_gb=0,
         "labels": labels,
         "metadata": meta or {"items": []},
     }
+    if can_ip_forward:
+        # The engine is the range's router: the VPC default route's next hop must be
+        # allowed to forward, or GCP drops every forwarded packet.
+        body["canIpForward"] = True
     if network_tags:
         body["tags"] = {"items": list(network_tags)}
     compute.wait_op(creds, gapi(creds, "POST", f"zones/{compute.zone()}/instances", data=body),

@@ -4,8 +4,8 @@ import shlex
 
 from infra.guest_exec import (diagnose_unreachable_box, guest_agent_exec_root, wait_for_guest_agent,)
 from common.ssh_ops import box_ssh_retry
-from common.utils import (PRINT_LOCK, dns_fix_cmd, dns_fix_cmd_root, record_degradation,
-                          run_concurrent)
+from common.utils import (PRINT_LOCK, dns_fix_cmd, dns_fix_cmd_root, engine_team_gateway,
+                          record_degradation, run_concurrent)
 from guests.box_settle_ops import wait_boxes_settled, _box_settled_via_ssh
 from estate import config
 
@@ -65,7 +65,9 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
 
     def _prep(t):
         ip = t["ip"]
-        gateway = f"192.168.{t['identifier']}.1" if use_proxy else None
+        gateway = (engine_team_gateway(t["identifier"],
+                                       (ctx or {}).get("platform") or "proxmox")
+                   if use_proxy else None)
         script = _apt_prep_script(gateway)
         remote_cmd = f"sudo bash -c {shlex.quote(script)}"
         box_node = t.get("node") or default_node

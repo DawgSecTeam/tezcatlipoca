@@ -24,7 +24,7 @@ class FakeGcp:
         self.project, self.region, self.zone = project, region, zone
         self.networks, self.subnets, self.instances = {}, {}, {}
         self.images, self.machine_images = {}, {}
-        self.addresses, self.firewalls, self.routers = {}, {}, {}
+        self.addresses, self.firewalls, self.routers, self.routes = {}, {}, {}, {}
         self.calls = []
 
     # --- fake plumbing ---
@@ -92,6 +92,11 @@ class FakeGcp:
             return self.addresses.get(name) or self._404(p)
         if p == "global/firewalls":
             return {"items": list(self.firewalls.values())}
+        if p == "global/routes":
+            return {"items": list(self.routes.values())}
+        if p.startswith("global/routes/"):
+            name = p.rsplit("/", 1)[-1]
+            return self.routes.get(name) or self._404(p)
         if p == f"regions/{self.region}/routers":
             return {"items": list(self.routers.values())}
         if p.startswith(f"zones/{self.zone}/instances"):
@@ -124,6 +129,12 @@ class FakeGcp:
             return self._op()
         if p == "global/firewalls":
             self.firewalls[data["name"]] = {"name": data["name"], **data}
+            return self._op()
+        if p == "global/routes":
+            self.routes[data["name"]] = {
+                "name": data["name"], "network": data.get("network"), **data,
+                "selfLink": f"https://compute.googleapis.com/compute/v1/projects/"
+                            f"{self.project}/global/routes/{data['name']}"}
             return self._op()
         if p == f"regions/{self.region}/routers" or p.startswith(f"regions/{self.region}/routers/"):
             name = data.get("name") or p.rsplit("/", 1)[-1]
@@ -161,6 +172,7 @@ class FakeGcp:
                     nic["accessConfigs"] = access
                 nics.append(nic)
             info = {"name": data["name"], "labels": data["labels"], "status": "RUNNING",
+                    "canIpForward": bool(data.get("canIpForward")),
                     "disks": [{"boot": True, "source": f"disk/{data['name']}"}],
                     "tags": data.get("tags") or {},
                     "networkInterfaces": [
@@ -176,6 +188,7 @@ class FakeGcp:
                               (self.subnets, "/subnetworks/"),
                               (self.addresses, "/addresses/"),
                               (self.routers, "/routers/"),
+                              (self.routes, "global/routes/"),
                               (self.instances, "/instances/"),
                               (self.images, "/images/"),
                               (self.machine_images, "/machineImages/"),
@@ -575,14 +588,44 @@ class CreateEngineTest(GcpBase):
         engine = "tz-c1-0e6474eb-quotient-engine"
         info = self.fake.instances[engine]
         nics = info["networkInterfaces"]
-        # NIC order is create order: mgmt (ephemeral public), team gateway (.1), red gw
+        # NIC order is create order: mgmt (ephemeral public), team interface (.2 — the
+        # VCP owns .1), red interface (.2)
         self.assertEqual(len(nics), 3)
         self.assertEqual(nics[0]["networkIP"], network_ops.MGMT_ENGINE_IP)
         self.assertTrue(nics[0]["accessConfigs"][0].get("natIP"))
-        self.assertEqual(nics[1]["networkIP"], "192.168.101.1")
-        self.assertEqual(nics[2]["networkIP"], "10.200.0.1")
+        self.assertEqual(nics[1]["networkIP"], "192.168.101.2")
+        self.assertEqual(nics[2]["networkIP"], "10.200.0.2")
+        # the range's router: forwarding enabled, and the VPC default route lands here
+        self.assertTrue(info["canIpForward"])
+        route = self.fake.routes[f"tz-c1-0e6474eb-route-engine"]
+        self.assertEqual(route["destRange"], "0.0.0.0/0")
+        self.assertEqual(route["priority"], 900)
+        self.assertIn("tz-c1-0e6474eb-quotient-engine", route["nextHopInstance"])
         # the realized ephemeral address is the run's recorded mgmt identity
         self.assertEqual(ctx.engine_mgmt_ip, nics[0]["accessConfigs"][0]["natIP"])
         self.assertEqual(doc.document.data["identity"]["engine_mgmt_ip"],
                          ctx.engine_mgmt_ip)
         self.assertIn(engine, [r["name"] for r in doc.resources("engine")])
+
+
+class TeamAddressTest(unittest.TestCase):
+    def test_the_engine_sits_at_dot2_on_gcp_and_dot1_on_proxmox(self):
+        from common.utils import engine_team_gateway
+        self.assertEqual(engine_team_gateway("101", "gcp"), "192.168.101.2")
+        self.assertEqual(engine_team_gateway("101"), "192.168.101.1")
+
+    def test_netplan_writes_the_platform_anchor(self):
+        from estate.engine_setup import netplan_yaml
+        gcp = netplan_yaml(["101"], red_segment={"subnet": "10.200.0.0/24",
+                                                 "gw": "10.200.0.2"}, platform="gcp")
+        self.assertIn('192.168.101.2/24', gcp)
+        self.assertIn('10.200.0.2/24', gcp)
+        pve = netplan_yaml(["101"])
+        self.assertIn('192.168.101.1/24', pve)
+
+    def test_red_dnat_targets_follow_the_platform_anchor(self):
+        from red import red01_ops
+        self.assertIn("192.168.101.1",
+                      red01_ops.dnat_destinations(["101"]))
+        self.assertIn("192.168.101.2",
+                      red01_ops.dnat_destinations(["101"], platform="gcp"))

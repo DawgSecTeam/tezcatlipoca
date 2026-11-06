@@ -75,8 +75,10 @@ def _iface(name, mac):
     return lines
 
 
-def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None, macs=()):
+def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None, macs=(),
+                 platform="proxmox"):
     """The engine's team-interface netplan; addresses follow create_engine's NIC order (mgmt, teams, transit, then red_segment)."""
+    from common.utils import engine_team_gateway
     macs = list(macs or ())
     lines = ["network:", "  version: 2", "  ethernets:"]
 
@@ -86,7 +88,7 @@ def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None, mac
     index = 0
     for identifier in team_identifiers:
         lines += _iface(f"ens{18 + index + 1}", mac(index))
-        lines.append(f'      addresses: ["192.168.{identifier}.1/24"]')
+        lines.append(f'      addresses: ["{engine_team_gateway(identifier, platform)}/24"]')
         index += 1
     for identifier in transit_identifiers:
         lines += _iface(f"ens{18 + index + 1}", mac(index))
@@ -99,11 +101,12 @@ def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None, mac
 
 
 def configure_engine_network(ctx, team_identifiers, transit_identifiers=(), satellite_routes=(),
-                             red_segment=None, macs=()):
+                             red_segment=None, macs=(), platform="proxmox"):
     """Address the engine's team bridges and enable forwarding over SSH; with neither teams nor a red segment there is no interface to write (an empty ethernets map is a netplan error)."""
     if team_identifiers or red_segment:
         _run(ctx, "sudo tee /etc/netplan/60-team-ifaces.yaml << 'EOF'\n"
-                  + netplan_yaml(team_identifiers, transit_identifiers, red_segment, macs)
+                  + netplan_yaml(team_identifiers, transit_identifiers, red_segment, macs,
+                                 platform=platform)
                   + "\nEOF")
         # netplan refuses a world-readable file.
         _run(ctx, "sudo chmod 600 /etc/netplan/60-team-ifaces.yaml")

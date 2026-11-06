@@ -586,6 +586,8 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         engine_user=getattr(ctx, "scoring_user", "sysadmin"),
         team_identifiers=team_identifiers,
         callback_port=callback_port, callback_host=callback_host or "",
+        # on gcp the engine's team-NIC is .2 (each subnet's .1 is the VCP gateway)
+        platform=getattr(ctx, "platform", "") or "proxmox",
         runner=runner)
     stage_red01(ssh_key, red_ip, comp_dir, runner=runner, c2=bool(mythic))
     push_config(ssh_key, red_ip, cfg_path.read_text(), runner=runner)

@@ -96,8 +96,15 @@ def is_unmanaged(box):
     return bool(box.get("unmanaged"))
 
 
-def is_in_path_fw(box):
-# WAN on vmbrW<id>, LAN on vmbr<id>; deploy phase 5 bootstraps its pfSense so the engine routes the team subnet.
+def engine_team_gateway(identifier, platform="proxmox"):
+    """The engine's address inside team <identifier>'s subnet. PVE: the bridge .1 the
+    engine owns. GCP: the subnet's .1 is the VPC gateway, so the engine sits at .2 and
+    a VPC default route sends each team subnet's traffic to it."""
+    suffix = "2" if platform == "gcp" else "1"
+    return f"192.168.{identifier}.{suffix}"
+
+
+def is_in_path_fw(box):# WAN on vmbrW<id>, LAN on vmbr<id>; deploy phase 5 bootstraps its pfSense so the engine routes the team subnet.
     return is_unmanaged(box) and bool(box.get("in_path"))
 
 

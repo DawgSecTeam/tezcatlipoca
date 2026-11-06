@@ -18,6 +18,11 @@ def zone():
     return config.active().gcp.zone
 
 
+def zone_and(instance_name):
+    """`zones/<zone>/instances/<name>` for route next-hops and URLs built from names."""
+    return f"zones/{zone()}/instances/{instance_name}"
+
+
 def region():
     from estate import config
     return config.active().gcp.zone.rsplit("-", 1)[0]
@@ -30,8 +35,13 @@ def wait_op(creds, operation, timeout=900, poll=5.0):
     while True:
         if operation.get("error"):
             err = operation["error"]
-            raise RuntimeError(f"GCP operation failed ({err.get('code')}): "
-                               f"{(err.get('message') or '')[:300]}")
+            # The async failures that matter arrive as errors[] entries, and a bare
+            # err.get('code') printed "None: " while the real reason sat one level down
+            # (live: IP_IN_USE listed only under errors).
+            details = "; ".join(f"{e.get('code')}: {e.get('message')}"
+                                for e in err.get("errors", [])) \
+                or str(err)[:300]
+            raise RuntimeError(f"GCP operation failed: {details[:400]}")
         if operation.get("status") == "DONE":
             return operation
         if time.time() > deadline:

@@ -72,6 +72,10 @@ def nat_name(prefix):
     return _clean(f"{prefix}-nat")
 
 
+def route_name(prefix):
+    return _clean(f"{prefix}-route-engine")
+
+
 def address_name(prefix, role):
     return _clean(f"{prefix}-ip-{role}")
 

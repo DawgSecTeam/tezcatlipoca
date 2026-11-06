@@ -123,12 +123,42 @@ def _ensure_mgmt_rule(creds, prefix, net_link, labels, record):
     return rule
 
 
+def ensure_engine_route(creds, prefix, engine_name, record=print):
+    """Send every team subnet's default traffic to the engine (priority beats the
+    auto-created default-internet-gateway route at 1000; GCP never re-applies a
+    next-hop instance's own traffic, so the engine's egress keeps its own path).
+
+    On gcp the engine cannot BE each subnet's .1 — that address is the VPC gateway —
+    so it holds .2 and this route is what makes it the range's router.
+    """
+    name = naming.route_name(prefix)
+    listed = gapi(creds, "GET", "global/routes", params={"maxResults": 500}).get("items") or []
+    if any(r["name"] == name for r in listed):
+        return name
+    record(f"  network: default route via the engine ({name}, priority 900)")
+    compute.wait_op(creds, gapi(creds, "POST", "global/routes", data={
+        "name": name,
+        "network": f"projects/{creds['project_id']}/global/networks/{naming.vpc_name(prefix)}",
+        "destRange": "0.0.0.0/0",
+        "priority": 900,
+        "nextHopInstance": (f"https://compute.googleapis.com/compute/v1/projects/"
+                            f"{creds['project_id']}/{compute.zone_and(engine_name)}"),
+        "description": f"tezcatlipoca — boxes default through the engine ({prefix})"}))
+    return name
+
+
 def delete_network(creds, vpc, log=print):
     """Subnets (firewalls die with the network) out first — GCP refuses an in-use subnet."""
     net = compute.network(creds, vpc)
     if net is None:
         return False
     prefixes = f"projects/{creds['project_id']}/global/networks/{vpc}"
+    # Routes block a network delete; sweep this range's own before the network goes.
+    for route in [r for r in (gapi(creds, "GET", "global/routes",
+                                   params={"maxResults": 500}).get("items") or [])
+                  if (r["name"] or "").startswith(vpc)]:
+        compute.delete_op(creds, route["selfLink"])
+        log(f"  destroyed route {route['name']}")
     listed = gapi(creds, "GET", f"regions/{compute.region()}/subnetworks",
                   params={"maxResults": 500}).get("items") or []
     for sub in [s for s in listed if s["network"] == prefixes]:

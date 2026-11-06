@@ -344,8 +344,9 @@ def _write(node, vmid, path, content, mode):
     _exec(node, vmid, f"echo '{blob}' | base64 -d > {path} && chmod {mode} {path}", 60)
 
 
-def dnat_destinations(team_identifiers, callback_host=""):
-    dsts = [f"192.168.{identifier}.1" for identifier in team_identifiers]
+def dnat_destinations(team_identifiers, callback_host="", platform="proxmox"):
+    from common.utils import engine_team_gateway
+    dsts = [engine_team_gateway(identifier, platform) for identifier in team_identifiers]
     if callback_host and callback_host not in dsts:
         dsts.append(callback_host)
     return dsts
@@ -357,7 +358,7 @@ SNAT_CHAIN = "RANGE-RED-SNAT"
 
 
 def firewall_script(*, team_identifiers, callback_port, callback_host="",
-                    red_ip=RED_SEGMENT_IP, red_subnet=RED_SEGMENT_SUBNET):
+                    red_ip=RED_SEGMENT_IP, red_subnet=RED_SEGMENT_SUBNET, platform="proxmox"):
     """Red-segment rules, rebuilt idempotently inside three of our own chains.
 
     A timer re-runs this every 30 s, so "is the rule already there?" must be answerable
@@ -386,7 +387,7 @@ def firewall_script(*, team_identifiers, callback_port, callback_host="",
     ]
     if callback_port:
         port = int(callback_port)
-        for dst in dnat_destinations(team_identifiers, callback_host):
+        for dst in dnat_destinations(team_identifiers, callback_host, platform):
             for proto in ("tcp", "udp"):
                 lines.append(f"iptables -A {FORWARD_CHAIN} -p {proto} -d {red_ip} "
                              f"--dport {port} -j ACCEPT")
@@ -396,7 +397,7 @@ def firewall_script(*, team_identifiers, callback_port, callback_host="",
         port = int(callback_port)
         lines += hook_chain("nat", "PREROUTING", DNAT_CHAIN)
         lines += hook_chain("nat", "POSTROUTING", SNAT_CHAIN)
-        for dst in dnat_destinations(team_identifiers, callback_host):
+        for dst in dnat_destinations(team_identifiers, callback_host, platform):
             for proto in ("tcp", "udp"):
                 # A callback to the team gateway lands here and must reach red01, not Quotient.
                 lines.append(f"iptables -t nat -A {DNAT_CHAIN} -p {proto} -d {dst} "
@@ -415,9 +416,11 @@ _RED_TIMER = ("[Unit]\nDescription=Re-assert the red segment rules\n\n"
 
 
 def install_engine_rules(engine_ip, ssh_key, *, engine_user, team_identifiers,
-                         callback_port, callback_host="", runner=None, timeout=180):
+                         callback_port, callback_host="", platform="proxmox",
+                         runner=None, timeout=180):
     script = firewall_script(team_identifiers=team_identifiers,
-                             callback_port=callback_port, callback_host=callback_host)
+                             callback_port=callback_port, callback_host=callback_host,
+                             platform=platform)
     units = {
         "/usr/local/sbin/range-red-firewall.sh": (script, "755"),
         "/etc/systemd/system/range-red-firewall.service": (_RED_SERVICE, "644"),
