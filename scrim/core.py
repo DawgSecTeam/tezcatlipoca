@@ -46,6 +46,12 @@ def shutil_copy(src, dst):
     return dst
 
 
+def shutil_copytree(src, dst):
+    """Copy a directory tree whole (a kit's scripts must arrive with their exec bits)."""
+    import shutil
+    return shutil.copytree(src, dst)
+
+
 def now_iso(ts=None):
     """Local wall-clock `YYYY-mm-ddTHH:MM:SS` (now, or `ts` epoch seconds)."""
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts))

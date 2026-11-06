@@ -1,0 +1,3 @@
+# scored INBOUND ports for web01 — the scorer logs in as a credlist account from
+# the gateway; changing sshd_config must keep these reachable
+22

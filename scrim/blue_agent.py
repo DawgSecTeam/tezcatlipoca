@@ -87,6 +87,13 @@ def stage_blues(args, comp, run_dir, creds, t0):
             p.write_text(body)
             p.chmod(0o755)
         core.shutil_copy(comp / "packet.md", wd / "packet.md")
+        # The competition's hardening kit, staged into every workdir: blue gets the tools
+        # the estate's own operators run. The kit lives in the engine tree (blue-kit/),
+        # not the comp dir, so one checkout ships one toolkit to every comp.
+        kit_src = Path(core.REPO) / "blue-kit"
+        if kit_src.is_dir():
+            core.shutil_copytree(kit_src, wd / "blue-kit")
+            log(f"blue-kit staged into blue-team{n}")
         (wd / "LOG.md").write_text(
             f"# Blue team {n} — defense log\n"
             "# Your after-action report goes in REPORT.md (an operator reads it afterwards)\n")

@@ -1,0 +1,427 @@
+#      ___             ___ __      __
+#     /   | __  ______/ (_) /_____/ /
+#    / /| |/ / / / __  / / __/ __  /
+#   / ___ / /_/ / /_/ / / /_/ /_/ /
+#  /_/  |_\__,_/\__,_/_/\__/\__,_/
+# Linux Audit Daemon - Best Practice Configuration
+# Original compiled by Florian Roth
+
+# Remove any existing rules
+-D
+
+# Buffer Size
+-b 8192
+
+# Failure Mode
+## Possible values: 0 (silent), 1 (printk, print a failure message), 2 (panic, halt the system)
+-f 1
+
+# Ignore errors
+## e.g. caused by users or files not found in the local environment
+-i
+
+# Filters ---------------------------------------------------------------------
+
+### We put these early because audit is a first match wins system.
+
+## Ignore current working directory records
+## -a always,exclude -F msgtype=CWD
+
+## Cron jobs fill the logs with stuff we normally don't want (works with SELinux)
+-a never,user -F subj_type=crond_t
+-a never,exit -F subj_type=crond_t
+
+## This prevents chrony from overwhelming the logs
+-a never,exit -F arch=b64 -S adjtimex -F auid=-1 -F uid=chrony -F subj_type=chronyd_t
+
+## This is not very interesting and wastes a lot of space if the server is public facing
+-a always,exclude -F msgtype=CRYPTO_KEY_USER
+
+## Open VM Tools
+-a exit,never -F arch=b64 -S all -F exe=/usr/bin/vmtoolsd
+
+## High Volume Event Filter (especially on Linux Workstations)
+-a never,exit -F arch=b32 -F dir=/dev/shm/ -F key=sharedmemaccess
+-a never,exit -F arch=b64 -F dir=/dev/shm/ -F key=sharedmemaccess
+
+-a never,exit -F arch=b32 -F dir=/var/lock/lvm/ -F key=locklvm
+-a never,exit -F arch=b64 -F dir=/var/lock/lvm/ -F key=locklvm
+
+## More information on how to filter events
+### https://access.redhat.com/solutions/2482221
+
+# Rules -----------------------------------------------------------------------
+
+## Kernel parameters
+-w /etc/sysctl.conf -p wa -k sysctl
+-w /etc/sysctl.d -p wa -k sysctl
+
+## Kernel module loading and unloading
+-a always,exit -F perm=x -F auid!=-1 -F path=/sbin/insmod -k modules
+-a always,exit -F perm=x -F auid!=-1 -F path=/sbin/modprobe -k modules
+-a always,exit -F perm=x -F auid!=-1 -F path=/sbin/rmmod -k modules
+-a always,exit -F arch=b64 -S finit_module -S init_module -S delete_module -F auid!=-1 -k modules
+
+## Modprobe configuration
+-w /etc/modprobe.conf -p wa -k modprobe
+-w /etc/modprobe.d -p wa -k modprobe
+
+## KExec usage (all actions)
+-a always,exit -F arch=b64 -S kexec_load -k KEXEC
+
+## Special files
+-a always,exit -F arch=b64 -S mknod -S mknodat -k specialfiles
+
+## Mount operations (only attributable)
+-a always,exit -F arch=b64 -S mount -S umount2 -F auid!=-1 -k mount
+
+### NFS mount
+-a always,exit -F path=/sbin/mount.nfs -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+-a always,exit -F path=/usr/sbin/mount.nfs -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+
+## Change swap (only attributable)
+-a always,exit -F arch=b64 -S swapon -S swapoff -F auid!=-1 -k swap
+
+## Time
+-a always,exit -F arch=b64 -F uid!=ntp -S adjtimex -S settimeofday -S clock_settime -k time
+### Local time zone
+-w /etc/localtime -p wa -k localtime
+
+## Cron configuration & scheduled jobs
+-w /etc/cron.allow -p wa -k cron
+-w /etc/cron.deny -p wa -k cron
+-w /etc/cron.d/ -p wa -k cron
+-w /etc/cron.daily/ -p wa -k cron
+-w /etc/cron.hourly/ -p wa -k cron
+-w /etc/cron.monthly/ -p wa -k cron
+-w /etc/cron.weekly/ -p wa -k cron
+-w /etc/crontab -p wa -k cron
+-w /var/spool/cron/ -p wa -k cron
+
+## User, group, password databases
+-w /etc/group -p wa -k etcgroup
+-w /etc/passwd -p wa -k etcpasswd
+-w /etc/gshadow -p wa -k etcgroup
+-w /etc/shadow -p wa -k etcpasswd
+-w /etc/security/opasswd -p wa -k opasswd
+
+## Sudoers file changes
+-w /etc/sudoers -p wa -k actions
+-w /etc/sudoers.d/ -p wa -k actions
+
+## Passwd
+-w /usr/bin/chpasswd -p x -k passwd_modification
+-w /usr/bin/passwd -p x -k passwd_modification
+
+## Tools to change group identifiers
+-w /usr/sbin/groupadd -p x -k group_modification
+-w /usr/sbin/groupmod -p x -k group_modification
+-w /usr/sbin/addgroup -p x -k group_modification
+-w /usr/sbin/useradd -p x -k user_modification
+-w /usr/sbin/userdel -p x -k user_modification
+-w /usr/sbin/usermod -p x -k user_modification
+-w /usr/sbin/adduser -p x -k user_modification
+
+## Login configuration and information
+-w /etc/login.defs -p wa -k login
+-w /etc/securetty -p wa -k login
+-w /var/log/faillog -p wa -k login
+-w /var/log/lastlog -p wa -k login
+-w /var/log/tallylog -p wa -k login
+
+## Network Environment
+### Changes to hostname
+-a always,exit -F arch=b64 -S sethostname -S setdomainname -k network_modifications
+
+### Detect Remote Shell Use
+-a always,exit -F arch=b64 -F exe=/bin/bash -F success=1 -S connect -k remote_shell
+-a always,exit -F arch=b64 -F exe=/usr/bin/bash -F success=1 -S connect -k remote_shell
+
+### Successful IPv4 Connections
+-a always,exit -F arch=b64 -S connect -F a2=16 -F success=1 -F key=network_connect_4
+
+### Successful IPv6 Connections
+-a always,exit -F arch=b64 -S connect -F a2=28 -F success=1 -F key=network_connect_6
+
+### Changes to other files
+-w /etc/hosts -p wa -k network_modifications
+-w /etc/sysconfig/network -p wa -k network_modifications
+-w /etc/sysconfig/network-scripts -p w -k network_modifications
+-w /etc/network/ -p wa -k network
+-a always,exit -F dir=/etc/NetworkManager/ -F perm=wa -k network_modifications
+
+### Changes to issue
+-w /etc/issue -p wa -k etcissue
+-w /etc/issue.net -p wa -k etcissue
+
+## System startup scripts
+-w /etc/inittab -p wa -k init
+-w /etc/init.d/ -p wa -k init
+-w /etc/init/ -p wa -k init
+
+## Library search paths
+-w /etc/ld.so.conf -p wa -k libpath
+-w /etc/ld.so.conf.d -p wa -k libpath
+
+## Systemwide library preloads (LD_PRELOAD)
+-w /etc/ld.so.preload -p wa -k systemwide_preloads
+
+## Pam configuration
+-w /etc/pam.d/ -p wa -k pam
+-w /etc/security/limits.conf -p wa  -k pam
+-w /etc/security/limits.d -p wa  -k pam
+-w /etc/security/pam_env.conf -p wa -k pam
+-w /etc/security/namespace.conf -p wa -k pam
+-w /etc/security/namespace.d -p wa -k pam
+-w /etc/security/namespace.init -p wa -k pam
+
+## Mail configuration
+-w /etc/aliases -p wa -k mail
+-w /etc/postfix/ -p wa -k mail
+-w /etc/exim4/ -p wa -k mail
+
+## SSH configuration
+-w /etc/ssh/sshd_config -p wa -k sshd
+-w /etc/ssh/sshd_config.d -p wa -k sshd
+
+## root ssh key tampering
+-w /root/.ssh -p wa -k rootkey
+
+# Systemd
+-w /bin/systemctl -p x -k systemd
+-w /etc/systemd/ -p wa -k systemd
+-w /usr/lib/systemd -p wa -k systemd
+
+## https://systemd.network/systemd.generator.html
+-w /etc/systemd/system-generators/ -p wa -k systemd_generator
+-w /usr/local/lib/systemd/system-generators/ -p wa -k systemd_generator
+-w /usr/lib/systemd/system-generators -p wa -k systemd_generator
+
+-w /etc/systemd/user-generators/ -p wa -k systemd_generator
+-w /usr/local/lib/systemd/user-generators/ -p wa -k systemd_generator
+-w /lib/systemd/system-generators/ -p wa -k systemd_generator
+
+## Critical elements access failures
+-a always,exit -F arch=b64 -S open -F dir=/etc -F success=0 -k unauthedfileaccess
+-a always,exit -F arch=b64 -S open -F dir=/bin -F success=0 -k unauthedfileaccess
+-a always,exit -F arch=b64 -S open -F dir=/sbin -F success=0 -k unauthedfileaccess
+-a always,exit -F arch=b64 -S open -F dir=/usr/bin -F success=0 -k unauthedfileaccess
+-a always,exit -F arch=b64 -S open -F dir=/usr/sbin -F success=0 -k unauthedfileaccess
+-a always,exit -F arch=b64 -S open -F dir=/var -F success=0 -k unauthedfileaccess
+-a always,exit -F arch=b64 -S open -F dir=/home -F success=0 -k unauthedfileaccess
+-a always,exit -F arch=b64 -S open -F dir=/srv -F success=0 -k unauthedfileaccess
+
+## Process ID change (switching accounts) applications
+-w /bin/su -p x -k priv_esc
+-w /usr/bin/sudo -p x -k priv_esc
+
+## Power state
+-w /sbin/shutdown -p x -k power
+-w /sbin/poweroff -p x -k power
+-w /sbin/reboot -p x -k power
+-w /sbin/halt -p x -k power
+
+## Session initiation information
+-w /var/run/utmp -p wa -k session
+-w /var/log/btmp -p wa -k session
+-w /var/log/wtmp -p wa -k session
+
+## Discretionary Access Control (DAC) modifications
+-a always,exit -F arch=b64 -S chmod  -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S chown -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S fchmod -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S fchmodat -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S fchown -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S fchownat -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S fremovexattr -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S fsetxattr -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S lchown -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S lremovexattr -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S lsetxattr -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S removexattr -F auid>=1000 -F auid!=-1 -k perm_mod
+-a always,exit -F arch=b64 -S setxattr -F auid>=1000 -F auid!=-1 -k perm_mod
+
+# Special Rules ---------------------------------------------------------------
+
+## Reconnaissance
+-w /usr/bin/whoami -p x -k recon
+-w /usr/bin/id -p x -k recon
+-w /bin/hostname -p x -k recon
+-w /bin/uname -p x -k recon
+-w /etc/issue -p r -k recon
+-w /etc/hostname -p r -k recon
+
+## Suspicious activity
+-w /usr/bin/wget -p x -k susp_activity
+-w /usr/bin/curl -p x -k susp_activity
+-w /usr/bin/base64 -p x -k susp_activity
+-w /bin/nc -p x -k susp_activity
+-w /bin/netcat -p x -k susp_activity
+-w /usr/bin/ncat -p x -k susp_activity
+-w /usr/bin/ss -p x -k susp_activity
+-w /usr/bin/netstat -p x -k susp_activity
+-w /usr/bin/ssh -p x -k susp_activity
+-w /usr/bin/scp -p x -k susp_activity
+-w /usr/bin/sftp -p x -k susp_activity
+-w /usr/bin/ftp -p x -k susp_activity
+-w /usr/bin/socat -p x -k susp_activity
+-w /usr/bin/wireshark -p x -k susp_activity
+-w /usr/bin/tshark -p x -k susp_activity
+-w /usr/bin/rawshark -p x -k susp_activity
+-w /usr/bin/rdesktop -p x -k susp_activity
+-w /usr/local/bin/rdesktop -p x -k susp_activity
+-w /usr/bin/wlfreerdp -p x -k susp_activity
+-w /usr/bin/xfreerdp -p x -k susp_activity
+-w /usr/local/bin/xfreerdp -p x -k susp_activity
+-w /usr/bin/nmap -p x -k susp_activity
+
+## sssd
+-a always,exit -F path=/usr/libexec/sssd/p11_child -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+-a always,exit -F path=/usr/libexec/sssd/krb5_child -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+-a always,exit -F path=/usr/libexec/sssd/ldap_child -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+-a always,exit -F path=/usr/libexec/sssd/selinux_child -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+-a always,exit -F path=/usr/libexec/sssd/proxy_child -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+
+## vte-2.91
+-a always,exit -F path=/lib64/vte-2.91/gnome-pty-helper -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+-a always,exit -F path=/usr/lib64/vte-2.91/gnome-pty-helper -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+
+## Added to catch netcat on Ubuntu
+-w /bin/nc.openbsd -p x -k susp_activity
+-w /bin/nc.traditional -p x -k susp_activity
+
+## Sbin suspicious activity
+-w /sbin/iptables -p x -k sbin_susp
+-w /sbin/ip6tables -p x -k sbin_susp
+-w /sbin/ifconfig -p x -k sbin_susp
+-w /usr/sbin/arptables -p x -k sbin_susp
+-w /usr/sbin/ebtables -p x -k sbin_susp
+-w /sbin/xtables-nft-multi -p x -k sbin_susp
+-w /usr/sbin/nft -p x -k sbin_susp
+-w /usr/sbin/tcpdump -p x -k sbin_susp
+-w /usr/sbin/traceroute -p x -k sbin_susp
+-w /usr/sbin/ufw -p x -k sbin_susp
+
+
+## dbus-send invocation
+### may indicate privilege escalation CVE-2021-3560
+-w /usr/bin/dbus-send -p x -k dbus_send
+-w /usr/bin/gdbus -p x -k gdubs_call
+
+## setfiles
+-a always,exit -F path=/usr/bin/setfiles -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+-a always,exit -F path=/usr/sbin/setfiles -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+
+### dbus
+-a always,exit -F path=/lib64/dbus-1/dbus-daemon-launch-helper -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+-a always,exit -F path=/usr/lib64/dbus-1/dbus-daemon-launch-helper -F perm=x -F auid>=500 -F auid!=4294967295 -k T1078_Valid_Accounts
+
+## pkexec invocation
+### may indicate privilege escalation CVE-2021-4034
+-w /usr/bin/pkexec -p x -k pkexec
+
+## Suspicious shells
+-w /bin/ash -p x -k susp_shell
+-w /bin/csh -p x -k susp_shell
+-w /bin/fish -p x -k susp_shell
+-w /bin/tcsh -p x -k susp_shell
+-w /bin/tclsh -p x -k susp_shell
+-w /bin/xonsh -p x -k susp_shell
+-w /usr/local/bin/xonsh -p x -k susp_shell
+-w /bin/open -p x -k susp_shell
+-w /bin/rbash -p x -k susp_shell
+
+# Web Server Activity
+## Change the number "33" to the ID of your WebServer user. Default: www-data:x:33:33
+-a always,exit -F arch=b64 -S execve -F euid=33 -k detect_execve_www
+
+## Shell/profile configurations
+-w /etc/profile.d/ -p wa -k shell_profiles
+-w /etc/profile -p wa -k shell_profiles
+-w /etc/shells -p wa -k shell_profiles
+-w /etc/bashrc -p wa -k shell_profiles
+-w /etc/csh.cshrc -p wa -k shell_profiles
+-w /etc/csh.login -p wa -k shell_profiles
+-w /etc/fish/ -p wa -k shell_profiles
+-w /etc/zsh/ -p wa -k shell_profiles
+
+## Injection
+### These rules watch for code injection by the ptrace facility.
+### This could indicate someone trying to do something bad or just debugging
+-a always,exit -F arch=b64 -S ptrace -F a0=0x4 -k code_injection
+-a always,exit -F arch=b64 -S ptrace -F a0=0x5 -k data_injection
+-a always,exit -F arch=b64 -S ptrace -F a0=0x6 -k register_injection
+-a always,exit -F arch=b64 -S ptrace -k tracing
+
+## Anonymous File Creation
+### These rules watch the use of memfd_create
+### "memfd_create" creates anonymous file and returns a file descriptor to access it
+### When combined with "fexecve" can be used to stealthily run binaries in memory without touching disk
+-a always,exit -F arch=b64 -S memfd_create -F key=anon_file_create
+
+## Privilege Abuse
+### The purpose of this rule is to detect when an admin may be abusing power by looking in user's home dir.
+-a always,exit -F dir=/home -F uid=0 -F auid>=1000 -F auid!=-1 -C auid!=obj_uid -k power_abuse
+
+# Socket Creations
+# will catch both IPv4 and IPv6
+
+-a always,exit -F arch=b32 -S socket -F a0=2  -k network_socket_created
+-a always,exit -F arch=b64 -S socket -F a0=2  -k network_socket_created
+
+-a always,exit -F arch=b32 -S socket -F a0=10 -k network_socket_created
+-a always,exit -F arch=b64 -S socket -F a0=10 -k network_socket_created
+
+# Software Management ---------------------------------------------------------
+
+# RPM (Redhat/CentOS)
+-w /usr/bin/rpm -p x -k software_mgmt
+-w /usr/bin/yum -p x -k software_mgmt
+-w /usr/bin/dnf -p x -k software_mgmt
+
+# YAST/Zypper/RPM (SuSE)
+-w /bin/rpm -p x -k software_mgmt
+-w /usr/bin/zypper -p x -k software_mgmt
+
+# DPKG / APT-GET (Debian/Ubuntu)
+-w /usr/bin/dpkg -p x -k software_mgmt
+-w /usr/bin/apt -p x -k software_mgmt
+-w /usr/bin/apt-add-repository -p x -k software_mgmt
+-w /usr/bin/apt-get -p x -k software_mgmt
+-w /usr/bin/snap -p x -k software_mgmt
+
+# Special Software ------------------------------------------------------------
+
+## Docker
+-w /usr/bin/dockerd -p x -k docker
+-w /usr/bin/docker -p x -k docker
+-w /usr/bin/docker-containerd -p x -k docker
+-w /usr/bin/docker-runc -p x -k docker
+-w /var/lib/docker -p wa -k docker
+-w /etc/docker -p wa -k docker
+-w /etc/sysconfig/docker -p wa -k docker
+-w /etc/sysconfig/docker-storage -p wa -k docker
+-w /usr/lib/systemd/system/docker.service -p wa -k docker
+-w /usr/lib/systemd/system/docker.socket -p wa -k docker
+
+# ipc system call
+# /usr/include/linux/ipc.h
+
+
+# High Volume Events ----------------------------------------------------------
+
+## Root command executions
+-a always,exit -F arch=b64 -F euid=0 -F auid>=1000 -F auid!=-1 -S execve -k rootcmd
+
+## File Access
+### Unauthorized Access (unsuccessful)
+-a always,exit -F arch=b64 -S creat -S open -S openat -S open_by_handle_at -S truncate -S ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=-1 -k file_access
+-a always,exit -F arch=b64 -S creat -S open -S openat -S open_by_handle_at -S truncate -S ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=-1 -k file_access
+
+### Unsuccessful Creation
+-a always,exit -F arch=b64 -S mkdir,creat,link,symlink,mknod,mknodat,linkat,symlinkat -F exit=-EACCES -k file_creation
+-a always,exit -F arch=b64 -S mkdir,link,symlink,mkdirat -F exit=-EPERM -k file_creation
+
+### Unsuccessful Modification
+-a always,exit -F arch=b64 -S rename -S renameat -S truncate -S chmod -S setxattr -S lsetxattr -S removexattr -S lremovexattr -F exit=-EACCES -k file_modification
+-a always,exit -F arch=b64 -S rename -S renameat -S truncate -S chmod -S setxattr -S lsetxattr -S removexattr -S lremovexattr -F exit=-EPERM -k file_modification

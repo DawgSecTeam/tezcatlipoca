@@ -3,6 +3,7 @@ from pathlib import Path
 
 from common.comp_paths import resolve_comp_dir
 from scrim import compworld
+from scrim import core
 from scrim import quotient_api
 from scrim.runfiles import SCOREBOARD_STATE
 
@@ -39,6 +40,22 @@ def blue_cycle_prompt(n, creds, args, elapsed, remain, delta_text, inject_text, 
                            f'echo $BOX_PW | sudo -S systemctl start {unit}" for example)')
     else:
         restore_example = "(restart the failed unit over ./mybox for example)"
+    kit = ""
+    if (Path(core.REPO) / "blue-kit").is_dir():
+        kit = (
+            "HARDENING KIT (./blue-kit/ — the estate's own toolkit, use it before ad-hoc "
+            "commands):\n"
+            "  Linux boxes: ./blue-kit/autofirewall.sh -d   (default-deny firewall; -d keeps\n"
+            "    package-manager ports open). Port lists live in ./blue-kit/port-sources/<box> —\n"
+            f"    the scored ports above MUST stay in the INBOUND list or the pin goes DOWN.\n"
+            "    After ANY change: ./scorch — every scored pin must stay UP.\n"
+            "  ./blue-kit/watchdawg.sh <backup-dir> <watchlist>  (file-integrity watcher;\n"
+            "    run it in the background, e.g. nohup ... & — it never exits on its own)\n"
+            "  ./blue-kit/baseline/standard.sh  (read-only audit — run for findings, no changes)\n"
+            "  harden.sh is NOT for you: it replaces shells and locks accounts (breaks the\n"
+            "    scored ssh pins). Read it for ideas; never run it during the event.\n"
+            "  Windows boxes: the kit is Linux-only; use PowerShell hardening directly.\n"
+        )
     return f"""{header}
 T+{elapsed}min of {args.duration_min} ({remain}min left). Work in THIS directory; everything you need is here.
 
@@ -60,7 +77,7 @@ Last LOG.md lines:
 {chr(10).join(reach)}
 
 {chr(10).join(scoring)}
-
+{kit}
 SCOREBOARD + INJECTS — NEVER log in directly: the shared jar and helpers are the
 only supported path (a direct login may invalidate the shared session; the 2026-10-18
 probe did not reproduce eviction, but the jar is what the harness refreshes). Use the
