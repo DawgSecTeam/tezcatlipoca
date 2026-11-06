@@ -21,6 +21,9 @@ _SPEC = {
     "gcp.credentials_path": ".gcp-sa.json",
     "gcp.zone": "",
     "gcp.ingress_sources": "",
+    # machineTypes does not expose per-family NIC limits on this API view; the real
+    # limit asserts itself at the create call, and preflight trusts the configured ceiling.
+    "gcp.max_engine_nics": 8,
     # template name -> {"image": "<name>", "project": "<image project>"} (stock or custom)
     "gcp.image_map": {},
     "ssh.public_key": "",
