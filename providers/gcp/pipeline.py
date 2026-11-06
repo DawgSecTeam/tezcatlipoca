@@ -68,10 +68,17 @@ def engine_template(ctx):
     from engine.engine_identity_ops import clean_engine_for_template, stamp_engine_build
     from engine import template_freeze
     from estate import config
-    from common.utils import compfile_value
+    from common.utils import compfile_value, stages_red
+    from deploy_lib.phases._estate import has_in_path_firewall, slot_team_identifiers
 
     creds = _creds()
     prefix = _prefix(ctx)
+    # The build VM lives on this run's OWN mgmt subnet (behind the same ingress rule the
+    # engine gets), so the VPC must exist before the template does — create_estate later
+    # re-runs ensure_network and finds it all standing.
+    network_ops.ensure_network(ctx.document(), comp_name=ctx.comp_name, run_id=ctx.run_id,
+                               team_identifiers=slot_team_identifiers(ctx),
+                               in_path=has_in_path_firewall(ctx), red=stages_red(ctx.comp_dir))
     name = naming.image_name(prefix, "engine")
     base = image_ops.resolve_base(creds, "engine-base")
     quotient_ref = compfile_value(ctx.comp_dir / "Compfile", "quotient_ref")
