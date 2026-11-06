@@ -227,10 +227,11 @@ def _engine_address(creds, prefix):
     if not info:
         raise RuntimeError("the engine's reserved address is missing — ensure_network ran"
                           " out of order")
-    # accessConfigs.natIP takes a relative resource URL: the API's selfLinks moved to
-    # www.googleapis.com hosts that the insert validator then refuses, so build the
-    # stable relative form from the name we reserved.
-    return (f"projects/{creds['project_id']}/regions/{compute.region()}"
+    # natIP takes the FULL URL on the compute.googleapis.com host — the field rejects
+    # both the relative form (subnetwork accepts) and the www.googleapis.com selfLinks
+    # the GET hands back, so construct the documented shape from the reserved name.
+    return (f"https://compute.googleapis.com/compute/v1/projects/{creds['project_id']}"
+            f"/regions/{compute.region()}"
             f"/addresses/{naming.address_name(prefix, 'engine')}")
 
 
