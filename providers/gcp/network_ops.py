@@ -135,10 +135,9 @@ def ensure_engine_route(creds, prefix, engine_name, record=print):
     """
     wan = naming.route_wan_name(prefix)
     via = naming.route_name(prefix)
-    listed = gapi(creds, "GET", "global/routes",
-                  params={"filter": "network eq " +
-                          f"projects/{creds['project_id']}/global/networks/{naming.vpc_name(prefix)}",
-                          "maxResults": 100}).get("items") or []
+    # Name-match over the plain list: a filtered network= query returns nothing for
+    # these routes (live 409 against a route it should have seen), so don't trust it.
+    listed = gapi(creds, "GET", "global/routes", params={"maxResults": 500}).get("items") or []
     have = {r["name"] for r in listed}
     network = f"projects/{creds['project_id']}/global/networks/{naming.vpc_name(prefix)}"
     if wan not in have:
