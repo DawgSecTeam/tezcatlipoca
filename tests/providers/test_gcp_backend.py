@@ -601,6 +601,12 @@ class CreateEngineTest(GcpBase):
         self.assertEqual(route["destRange"], "0.0.0.0/0")
         self.assertEqual(route["priority"], 900)
         self.assertIn("tz-c1-0e6474eb-quotient-engine", route["nextHopInstance"])
+        # ... while the ENGINE'S OWN egress rides a higher-priority TAGGED WAN route
+        # (next-hop instances are NOT exempt from their own routes)
+        wan = self.fake.routes[f"tz-c1-0e6474eb-route-engine-wan"]
+        self.assertEqual(wan["priority"], 800)
+        self.assertEqual(wan["tags"], ["tz-engine"])
+        self.assertIn("default-internet-gateway", wan["nextHopGateway"])
         # the realized ephemeral address is the run's recorded mgmt identity
         self.assertEqual(ctx.engine_mgmt_ip, nics[0]["accessConfigs"][0]["natIP"])
         self.assertEqual(doc.document.data["identity"]["engine_mgmt_ip"],

@@ -124,27 +124,43 @@ def _ensure_mgmt_rule(creds, prefix, net_link, labels, record):
 
 
 def ensure_engine_route(creds, prefix, engine_name, record=print):
-    """Send every team subnet's default traffic to the engine (priority beats the
-    auto-created default-internet-gateway route at 1000; GCP never re-applies a
-    next-hop instance's own traffic, so the engine's egress keeps its own path).
+    """Two routes make the engine the range's router.
 
-    On gcp the engine cannot BE each subnet's .1 — that address is the VPC gateway —
-    so it holds .2 and this route is what makes it the range's router.
+    The 0/0-by-engine route (priority 900) sends every other subnet's default traffic
+    through it — boxes, red01, all of it. The ENGINE'S OWN traffic is NOT exempt from
+    next-hop routes (live proof: its public-SSH dialed "filtered" while the route
+    stood, replies looping into their own next hop), so a higher-priority TAGGED
+    route (800, network tag tz-engine) sends the engine's own egress to the default
+    internet gateway, where Cloud NAT picks it up.
     """
-    name = naming.route_name(prefix)
-    listed = gapi(creds, "GET", "global/routes", params={"maxResults": 500}).get("items") or []
-    if any(r["name"] == name for r in listed):
-        return name
-    record(f"  network: default route via the engine ({name}, priority 900)")
-    compute.wait_op(creds, gapi(creds, "POST", "global/routes", data={
-        "name": name,
-        "network": f"projects/{creds['project_id']}/global/networks/{naming.vpc_name(prefix)}",
-        "destRange": "0.0.0.0/0",
-        "priority": 900,
-        "nextHopInstance": (f"https://compute.googleapis.com/compute/v1/projects/"
-                            f"{creds['project_id']}/{compute.zone_and(engine_name)}"),
-        "description": f"tezcatlipoca — boxes default through the engine ({prefix})"}))
-    return name
+    wan = naming.route_wan_name(prefix)
+    via = naming.route_name(prefix)
+    listed = gapi(creds, "GET", "global/routes",
+                  params={"filter": "network eq " +
+                          f"projects/{creds['project_id']}/global/networks/{naming.vpc_name(prefix)}",
+                          "maxResults": 100}).get("items") or []
+    have = {r["name"] for r in listed}
+    network = f"projects/{creds['project_id']}/global/networks/{naming.vpc_name(prefix)}"
+    if wan not in have:
+        record(f"  network: engine WAN route ({wan}, priority 800, tag {ENGINE_TAG})")
+        compute.wait_op(creds, gapi(creds, "POST", "global/routes", data={
+            "name": wan, "network": network,
+            "destRange": "0.0.0.0/0", "priority": 800,
+            "nextHopGateway": (f"https://www.googleapis.com/compute/v1/projects/"
+                               f"{creds['project_id']}/global/gateways/"
+                               f"default-internet-gateway"),
+            "tags": [ENGINE_TAG],
+            "description": "tezcatlipoca — the engine's own egress (its next-hop-route "
+                           "exemption is a myth; this route keeps its replies alive)"}))
+    if via not in have:
+        record(f"  network: default traffic via the engine ({via}, priority 900)")
+        compute.wait_op(creds, gapi(creds, "POST", "global/routes", data={
+            "name": via, "network": network,
+            "destRange": "0.0.0.0/0", "priority": 900,
+            "nextHopInstance": (f"https://compute.googleapis.com/compute/v1/projects/"
+                                f"{creds['project_id']}/{compute.zone_and(engine_name)}"),
+            "description": f"tezcatlipoca — boxes default through the engine ({prefix})"}))
+    return via
 
 
 def delete_network(creds, vpc, log=print):

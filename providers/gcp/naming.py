@@ -76,6 +76,10 @@ def route_name(prefix):
     return _clean(f"{prefix}-route-engine")
 
 
+def route_wan_name(prefix):
+    return _clean(f"{prefix}-route-engine-wan")
+
+
 def address_name(prefix, role):
     return _clean(f"{prefix}-ip-{role}")
 
