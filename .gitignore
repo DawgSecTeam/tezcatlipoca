@@ -19,7 +19,11 @@ venv/
 quotient/__pycache__/
 .claude
 __pycache__/
-proxmox
+# The Proxmox SSH key at the repo root (the .pub half is tracked). Anchored: a bare
+# "proxmox" also matched the providers/proxmox/ DIRECTORY, so the platform split's
+# provider files never reached git and every deploy died on the missing module.
+/proxmox
+/proxmox.pub
 # GCP service-account credential files for the gcp deploy provider (config names the path)
 .gcp-sa*.json
 deploy.log
