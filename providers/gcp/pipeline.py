@@ -93,7 +93,7 @@ def engine_template(ctx):
     existing = compute.image(creds, name)
     rebuild = True
     if existing is not None:
-        if image_ops.image_hash(existing) == engine_hash:
+        if image_ops.image_hash(existing) == image_ops.hash_value(engine_hash):
             print(f"  Engine image hash matches — reusing {name}")
             rebuild = False
         elif not template_freeze.frozen_gate(
@@ -252,7 +252,7 @@ def build_golden_sets(ctx, stored, coverage_recorder):
         digest = (ctx.golden_hashes or {}).get(box) or ""
         existing = compute.image(creds, image)
         if existing is not None:
-            if image_ops.image_hash(existing) == digest:
+            if image_ops.image_hash(existing) == image_ops.hash_value(digest):
                 print(f"  Golden {box}: image hash matches — reusing {image}")
                 golden_ids[box] = target["vmid"]
                 continue

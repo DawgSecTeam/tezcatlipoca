@@ -487,3 +487,20 @@ class PreflightTest(GcpBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HashLabelTest(GcpBase):
+    def test_a_64_char_digest_stamps_within_the_63_char_label_cap(self):
+        import hashlib
+        digest = hashlib.sha256(b"engine").hexdigest()
+        self.assertEqual(len(digest), 64)
+        image_ops.create_from_instance(
+            {}, "tz-c1-0e6474eb-engine-img",
+            {"disks": [{"boot": True, "source": "disk/x"}]},
+            {"tz-comp": "c1", image_ops.HASH_LABEL: digest})
+        stored = self.fake.images["tz-c1-0e6474eb-engine-img"]["labels"][image_ops.HASH_LABEL]
+        self.assertEqual(len(stored), 63)
+        self.assertEqual(stored, image_ops.hash_value(digest))
+        # the reuse compare goes through the same clamp, so stamps match expectations
+        self.assertEqual(image_ops.image_hash(self.fake.images["tz-c1-0e6474eb-engine-img"]),
+                         image_ops.hash_value(digest))

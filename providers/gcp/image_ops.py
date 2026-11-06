@@ -11,6 +11,14 @@ from providers.gcp import compute
 from providers.gcp.client import gapi
 
 HASH_LABEL = "tezcatlipoca-m4"
+# GCP label values cap at 63 chars; a sha256 is 64 hex. The stamp keeps the digest's WEAKEST
+# bit (the last char) dropped — both write and compare go through this, so reuse semantics
+# are unchanged.
+HASH_MAX = 63
+
+
+def hash_value(digest):
+    return str(digest)[:HASH_MAX]
 
 
 def resolve_base(creds, template_name):
@@ -64,8 +72,17 @@ def image_hash(info):
 
 
 def create_from_instance(creds, name, instance_info, labels, family=None, log=print):
-    """A stopped instance's boot disk becomes a custom image (goldens, engine template)."""
+    """A stopped instance's boot disk becomes a custom image (goldens, engine template).
+
+    The hash label is clamped to GCP's 63-char value cap here — a caller passing the raw
+    64-char digest survives instead of failing the create after a 20-minute build.
+    """
     source = next(d["source"] for d in instance_info.get("disks", []) if d.get("boot"))
+    labels = dict(labels)
+    if HASH_LABEL in labels:
+        labels[HASH_LABEL] = hash_value(labels[HASH_LABEL])
+    if len(name) > 63:
+        raise SystemExit(f"  ERROR: image name {name!r} exceeds GCP's 63-char limit")
     body = {"name": name, "sourceDisk": source, "labels": labels}
     if family:
         body["family"] = family
