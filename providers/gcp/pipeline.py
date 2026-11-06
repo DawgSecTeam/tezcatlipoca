@@ -210,7 +210,8 @@ def _engine_address(creds, prefix):
     if not info:
         raise RuntimeError("the engine's reserved address is missing — ensure_network ran"
                           " out of order")
-    return info["address"]
+    # accessConfigs.natIP takes the address RESOURCE selfLink, never the bare IP value.
+    return info["selfLink"]
 
 
 # ---- phase 4: goldens ----

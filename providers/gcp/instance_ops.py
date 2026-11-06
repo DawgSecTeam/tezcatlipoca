@@ -17,11 +17,23 @@ def machine_type(cpu, memory_mb):
 
 
 def nic(subnet_name, ip, external=None):
-    """The create order IS the guest's NIC order: mgmt first, then teams, transit, red."""
+    """The create order IS the guest's NIC order: mgmt first, then teams, transit, red.
+
+    `external="EPHEMERAL"` gets an auto-assigned public IP (the ONE_TO_ONE_NAT accessConfig
+    with NO natIP field — a present natIP names a SPECIFIC reserved address, and a bare
+    IP value is refused); any other truthy value must be an address selfLink.
+    """
+    if external == "EPHEMERAL":
+        access = {"name": "External NAT", "type": "ONE_TO_ONE_NAT"}
+    elif external:
+        access = {"name": "External NAT", "type": "ONE_TO_ONE_NAT", "natIP": external}
+    else:
+        access = None
+    if access is None:
+        return {"subnetwork": f"regions/{compute.region()}/subnetworks/{subnet_name}",
+                "networkIP": ip}
     return {"subnetwork": f"regions/{compute.region()}/subnetworks/{subnet_name}",
-            "networkIP": ip,
-            **({"accessConfigs": [{"name": "External NAT", "type": "ONE_TO_ONE_NAT",
-                                   "natIP": external}]} if external else {})}
+            "networkIP": ip, "accessConfigs": [access]}
 
 
 def metadata(ssh_user=None, ssh_public_key="", cloud_config=""):
