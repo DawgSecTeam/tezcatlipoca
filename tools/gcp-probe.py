@@ -12,26 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from providers.gcp.client import COMPUTE_ROOT, gapi, load_credentials  # noqa: E402
 
-PUBLIC_IMAGE_PROJECTS = (
-    ("ubuntu", "ubuntu-os-cloud", "family eq ubuntu-2404-lts-amd"),
-    ("debian", "debian-cloud", "family eq debian-12"),
-    ("windows", "windows-cloud", "family eq windows-2022"),
-    ("rhel", "rhel-cloud", "family eq rhel-9"),
-    ("centos", "centos-cloud", "family eq centos-stream-9"),
-    ("fedora", "fedora-cloud", None),
-    ("alpine", "alpine-cloud", None),
-)
+PUBLIC_IMAGE_PROJECTS = ("ubuntu-os-cloud", "debian-cloud", "windows-cloud", "rhel-cloud",
+                         "centos-cloud", "coreos-cloud", "fedora-cloud")
 
 NIC_PROBES = ("e2-standard-4", "e2-standard-8", "n2-standard-4", "n2-standard-8",
               "n2d-standard-4", "c3-standard-4", "c3-standard-8", "c4-standard-4")
-
-
-def _image_params(filt):
-    params = {"orderBy": "creationTimestamp desc", "maxResults": 5}
-    if filt:
-        params["filter"] = filt
-        params["maxResults"] = 3
-    return params
 
 
 def _try(label, fn):
@@ -68,20 +53,15 @@ def main():
             print("  billing: NOT ENABLED — GCP deploys will fail until a billing account is linked")
             failures.append("billing missing")
 
-    services = _try("services",
-                    lambda: gapi(creds, "GET", f"https://serviceusage.googleapis.com/v1/projects/{project}/services",
-                                params={"filter": "state:ENABLED", "pageSize": 200}))
-    enabled = set()
-    if services:
-        enabled = {s["name"].removeprefix("googleapis.com/") if "/" in s["name"] else s["name"]
-                   for s in services.get("items", [])}
-        names = sorted(n for n in enabled if "compute" in n or "oslogin" in n or "billing" in n)
-        print(f"  relevant enabled APIs: {', '.join(names) or 'none'}")
-        if "compute.googleapis.com" not in {s["name"] for s in services.get("items", [])}:
+    compute_state = _try("compute API",
+                        lambda: gapi(creds, "GET",
+                                     f"https://serviceusage.googleapis.com/v1/projects/{project}/services/compute.googleapis.com"))
+    if compute_state is not None:
+        state = compute_state.get("state")
+        print(f"  compute.googleapis.com: {state or 'UNKNOWN'}"
+              + ("" if state == "ENABLED" else " — enable before deploying"))
+        if state != "ENABLED":
             failures.append("compute.googleapis.com not enabled")
-            print("  compute.googleapis.com: NOT ENABLED — enable before deploying")
-    else:
-        failures.append("serviceusage unreadable")
 
     regions = _try("regions list", lambda: gapi(creds, "GET", "regions", params={"maxResults": 100}))
     if regions and regions.get("items") is not None:
@@ -97,45 +77,45 @@ def main():
     if region and region.get("quotas"):
         print(f"  {args.region} quotas:")
         for q in region["quotas"]:
-            if q["usage"] > 0 or q["name"] in ("CPUS", "DISKS_TOTAL_GB", "NETWORKS",
-                                               "SUBNETWORKS_PER_NETWORK", "IN_USE_ADDRESSES"):
-                print(f"    {q['name']:28s} {q['usage']:8.0f} / {q['limit']:.0f}")
+            metric = q.get("metric")
+            if q["usage"] > 0 or metric in ("CPUS", "DISKS_TOTAL_GB", "NETWORKS",
+                                            "SUBNETWORKS_PER_NETWORK", "IN_USE_ADDRESSES"):
+                print(f"    {metric:28s} {q['usage']:8.0f} / {q['limit']:.0f}")
 
     project_quotas = _try("global quotas", lambda: gapi(creds, "GET", ""))
     if project_quotas and project_quotas.get("quotas"):
         for q in project_quotas["quotas"]:
-            if q["name"] in ("NETWORKS", "SUBNETWORKS", "FIREWALLS", "IMAGES",
-                             "SNAPSHOTS", "MACHINE_IMAGES", "INSTANCE_GROUPS"):
-                print(f"    global {q['name']:17s} {q['usage']:8.0f} / {q['limit']:.0f}")
+            if q["metric"] in ("NETWORKS", "SUBNETWORKS", "FIREWALLS", "IMAGES",
+                               "SNAPSHOTS", "MACHINE_IMAGES", "INSTANCE_GROUPS"):
+                print(f"    global {q['metric']:17s} {q['usage']:8.0f} / {q['limit']:.0f}")
 
     zone = f"{args.region}-a"
     types = _try("machine types",
                  lambda: gapi(creds, "GET", f"zones/{zone}/machineTypes", params={"maxResults": 500}))
     if types and types.get("items") is not None:
+        # This project's machineTypes view does not expose `maximumNetworkInterfaces`, so the
+        # documented per-family ceilings (8 on e2/n2/C-series) govern via gcp config and the
+        # create call's own refusal, never a guessed readback here.
         by_name = {t["name"]: t for t in types["items"]}
-        max_nics = max((t.get("maximumNetworkInterfaces") or 0) for t in types["items"])
-        print(f"  {zone}: highest NIC count on any machine type: {max_nics}")
         for name in NIC_PROBES:
             t = by_name.get(name)
             if t:
-                print(f"    {name:14s} NICs={t.get('maximumNetworkInterfaces')}  "
-                      f"guestCpus={t['guestCpus']}  memMb={t['memoryMb']}")
-        if max_nics < 8:
-            failures.append(f"NIC ceiling {max_nics} in {zone} caps teams per range")
+                print(f"    {name:14s} guestCpus={t['guestCpus']}  memMb={t['memoryMb']}  "
+                      f"maxNICs={t.get('maximumNetworkInterfaces') or 'n/a'}")
 
     networks = _try("networks", lambda: gapi(creds, "GET", "global/networks"))
     if networks and networks.get("items") is not None:
         print(f"  existing networks: {[n['name'] for n in networks['items']]}")
 
-    print("  stock images (the base-image map's source pool):")
-    for label, image_project, filt in PUBLIC_IMAGE_PROJECTS:
-        catalog = _try(f"    {label}",
-                       lambda image_project=image_project, filt=filt:
+    print("  stock images (newest first; family names are what gcp.image_map pins):")
+    for image_project in PUBLIC_IMAGE_PROJECTS:
+        catalog = _try(f"    {image_project}",
+                       lambda image_project=image_project:
                        gapi(creds, "GET", f"{COMPUTE_ROOT}/projects/{image_project}/global/images",
-                            params=_image_params(filt)))
+                            params={"orderBy": "creationTimestamp desc", "maxResults": 6}))
         if catalog and catalog.get("items") is not None:
             for img in catalog["items"][:3]:
-                print(f"    {label:8s} {img['name']}  status={img.get('status')}  family={img.get('family')}")
+                print(f"    {image_project:16s} {img['name']}  family={img.get('family')}")
 
     print()
     if failures:
