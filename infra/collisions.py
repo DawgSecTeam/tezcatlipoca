@@ -282,8 +282,46 @@ def select_engine_ip(vms, claimed=(), skip_vmids=(), ours_tags=None):
     return None, unchecked
 
 
+def _declared_ipv4s(value):
+    """The static addresses declared in one Proxmox net/ipconfig string (`...,ip=10.0.0.5/24`)."""
+    out = []
+    for part in str(value or "").split(","):
+        part = part.strip()
+        if not part.startswith("ip="):
+            continue
+        addr = part[3:].split("/")[0].strip()
+        if addr and addr.lower() != "dhcp":
+            out.append(addr)
+    return out
+
+
 def guest_ipv4s(vm):
-    """IPv4 addresses a running guest reports through its agent, or None when it can't be asked."""
+    """IPv4 addresses a running guest holds, or None when it can't be determined.
+
+    Ask the guest agent first. A container has no agent, and a VM without it installed answers
+    404, so both fall back to the address DECLARED in the guest's config — a container's `netN`
+    or a VM's `ipconfigN`. Without those fallbacks every container on the host was
+    "uncheckable", and `select_red_ip` refuses the whole band when anything is unchecked
+    (run-14e4d785: 15 permanent club containers blocked a deploy whose band they cannot touch).
+    """
+    kind = (vm.get("type") or "qemu").lower()
+    addrs = _agent_ipv4s(vm) if kind == "qemu" else None
+    if addrs is not None:
+        return addrs
+    try:
+        data = proxmox_api("GET", f"/nodes/{vm['node']}/{kind}/{vm['vmid']}/config")["data"]
+    except Exception:
+        return None
+    declared = []
+    for key, value in (data or {}).items():
+        if key.startswith("net") or key.startswith("ipconfig"):
+            declared.extend(_declared_ipv4s(value))
+    # An all-dhcp guest with no agent is genuinely unknown; saying so keeps the refusal honest.
+    return declared or None
+
+
+def _agent_ipv4s(vm):
+    """The addresses a QEMU guest reports through its agent, or None when it can't be asked."""
     try:
         result = proxmox_api(
             "GET", f"/nodes/{vm['node']}/qemu/{vm['vmid']}/agent/network-get-interfaces"
