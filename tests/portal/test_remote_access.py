@@ -72,6 +72,34 @@ class RenderPolicyTest(unittest.TestCase):
         self.assertIn('"group:alumni": []', text)
         self.assertIn('"group:alumni"', text)  # the grant stays too
 
+    def test_a_grant_keeps_its_live_groups_when_one_is_gone(self):
+        # The club row is ONE grant naming two groups:
+        #   ["group:team-friends", "group:alumni"] -> 192.168.100.0/24
+        # When the ldap sync empties group:alumni, only that name is dead. Dropping the whole
+        # row would revoke team-friends too -- the 2026-10-23 regression (team-friends
+        # default-DENIED until hand-restored). The row is narrowed instead: live group kept,
+        # dead name removed.
+        policy = {
+            "groups": {"group:team-friends": ["amerrym1@"], "group:full-access": ["x@"]},
+            "grants": [{"src": ["group:team-friends", "group:alumni"],
+                        "dst": ["192.168.100.0/24"], "ip": ["*"]}],
+        }
+        with patch.object(ra, "_read_live_policy", return_value=policy):
+            groups, preserved = ra._read_live_grants()
+        self.assertEqual(len(preserved), 1, "the grant must survive — team-friends still exists")
+        self.assertEqual(preserved[0]["src"], ["group:team-friends"])
+        self.assertEqual(preserved[0]["dst"], ["192.168.100.0/24"])
+        self.assertNotIn("group:alumni", preserved[0]["src"])
+
+    def test_a_grant_whose_every_group_is_gone_is_dropped(self):
+        policy = {
+            "groups": {"group:full-access": ["x@"]},
+            "grants": [{"src": ["group:alumni"], "dst": ["192.168.100.0/24"], "ip": ["*"]}],
+        }
+        with patch.object(ra, "_read_live_policy", return_value=policy):
+            groups, preserved = ra._read_live_grants()
+        self.assertEqual(preserved, [], "a grant with no live source can never match")
+
     def test_grant_naming_an_undefined_group_gets_a_definition(self):
         # The live file had a grant naming group:alumni while its `groups` block defined only
         # full-access and team-friends. Re-emitting that faithfully produced an illegal policy:

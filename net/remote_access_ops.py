@@ -116,15 +116,23 @@ def _read_live_grants():
         srcs = g.get("src", [])
         if "group:full-access" in srcs or any(s.startswith("comp-") for s in srcs):
             continue  # this module owns those rows
-        # A grant naming a group the live policy no longer DEFINES is stale (the ldap
-        # sync drops an emptied group; its grant survived one render longer — live:
-        # 'group not defined in policy: group:alumni', run-00be5b01). Re-emitting it
-        # would refuse the whole file, so the stale grant is dropped with its group:
-        # the access it granted is already gone (an absent group grants nothing).
-        if not all(s in groups for s in srcs):
-            print(f"  dropping a preserved grant whose group is gone: {srcs}")
+        # A group the live policy no longer DEFINES cannot be re-emitted -- headscale
+        # refuses the entire file ('group not defined in policy: group:alumni'). But a
+        # grant often names SEVERAL groups in one row (the club row is
+        # ["group:team-friends", "group:alumni"] -> 192.168.100.0/24), so dropping the
+        # row because ONE name is gone silently revokes the survivors' access -- exactly
+        # the regression this function exists to prevent (2026-10-23: team-friends
+        # default-DENIED until hand-restored). Narrow the row instead: keep every source
+        # that still resolves, drop only the dead names, and drop the row only when
+        # nothing is left (a grant with no source can never match).
+        live_srcs = [s for s in srcs if not s.startswith("group:") or s in groups]
+        dead = [s for s in srcs if s not in live_srcs]
+        if dead:
+            print(f"  dropping undefined group(s) {dead} from a preserved grant {srcs}")
+        if not live_srcs:
+            print(f"  dropping a preserved grant with no live source: {srcs}")
             continue
-        preserved.append(g)
+        preserved.append({**g, "src": live_srcs})
     return groups, preserved
 
 
