@@ -5,7 +5,7 @@ import re
 import time
 
 from engine.engine_cmd_ops import _run_engine_cmd, start_quotient
-from engine.engine_health_ops import install_range_healthcheck
+from engine.engine_health_ops import gcp_docker_egress_pair, install_range_healthcheck
 
 
 def _clone_quotient_cmd(quotient_ref):
@@ -173,12 +173,18 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
 
 
 def _install_firewall_and_healthcheck(ctx):
+    # gcp: the fabric drops egress whose source the NIC does not own, so Quotient's
+    # containerized checks need their team-bound egress masked as the engine (live
+    # gcp-acc21: every SMTP check timed out with :25 reachable from the engine host).
+    gcp_egress = gcp_docker_egress_pair((ctx or {}).get("platform") or "proxmox")
     print("  Restoring network forwarding rules after Docker start...")
     _run_engine_cmd(ctx, (
             "sudo iptables -P FORWARD ACCEPT && "
             "sudo iptables -C FORWARD -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP 2>/dev/null || "
             "sudo iptables -I FORWARD 1 -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP && "
             "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE && "
+            + (gcp_egress + " && " if gcp_egress else "")
+            +
             # MaxSessions 64 for the operator's ControlMaster multiplexing: every per-box
             # ProxyCommand shares one engine connection and the default 10 throttles it.
             "sudo sed -i -e 's/^#*AllowTcpForwarding.*/AllowTcpForwarding yes/' "
@@ -196,6 +202,7 @@ def _install_firewall_and_healthcheck(ctx):
         "iptables -I FORWARD 1 -s 192.168.0.0/16 -d 192.168.0.0/16 -j DROP\n"
         "iptables -t nat -C POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE 2>/dev/null || "
         "iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE\n"
+        + (gcp_egress + "\n" if gcp_egress else "")
     )
     firewall_service = (
         "[Unit]\n"

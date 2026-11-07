@@ -189,3 +189,31 @@ class ParseRfc3339(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GcpDockerEgressMask(unittest.TestCase):
+    """GCE's fabric drops egress whose source the NIC does not own: Quotient's
+    containerized checks need their team-bound egress SNATed as the engine
+    (live gcp-acc21: SMTP checks timed out while :25 answered from the host)."""
+
+    def test_the_pair_is_gcp_only(self):
+        from engine.engine_health_ops import gcp_docker_egress_pair
+        self.assertEqual(gcp_docker_egress_pair("proxmox"), "")
+        self.assertEqual(gcp_docker_egress_pair(""), "")
+        pair = gcp_docker_egress_pair("gcp")
+        self.assertIn("-s 172.16.0.0/12 -d 192.168.0.0/16 -j MASQUERADE 2>/dev/null ||", pair)
+        self.assertIn("sudo iptables -t nat -A POSTROUTING -s 172.16.0.0/12", pair)
+
+    def test_healthcheck_asserts_the_rule_on_gcp_only(self):
+        from engine import engine_health_ops
+        gcp = engine_health_ops.healthcheck_script("gcp")
+        self.assertIn("docker-egress MASQUERADE missing from POSTROUTING", gcp)
+        self.assertIn("-s 172.16.0.0/12 -d 192.168.0.0/16 -j MASQUERADE", gcp)
+        pve = engine_health_ops.healthcheck_script()
+        self.assertNotIn("docker-egress", pve)
+
+    def test_bootstrap_writes_the_pair_into_both_rule_texts_on_gcp(self):
+        import inspect
+        from engine import engine_bootstrap_ops as bo
+        src = inspect.getsource(bo._install_firewall_and_healthcheck)
+        self.assertIn("gcp_docker_egress_pair", src)

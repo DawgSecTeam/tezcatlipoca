@@ -7,8 +7,24 @@ from pathlib import Path
 from common.ssh_ops import engine_ssh_opts
 
 
-def healthcheck_script():
-    return (
+def gcp_docker_egress_pair(platform):
+    """The check|add iptables pair that SNATs docker-sourced egress toward team boxes.
+
+    GCE's fabric drops egress whose source the NIC does not own, so Quotient's
+    containerized service checks died mid-flight ('check timeout exceeded' with
+    :25 provably reachable from the engine host, live gcp-acc21) — the engine must
+    mask its containers' team-bound traffic as its own. Proxmox bridges never check
+    sources, so the pair is gcp-only."""
+    if platform != "gcp":
+        return ""
+    return ("iptables -t nat -C POSTROUTING -s 172.16.0.0/12 -d 192.168.0.0/16 "
+            "-j MASQUERADE 2>/dev/null || "
+            "sudo iptables -t nat -A POSTROUTING -s 172.16.0.0/12 "
+            "-d 192.168.0.0/16 -j MASQUERADE")
+
+
+def healthcheck_script(platform="proxmox"):
+    script = (
         "#!/bin/bash\n"
         "LOG=/var/log/range-healthcheck.log\n"
         "ts() { date '+%Y-%m-%d %H:%M:%S'; }\n"
@@ -43,6 +59,18 @@ def healthcheck_script():
         "  echo \"$(ts) FAIL nat-rule: team-subnet MASQUERADE missing from POSTROUTING\" >> \"$LOG\"\n"
         "fi\n"
     )
+    if platform == "gcp":
+        script += (
+            "\n"
+            "# 5. gcp: docker's team-bound egress must be masked as the engine (the fabric\n"
+            "# drops container sources; see gcp_docker_egress_pair)\n"
+            "if ! iptables -t nat -C POSTROUTING -s 172.16.0.0/12 -d 192.168.0.0/16 "
+            "-j MASQUERADE 2>/dev/null; then\n"
+            "  echo \"$(ts) FAIL nat-rule: docker-egress MASQUERADE missing from POSTROUTING\" "
+            ">> \"$LOG\"\n"
+            "fi\n"
+        )
+    return script
 
 
 def round_loop_heal_script():
@@ -149,7 +177,8 @@ def install_range_healthcheck(ctx):
         "[Install]\n"
         "WantedBy=timers.target\n"
     )
-    healthcheck_script_b64 = base64.b64encode(healthcheck_script().encode()).decode()
+    healthcheck_script_b64 = base64.b64encode(
+        healthcheck_script(ctx.get("platform") or "proxmox").encode()).decode()
     heal_script_b64 = base64.b64encode(round_loop_heal_script().encode()).decode()
     round_loop_b64 = base64.b64encode(
         Path(__file__).with_name("round_loop.py").read_text(encoding="utf-8").encode()
@@ -191,6 +220,9 @@ def ensure_nat_forwarding(ctx):
         "sudo iptables -t nat -C POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE 2>/dev/null || "
         "sudo iptables -t nat -A POSTROUTING -s 192.168.0.0/16 ! -d 192.168.0.0/16 -j MASQUERADE"
     )
+    egress = gcp_docker_egress_pair((ctx or {}).get("platform") or "proxmox")
+    if egress:
+        cmd += "; " + egress
     subprocess.run(
         [
             "ssh", "-i", key,
