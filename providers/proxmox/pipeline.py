@@ -365,20 +365,22 @@ def record_golden_set(ctx, golden_ids, golden_ids_by_slot):
     document.save()
 
 
-def apply_team_boxes(ctx, golden_ids, golden_ids_by_slot):
-    # keyed by vm_name: two box types can share a base template; any other key cross-wires golden disks
-    by_slot = {int(key): value for key, value in golden_ids_by_slot.items()}
-    templates_by_node = {}
-    sources = {}
-    for target in ctx.all_targets:
-        box, node = target["box"], target["node"]
-        if is_unmanaged(box):
-            templates_by_node.setdefault(node, _template_vmid_map(node))
-            sources[target["vm_name"]] = int(templates_by_node[node][box["template"]])
-        else:
-            sources[target["vm_name"]] = int(by_slot[target["slot"] or 0][box["name"]])
-    with timed(ctx.comp_dir, 4, "apply_team_boxes"):
-        create_team_boxes(ctx, sources)
+def apply_team_boxes(ctx, sources):
+    """Clone every team box from its golden template.
+
+    `sources` is the vm_name -> source-template-vmid map built by the phase (golden.py), which owns
+    the golden-set bookkeeping. The provider owns only the estate mutation, matching the gcp
+    implementation of this same contract. (The pre-split code lived in
+    deploy_lib/phases/_estate.py:create_team_boxes; the platform split moved its BODY here and left
+    the sources computation in the phase.)
+    """
+    from estate import apply as estate_apply
+    from estate import config
+    cfg = config.active()
+    estate_apply.create_team_boxes(
+        ctx.document(), Ownership(ctx.comp_name, ctx.run_id), ctx.all_targets,
+        sources=sources, box_username=ctx.box_username, box_password=ctx.box_password,
+        ssh_public_key=cfg.ssh.public_key)
 
 
 def bootstrap_clones(ctx):
