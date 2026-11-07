@@ -44,8 +44,14 @@ def load_ownership(comp_dir):
                    f"cannot be proven and nothing will be destroyed. Every deploy since 0.2.0 "
                    f"stamps one; a range without it predates 0.2.0 — remove it by hand on "
                    f"the node.")
+    # The recorded platform decides what the loaded env must match: a gcp range's
+    # deployed_endpoint is the gcp:// label, never a PVE URL (live: gcp-acc's destroy
+    # refused against 10.0.0.150 for a range that lives in life-coach-509506).
+    import providers
     deployed = (deployed_state.get("deployed_endpoint") or "").rstrip("/")
-    current = config.active().proxmox.endpoint.rstrip("/")
+    current = (providers.endpoint_label(providers.GCP)
+               if (deployed_state.get("platform") or providers.PROXMOX) == providers.GCP
+               else config.active().proxmox.endpoint.rstrip("/"))
     if deployed and current and deployed != current:
         raise Refusal(
             saw=f"deploy ran against {deployed}, the loaded env targets {current}",

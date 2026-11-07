@@ -138,6 +138,18 @@ class OwnershipTotality(unittest.TestCase):
             self.assertIn("https://new:8006", msg)
             self.assertTrue(ctx.exception.remedy)      # every refusal carries a remedy
 
+    def test_a_gcp_range_is_judged_against_the_gcp_label_not_a_pve_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp)
+            document = estate_state.EstateState.load(comp)
+            import providers
+            document.absorb({"run_id": RUN, "platform": "gcp",
+                            "deployed_endpoint": providers.endpoint_label("gcp")})
+            document.save()
+            with patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://new:8006"}):
+                state, ownership = machinery.load_ownership(comp)
+            self.assertEqual(ownership.run_id, RUN)
+
     def test_sweep_ignores_a_clone_marker_only_vm(self):
     # The leftover sweep matches TAGS only; a clone-marker-only VM is reclaimable solely
         # through the guarded delete primitive.
