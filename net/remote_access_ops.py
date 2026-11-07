@@ -26,7 +26,11 @@ TAILSCALE_INSTALL_CMD = (
 TAILNET_SRC = "100.64.0.0/10"
 INFRA_USER_DEFAULT = "cyberrange-infra"
 POLICY_STATE_FILE = "/home/sysadmin/headscale/config/tezcatlipoca-remote-access.json"
-POLICY_FILE = "/etc/headscale/acl.hujson"
+# The HOST-side path: the headscale container's /etc/headscale is a mount of the host's
+# /home/sysadmin/headscale/config, so a path spelled for the container's view does not
+# exist on the host the SSH helper lands on (every read refused, deploys with remote
+# access enabled died at phase 3 — live 2026-11-06, run-43b70a7f).
+POLICY_FILE = "/home/sysadmin/headscale/config/acl.hujson"
 
 PERSON_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
