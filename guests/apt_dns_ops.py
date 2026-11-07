@@ -60,8 +60,10 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
                                    cloud_init_ctx=ctx)
     if unsettled:
         print(f"    WARNING: {len(unsettled)} box(es) never settled after boot — proceeding")
+        # wait_boxes_settled returns vmids, not targets — the settle loop has no
+        # target left to name (a box unwound from the SSH probe is what the log carries).
         record_degradation("boxes never settled after boot",
-                           ", ".join(str(t.get("ip")) for t in unsettled)[:200])
+                           ", ".join(str(v) for v in sorted(unsettled))[:200])
 
     def _prep(t):
         ip = t["ip"]

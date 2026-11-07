@@ -50,6 +50,19 @@ class AptPrepChannel(unittest.TestCase):
 
         self.assertEqual(dialed, [(TARGET["node"], TARGET["vmid"], 120)])
 
+    def test_unsettled_warning_names_vmids(self):
+        # wait_boxes_settled returns vmids; the pre-fix detail line did t.get("ip")
+        # over those ints and crashed the deploy the moment a box never settled
+        # (live, gcp-acc14 — the unsettled path is reachable on proxmox too).
+        with patch.object(apt_dns_ops, "wait_boxes_settled",
+                          return_value={TARGET["vmid"]}), \
+                patch.object(apt_dns_ops, "record_degradation") as recorded, \
+                patch.object(apt_dns_ops, "box_ssh_retry", return_value=(True, "")):
+            apt_dns_ops.prep_apt_on_boxes([TARGET], GCP_CTX)
+
+        self.assertEqual(recorded.call_args[0][0], "boxes never settled after boot")
+        self.assertEqual(recorded.call_args[0][1], str(TARGET["vmid"]))
+
 
 if __name__ == "__main__":
     unittest.main()
