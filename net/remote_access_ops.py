@@ -106,6 +106,29 @@ def _read_live_grants():
     # team-friends default-DENIED until hand-restored) — so every re-apply now
     # re-emits them verbatim. A read failure is fatal: rendering without them
     # would just re-strip the policy.
+    policy = _read_live_policy()
+    preserved = []
+    for g in policy.get("grants", []):
+        srcs = g.get("src", [])
+        if "group:full-access" in srcs or any(s.startswith("comp-") for s in srcs):
+            continue  # this module owns those rows
+        preserved.append(g)
+    # The preserved grants' GROUPS ride along: a grant naming group:team-friends is
+    # invalid on its own — headscale's policy check refuses the whole file with
+    # 'group not defined in policy' (live: run-ee2f342f preserved the grant and the
+    # render still failed validation). The ldap sync owns those groups' definitions;
+    # this module never invents one, it only carries the live file's through.
+    generated = {"group:full-access"}
+    for comp in _read_policy_state().get("comps", {}).values():
+        for team in comp.get("teams", []):
+            for p in team.get("participants", []):
+                generated.add(f"group:comp-{p}")  # not a real form; comp grants key on users
+    groups = {name: members for name, members in (policy.get("groups") or {}).items()
+              if name != "group:full-access"}
+    return groups, preserved
+
+
+def _read_live_policy():
     env = _headscale_env()
     pw = env["TEZ_HEADSCALE_SSH_PASSWORD"]
     r = _hs_ssh(f"sudo -S -p '' cat {POLICY_FILE}", pw, input_text=pw + "\n",
@@ -115,25 +138,20 @@ def _read_live_grants():
                          f"before re-render — refusing to regenerate without the "
                          f"externally-managed grants (would re-strip the policy)")
     try:
-        policy = json.loads(_strip_hujson(r.stdout))
+        return json.loads(_strip_hujson(r.stdout))
     except ValueError as e:
         raise SystemExit(f"  ERROR: live headscale policy {POLICY_FILE} does not "
                          f"parse as huJSON: {e}")
-    preserved = []
-    for g in policy.get("grants", []):
-        srcs = g.get("src", [])
-        if "group:full-access" in srcs or any(s.startswith("comp-") for s in srcs):
-            continue  # this module owns those rows
-        preserved.append(g)
-    return preserved
 
 
-def render_policy(full_access_users, comps, preserved_grants=None):
+def render_policy(full_access_users, comps, preserved_grants=None, preserved_groups=None):
     # The WHOLE headscale ACL policy, regenerated every time; this module is the only writer of acl.hujson.
     # Grants key on the participant USERNAME, not a node tag: headscale v0.29 builds routers' packet
     # filters for user sources but NOT tag sources, so a tag-sourced dial black-holes elsewhere.
     # preserved_grants: externally-managed grants (e.g. team-friends -> 192.168.100.0/24)
     # carried over verbatim from the live policy — never dropped by a re-render.
+    # preserved_groups: those grants' group definitions, for the same reason — a grant
+    # naming group:team-friends without the group's members is refused by policy check.
     out = []
     out.append("{")
     out.append("  // Managed by tezcatlipoca (remote_access_ops.render_policy) — do not")
@@ -142,7 +160,11 @@ def render_policy(full_access_users, comps, preserved_grants=None):
     out.append("  // the tailnet ran with NO policy (allow-all) before the first seed; the")
     out.append("  // full-access grant preserves that for the pre-existing users.")
     users = ", ".join(f'"{u}"' for u in full_access_users)
-    out.append(f'  "groups": {{"group:full-access": [{users},]}},')
+    group_rows = [f'"group:full-access": [{users},]']
+    for name, members in sorted((preserved_groups or {}).items()):
+        row = ", ".join(f'"{m}"' for m in members)
+        group_rows.append(f'"{name}": [{row},]')
+    out.append("  \"groups\": {" + ", ".join(group_rows) + "},")
     out.append("  \"tagOwners\": {")
     out.append('    "tag:range-router": ["cyberrange-infra@"],')
     out.append("  },")
@@ -367,8 +389,9 @@ def _apply_policy(full_access, comps):
     # Render, stage, validate, restart; the WireGuard data plane flows through a control-plane restart.
     env = _headscale_env()
     pw = env["TEZ_HEADSCALE_SSH_PASSWORD"]
-    preserved = _read_live_grants()
-    policy = render_policy(full_access, comps, preserved_grants=preserved)
+    groups, preserved = _read_live_grants()
+    policy = render_policy(full_access, comps, preserved_grants=preserved,
+                           preserved_groups=groups)
     remote = (f"cat > /tmp/acl.next.hujson <<'TEZEOF'\n{policy}TEZEOF\n"
               f"sudo -S -p '' cp /tmp/acl.next.hujson /home/sysadmin/headscale/config/acl.hujson")
     _hs_ssh(remote, pw, input_text=pw + "\n", timeout=60)

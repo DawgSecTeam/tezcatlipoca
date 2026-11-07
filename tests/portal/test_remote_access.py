@@ -43,6 +43,28 @@ class RenderPolicyTest(unittest.TestCase):
         self.assertNotIn("192.168.102.0/24", text)
         self.assertEqual(text.count('"src"'), 3)
 
+    def test_preserved_grants_carry_their_groups(self):
+        # A preserved grant naming group:team-friends is invalid without that group's
+        # definition — headscale's policy check refuses the whole file ("group not
+        # defined in policy"), so the render must emit the preserved groups too
+        # (live: run-ee2f342f preserved the grant and still failed validation).
+        grants = [{"src": ["group:team-friends", "group:alumni"],
+                   "dst": ["192.168.100.0/24"], "ip": ["*"]}]
+        groups = {"group:team-friends": ["amerrym1@", "cbrock2@"],
+                  "group:alumni": ["jgorsch2@"]}
+        text = ra.render_policy(FULL_ACCESS, COMPS_ONE,
+                                preserved_grants=grants, preserved_groups=groups)
+        self.assertIn('"group:team-friends": ["amerrym1@", "cbrock2@",]', text)
+        self.assertIn('"group:alumni": ["jgorsch2@",]', text)
+        self.assertIn('"group:team-friends", "group:alumni"', text)
+        # the full-access group is always present exactly once (definition + its grant)
+        self.assertEqual(text.count('"group:full-access"'), 2)
+
+    def test_no_preserved_groups_renders_the_foundation_shape(self):
+        text = ra.render_policy(FULL_ACCESS, COMPS_ONE)
+        self.assertIn('"group:full-access"', text)
+        self.assertNotIn("team-friends", text)
+
 
 
 
