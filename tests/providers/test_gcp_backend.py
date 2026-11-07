@@ -316,6 +316,13 @@ class EnsureNetworkTest(GcpBase):
             "tz-c1-0e6474eb-net-mgmt", "tz-c1-0e6474eb-net-red",
             "tz-c1-0e6474eb-net-t101", "tz-c1-0e6474eb-net-t102"])
         self.assertIn("tz-c1-0e6474eb-fw-mgmt", self.fake.firewalls)
+        # red's ops rule: tlaloc stages over red01's EPHEMERAL public IP (SSH only,
+        # same operator sources as the engine's mgmt rule).
+        self.assertIn("tz-c1-0e6474eb-fw-red-mgmt", self.fake.firewalls)
+        self.assertEqual(self.fake.firewalls["tz-c1-0e6474eb-fw-red-mgmt"]["allowed"],
+                         [{"IPProtocol": "tcp", "ports": ["22"]}])
+        self.assertEqual(self.fake.firewalls["tz-c1-0e6474eb-fw-red-mgmt"]["targetTags"],
+                         ["tz-red01"])
         # no static reservation: the engine takes its EPHEMERAL address at create
         self.assertEqual(net["engine_public_ip"], "")
         self.assertEqual([r["name"] for r in document.resources("network")], [net["vpc"]])

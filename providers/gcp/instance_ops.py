@@ -78,6 +78,25 @@ def start(creds, name):
                         timeout=900)
 
 
+def boot_disk(creds, name):
+    """The instance's boot PD selfLink — the resource resize calls in take it."""
+    info = compute.instance(creds, name) or {}
+    source = next((d.get("source") for d in info.get("disks") or [] if d.get("boot")), None)
+    if not source:
+        raise RuntimeError(f"{name} has no boot disk to grow")
+    return source
+
+
+def resize_boot_disk(creds, disk_url, target_gb):
+    """Grow a PD to an absolute size, only when smaller; returns the size it had before."""
+    disk = gapi(creds, "GET", disk_url)
+    current = int(disk.get("sizeGb") or 0)
+    if current < int(target_gb):
+        compute.wait_op(creds, gapi(creds, "POST", f"{disk_url}/resize",
+                                    data={"sizeGb": str(int(target_gb))}))
+    return current
+
+
 def stop(creds, name, timeout=900):
     info = compute.instance(creds, name)
     if info and info.get("status") != "TERMINATED":

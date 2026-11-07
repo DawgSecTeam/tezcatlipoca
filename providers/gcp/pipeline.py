@@ -31,7 +31,7 @@ PLATFORM = "gcp"
 # The engine's and red01's management NICs live on the mgmt subnet (ops ingress).
 MGMT_ENGINE_IP = network_ops.MGMT_ENGINE_IP
 MGMT_RED01_IP = "10.224.0.20"
-RED01_TAG = "tz-red01"
+RED01_TAG = network_ops.RED01_TAG
 
 
 def _creds():

@@ -797,29 +797,48 @@ def _guest_grow_script():
 def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
                     runner=None, timeout=600):
     from infra.client import proxmox_api, wait_for_proxmox_task
+    import providers
     runner = runner or _default_runner
     target = int(target_gb or red_disk_gb(comp_dir))
-    node = None
-    for vm in ((proxmox_api("GET", "/cluster/resources", params={"type": "vm"}) or {})
-               .get("data") or []):
-        if vm.get("vmid") == vmid:
-            node = vm.get("node")
-            break
-    if not node:
-        raise RuntimeError(f"vmid {vmid} not found in the cluster")
-    config = (proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config") or {}).get("data") or {}
-    disk = next((key for key in ("scsi0", "virtio0", "sata0") if config.get(key)), None)
-    if not disk:
-        raise RuntimeError(f"vmid {vmid} has no scsi0/virtio0/sata0 disk")
-    current_gb = _disk_gb(config.get(disk))
-    if not current_gb or current_gb < target:
-        # The API wants an absolute size, and the guest grow must wait for PVE's resize task
-        # or growpart still sees the old disk.
-        res = proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
-                          data={"disk": disk, "size": f"{target}G"})
-        upid = (res or {}).get("data") if isinstance(res, dict) else None
-        if isinstance(upid, str) and upid.startswith("UPID:"):
-            wait_for_proxmox_task(node, upid, timeout=300)
+    disk = None
+    current_gb = None
+    if providers.platform_from_state(comp_dir) != providers.PROXMOX:
+        # gcp has no qm disk handle and no cluster to look vmid 1160 up in (the
+        # proxmox lookup crashed the phase here, live gcp-acc16): red01's boot PD is
+        # born at red_disk_gb — the create pins disk_gb — so this is at most a
+        # compute disks.resize; the in-guest grow below still runs (idempotent)
+        # and its df line is the verdict.
+        from estate import config as estate_config, state as estate_state
+        from providers.gcp import instance_ops, naming
+        from providers.gcp.client import load_credentials
+        creds = load_credentials(estate_config.gcp_credentials_path())
+        flat = estate_state.load_flat(comp_dir)
+        name = naming.instance_name(
+            naming.prefix(flat["comp_name"], flat["run_id"]), "tlaloc-red01")
+        disk = instance_ops.boot_disk(creds, name)
+        current_gb = instance_ops.resize_boot_disk(creds, disk, target)
+    else:
+        node = None
+        for vm in ((proxmox_api("GET", "/cluster/resources", params={"type": "vm"}) or {})
+                   .get("data") or []):
+            if vm.get("vmid") == vmid:
+                node = vm.get("node")
+                break
+        if not node:
+            raise RuntimeError(f"vmid {vmid} not found in the cluster")
+        config = (proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config") or {}).get("data") or {}
+        disk = next((key for key in ("scsi0", "virtio0", "sata0") if config.get(key)), None)
+        if not disk:
+            raise RuntimeError(f"vmid {vmid} has no scsi0/virtio0/sata0 disk")
+        current_gb = _disk_gb(config.get(disk))
+        if not current_gb or current_gb < target:
+            # The API wants an absolute size, and the guest grow must wait for PVE's resize task
+            # or growpart still sees the old disk.
+            res = proxmox_api("PUT", f"/nodes/{node}/qemu/{vmid}/resize",
+                              data={"disk": disk, "size": f"{target}G"})
+            upid = (res or {}).get("data") if isinstance(res, dict) else None
+            if isinstance(upid, str) and upid.startswith("UPID:"):
+                wait_for_proxmox_task(node, upid, timeout=300)
     proc = runner(["ssh", "-i", str(ssh_key), "-o", "StrictHostKeyChecking=no",
                    "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10",
                    f"{RED_USER}@{red_ip}", _guest_grow_script()], timeout=timeout)

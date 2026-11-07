@@ -20,6 +20,7 @@ MGMT_CIDR = "10.224.0.0/24"
 MGMT_ENGINE_IP = "10.224.0.10"
 
 ENGINE_TAG = "tz-engine"
+RED01_TAG = "tz-red01"
 
 MGMT_PORTS = ("22", "80")  # driver SSH + the scoreboard's listener
 
@@ -97,6 +98,11 @@ def ensure_network(document, *, comp_name, run_id, team_identifiers,
         _ensure_rule(creds, prefix, "fw-red-to-engine", net_link,
                      source="10.200.0.0/24", target=ENGINE_TAG,
                      record=record)
+        # tlaloc is staged over red01's EPHEMERAL public IP (resize's in-guest grow,
+        # sensor/director pushes): the same operator sources as the engine's mgmt
+        # rule, SSH only.
+        _ensure_ops_rule(creds, prefix, "red-mgmt", net_link, _ops_sources(),
+                         ("22",), RED01_TAG, record)
 
     document.save()
     return {"vpc": vpc, "mgmt_subnet": mgmt, "engine_public_ip": ""}
@@ -144,26 +150,35 @@ def _ensure_rule(creds, prefix, role, net_link, *, source, target, record=print)
     return name
 
 
-def _ensure_mgmt_rule(creds, prefix, net_link, labels, record):
+def _ops_sources():
     from estate import config
     sources = [s.strip() for s in (config.active().get("gcp.ingress_sources") or "").split(",")
                if s.strip()]
-    rule = naming.firewall_name(prefix, "mgmt")
     if not sources:
         raise SystemExit(
             "  ERROR: gcp.ingress_sources is not set — the driver could not reach the range. "
             "It is a comma list of the OPERATOR egress addresses allowed onto the engine's "
             "SSH and scoreboard (set TEZ_GCP_INGRESS_SOURCES or the profile's [gcp]).")
+    return sources
+
+
+def _ensure_ops_rule(creds, prefix, role, net_link, sources, ports, target, record):
+    rule = naming.firewall_name(prefix, role)
     listed = gapi(creds, "GET", "global/firewalls", params={"maxResults": 500}).get("items") or []
     if any(r["name"] == rule for r in listed):
         return rule
-    record(f"  network: mgmt firewall {rule} (sources {', '.join(sources)})")
+    record(f"  network: ops firewall {rule} ({', '.join(ports)} from {', '.join(sources)} -> {target})")
     compute.wait_op(creds, gapi(creds, "POST", "global/firewalls", data={
         "name": rule, "network": net_link,
-        "direction": "INGRESS", "allowed": [{"IPProtocol": "tcp", "ports": list(MGMT_PORTS)}],
-        "sourceRanges": sources, "targetTags": [ENGINE_TAG],
-        "description": f"tezcatlipoca mgmt — {rule}"}))
+        "direction": "INGRESS", "allowed": [{"IPProtocol": "tcp", "ports": list(ports)}],
+        "sourceRanges": sources, "targetTags": [target],
+        "description": f"tezcatlipoca ops — {rule}"}))
     return rule
+
+
+def _ensure_mgmt_rule(creds, prefix, net_link, labels, record):
+    return _ensure_ops_rule(creds, prefix, "mgmt", net_link, _ops_sources(),
+                            MGMT_PORTS, ENGINE_TAG, record)
 
 
 def ensure_engine_route(creds, prefix, engine_name, record=print):
