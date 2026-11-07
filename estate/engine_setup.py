@@ -67,6 +67,17 @@ def _iface_name(index, platform="proxmox"):
     return f"ens{19 + index}" if platform == "proxmox" else f"ens{5 + index}"
 
 
+def _team_route(identifier, platform="proxmox"):
+    """GCE subnets have no L2: peers' ARP goes unanswered and a connected /24 never
+    delivers. The GCP stanza leases its .2 as a /32 and routes the team subnet via the
+    gateway, so engine->box rides the fabric like every other GCE flow."""
+    return [] if platform == "proxmox" else [
+        f"      routes:",
+        f"        - to: 192.168.{identifier}.0/24",
+        f"          via: 192.168.{identifier}.1",
+    ]
+
+
 def _iface(name, mac, platform="proxmox"):
     """Pin the interface by MAC when the MAC is known.
 
@@ -95,7 +106,9 @@ def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None, mac
     index = 0
     for identifier in team_identifiers:
         lines += _iface(_iface_name(index, platform), mac(index), platform)
-        lines.append(f'      addresses: ["{engine_team_gateway(identifier, platform)}/24"]')
+        lines.append(f'      addresses: ["{engine_team_gateway(identifier, platform)}'
+                     f'{"/24" if platform == "proxmox" else "/32"}"]')
+        lines += _team_route(identifier, platform)
         index += 1
     for identifier in transit_identifiers:
         lines += _iface(_iface_name(index, platform), mac(index), platform)
@@ -103,7 +116,12 @@ def netplan_yaml(team_identifiers, transit_identifiers=(), red_segment=None, mac
         index += 1
     if red_segment:
         lines += _iface(_iface_name(index, platform), mac(index), platform)
-        lines.append(f'      addresses: ["{red_segment["gw"]}/24"]')
+        lines.append(f'      addresses: ["{red_segment["gw"]}'
+                     f'{"/24" if platform == "proxmox" else "/32"}"]')
+        if platform != "proxmox":
+            lines.append(f'      routes:')
+            lines.append(f'        - to: {red_segment["subnet"]}')
+            lines.append(f'          via: 10.200.0.1')
     return "\n".join(lines)
 
 

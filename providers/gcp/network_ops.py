@@ -71,6 +71,32 @@ def ensure_network(document, *, comp_name, run_id, team_identifiers,
 
     net_link = f"projects/{creds['project_id']}/global/networks/{vpc}"
     _ensure_mgmt_rule(creds, prefix, net_link, labels, record)
+    # GCE DEFAULT-DENIES all ingress, and custom VPCs carry no default-allow-internal:
+    # without these, every intra-range flow dies at the target (engine->box SSH,
+    # box->apt-proxy replies) while cross-subnet packets would route STRAIGHT through
+    # the fabric, around the engine's isolation DROP. The per-team source rules keep
+    # team-subnet flows inside their tag, so a cross-team packet has no allow on any path.
+    for identifier in team_identifiers:
+        _ensure_rule(creds, prefix, f"fw-t{identifier}", net_link,
+                     source=f"192.168.{identifier}.0/24",
+                     target=naming.team_tag(identifier),
+                     record=record)
+        _ensure_rule(creds, prefix, f"fw-t{identifier}-to-engine", net_link,
+                     source=f"192.168.{identifier}.0/24",
+                     target=ENGINE_TAG,
+                     record=record)
+    if red:
+        # red's attacks keep their source end-to-end: this admits 10.200.0.10-sized
+        # SOURCES onto every team's boxes (and the engine); nothing admits a team
+        # subnet toward red — same asymmetry as the engine's iptables trio.
+        for identifier in team_identifiers:
+            _ensure_rule(creds, prefix, f"fw-red-to-t{identifier}", net_link,
+                         source="10.200.0.0/24",
+                         target=naming.team_tag(identifier),
+                         record=record)
+        _ensure_rule(creds, prefix, "fw-red-to-engine", net_link,
+                     source="10.200.0.0/24", target=ENGINE_TAG,
+                     record=record)
 
     document.save()
     return {"vpc": vpc, "mgmt_subnet": mgmt, "engine_public_ip": ""}
@@ -99,6 +125,23 @@ def _ensure_router_nat(creds, prefix, mgmt_subnet, record):
             raise
     record(f"  network: Cloud NAT ready on {router}")
     return router
+
+
+def _ensure_rule(creds, prefix, role, net_link, *, source, target, record=print):
+    # No port lists: intra-range flows are port-agnostic by design (apt-proxy 3142,
+    # nakon'd service ports, red's DNAT targets); the isolation is the src/tgt scope,
+    # the same way a PVE team bridge has no port filters either.
+    name = naming.firewall_name(prefix, role)
+    listed = gapi(creds, "GET", "global/firewalls", params={"maxResults": 500}).get("items") or []
+    if any(r["name"] == name for r in listed):
+        return name
+    record(f"  firewall  : {name} (from {source} -> {target})")
+    compute.wait_op(creds, gapi(creds, "POST", "global/firewalls", data={
+        "name": name, "network": net_link, "direction": "INGRESS",
+        "allowed": [{"IPProtocol": proto} for proto in ("tcp", "udp", "icmp")],
+        "sourceRanges": [source], "targetTags": [target],
+        "description": f"tezcatlipoca intra-range — {role}"}))
+    return name
 
 
 def _ensure_mgmt_rule(creds, prefix, net_link, labels, record):

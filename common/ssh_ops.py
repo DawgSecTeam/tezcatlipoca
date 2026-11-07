@@ -203,7 +203,11 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
             time.sleep(10)
         # Diagnose OUTSIDE the print lock: it is a 10 s API/guest poll, and holding the lock
         # across it stalls every other worker's progress line.
-        diagnosis = diagnose_unreachable_box(node, t["vmid"])
+        if (ctx or {}).get("platform") == "gcp":
+            diagnosis = ("      gcp: no guest-agent channel — the serial console carries "
+                         "the box's own boot/DHCP story (compute API serialPort)")
+        else:
+            diagnosis = diagnose_unreachable_box(node, t["vmid"])
         with PRINT_LOCK:
             print(f"    WARNING: {ip} not reachable within timeout — continuing")
             print(diagnosis)

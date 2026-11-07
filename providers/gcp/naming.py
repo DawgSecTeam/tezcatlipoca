@@ -72,6 +72,13 @@ def nat_name(prefix):
     return _clean(f"{prefix}-nat")
 
 
+def team_tag(identifier):
+    """The per-team network tag: the intra-range firewall rules scope by it, so a
+    cross-team packet has no allow anywhere on its path (the engine's iptables FORWARD
+    DROP stays as the second gate)."""
+    return _clean(f"tz-team-{identifier}")
+
+
 def route_name(prefix):
     return _clean(f"{prefix}-route-engine")
 

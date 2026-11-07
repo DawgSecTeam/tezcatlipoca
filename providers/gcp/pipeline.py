@@ -303,6 +303,7 @@ def _build_one_golden(ctx, creds, prefix, target, machine, by_box, coverage_reco
                                    target["ip"])],
             labels=ownership_labels(ctx.comp_name, ctx.run_id, "golden-build",
                                     unit=target["vmid"]),
+            network_tags=(naming.team_tag(identifier),),
             disk_gb=target["box"].get("disk_gb") or 10,
             meta=instance_ops.metadata(
                 ctx.box_username, _ssh_public_key(),
@@ -363,6 +364,7 @@ def apply_team_boxes(ctx, sources):
                                    target["ip"])],
             labels=ownership_labels(ctx.comp_name, ctx.run_id, "team_box",
                                     unit=target["vmid"]),
+            network_tags=(naming.team_tag(target["identifier"]),),
             disk_gb=box.get("disk_gb") or 10,
             meta=instance_ops.metadata(
                 ctx.box_username, _ssh_public_key(),

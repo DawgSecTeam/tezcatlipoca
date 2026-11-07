@@ -624,8 +624,15 @@ class TeamAddressTest(unittest.TestCase):
         from estate.engine_setup import netplan_yaml
         gcp = netplan_yaml(["101"], red_segment={"subnet": "10.200.0.0/24",
                                                  "gw": "10.200.0.2"}, platform="gcp")
-        self.assertIn('192.168.101.2/24', gcp)
-        self.assertIn('10.200.0.2/24', gcp)
+        # GCE leaves the box's NIC without an on-link route to its own subnet
+        # (VPC routes cross subnets on the fabric), so the engine writes /32s
+        # plus explicit per-subnet routes via itself.
+        self.assertIn('192.168.101.2/32', gcp)
+        self.assertIn('10.200.0.2/32', gcp)
+        self.assertIn('to: 192.168.101.0/24', gcp)
+        self.assertIn('via: 192.168.101.1', gcp)
+        self.assertIn('to: 10.200.0.0/24', gcp)
+        self.assertIn('via: 10.200.0.1', gcp)
         # GCE exposes no MACs: the pin is the interface NAME, ens5+ in create order
         self.assertRegex(gcp, r"(?m)^    ens5:")
         self.assertFalse(gcp.count("macaddress"))
