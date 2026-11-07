@@ -11,7 +11,7 @@ from common.windows_ops import is_windows_template
 from infra.client import node_bridges, proxmox_api, wait_for_proxmox_task
 from infra.lifecycle import start_vm
 from infra.ownership import (MARKER, OWNED, Refusal, bridge_owned_by, clone_marker,
-                             destroy_vm_if_exists, ownership_verdict)
+                             destroy_vm_if_exists, gc_orphan_volumes, ownership_verdict)
 
 ENGINE_CORES = 4
 ENGINE_MEMORY_MB = 4096
@@ -198,6 +198,10 @@ def create_team_box(state, ownership, target, *, source_vmid, box_username, box_
                     ssh_public_key):
     box, node, vmid, name = target["box"], target["node"], target["vmid"], target["vm_name"]
     if not _adopt(node, vmid, ownership, name):
+        # An interrupted clone strands its volumes (vm-<id>-cloudinit among them); the
+        # next clone into the slot then dies 'zfs error: dataset already exists'
+        # (run-da3e3ce1, team clones). The golden path gc's before cloning — so does this.
+        gc_orphan_volumes(node, vmid)
         _clone(node, source_vmid, vmid, name, ownership)
         config = {"cores": box["cpu"], "memory": box["memory_mb"], "agent": 1,
                   "tags": _tags(ownership)}
