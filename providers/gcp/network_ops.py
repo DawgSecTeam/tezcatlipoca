@@ -242,7 +242,17 @@ def delete_network(creds, vpc, log=print):
     net = compute.network(creds, vpc)
     if net is None:
         return False
-    prefixes = f"projects/{creds['project_id']}/global/networks/{vpc}"
+    # Subnet/router objects carry the network as a FULL URL; the short project path
+    # compared here never matched and whole tiers survived the sweep (live, gcp-acc).
+    def _ours(ref):
+        return str(ref or "").endswith(f"/global/networks/{vpc}")
+
+    # Routes block a network delete; sweep this range's own before the network goes.
+    for route in [r for r in (gapi(creds, "GET", "global/routes",
+                                   params={"maxResults": 500}).get("items") or [])
+                  if (r["name"] or "").startswith(vpc)]:
+        compute.delete_op(creds, route["selfLink"])
+        log(f"  destroyed route {route['name']}")
     # Firewall rules reference the network and BLOCK its delete; this range's rules
     # all carry the run prefix (the VPC name), so sweep by name.
     for fw in [f for f in (gapi(creds, "GET", "global/firewalls",
@@ -250,22 +260,18 @@ def delete_network(creds, vpc, log=print):
                if (f["name"] or "").startswith(vpc)]:
         compute.delete_op(creds, fw["selfLink"])
         log(f"  destroyed firewall {fw['name']}")
-    # Routes block a network delete; sweep this range's own before the network goes.
-    for route in [r for r in (gapi(creds, "GET", "global/routes",
-                                   params={"maxResults": 500}).get("items") or [])
-                  if (r["name"] or "").startswith(vpc)]:
-        compute.delete_op(creds, route["selfLink"])
-        log(f"  destroyed route {route['name']}")
-    listed = gapi(creds, "GET", f"regions/{compute.region()}/subnetworks",
-                  params={"maxResults": 500}).get("items") or []
-    for sub in [s for s in listed if s["network"] == prefixes]:
-        compute.delete_op(creds, sub["selfLink"])
-        log(f"  destroyed subnet {sub['name']}")
+    # The router first: its Cloud NAT references the subnets, and the API refuses a
+    # subnet delete (and the network's) while the referencing config stands.
     routers = gapi(creds, "GET", f"regions/{compute.region()}/routers",
                    params={"maxResults": 500}).get("items") or []
-    for router in [r for r in routers if r["network"] == prefixes]:
+    for router in [r for r in routers if _ours(r.get("network"))]:
         compute.delete_op(creds, router["selfLink"])
         log(f"  destroyed router {router['name']}")
+    listed = gapi(creds, "GET", f"regions/{compute.region()}/subnetworks",
+                  params={"maxResults": 500}).get("items") or []
+    for sub in [s for s in listed if _ours(s.get("network"))]:
+        compute.delete_op(creds, sub["selfLink"])
+        log(f"  destroyed subnet {sub['name']}")
     addresses = gapi(creds, "GET", f"regions/{compute.region()}/addresses",
                      params={"maxResults": 500}).get("items") or []
     for addr in [a for a in addresses if a["name"].startswith(vpc)]:
