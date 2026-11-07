@@ -73,7 +73,7 @@ class FakeGcp:
                 return sorted(found, key=lambda i: i["name"])[-1]
             name = p.rsplit("/", 1)[-1]
             return self.images.get(name) or self._404(p)
-        if p == f"regions/{self.region}/machineImages":
+        if p == "global/machineImages":
             return {"items": list(self.machine_images.values())}
         if p == "global/networks":
             return {"items": list(self.networks.values())}
@@ -104,7 +104,7 @@ class FakeGcp:
                 return {"items": self._labeled(list(self.instances.values()), params)}
             name = p.rsplit("/", 1)[-1]
             return self.instances.get(name) or self._404(p)
-        if p.startswith(f"regions/{self.region}/machineImages/"):
+        if p.startswith("global/machineImages/"):
             name = p.rsplit("/", 1)[-1]
             return self.machine_images.get(name) or self._404(p)
         raise AssertionError(f"unfake'd GET {p}")
@@ -145,7 +145,7 @@ class FakeGcp:
                 "selfLink": f"https://compute.googleapis.com/compute/v1/projects/"
                             f"{self.project}/regions/{self.region}/routers/{name}"}
             return self._op()
-        if p == f"regions/{self.region}/machineImages":
+        if p == "global/machineImages":
             self.machine_images[data["name"]] = {"name": data["name"], **data}
             return self._op()
         if p == "global/images":

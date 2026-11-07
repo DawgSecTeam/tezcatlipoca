@@ -103,9 +103,13 @@ def delete_image(creds, name):
 
 
 def machine_image_mark(creds, name, instance_name, labels, log=print):
-    """The tz-base/tz-ready point: a machine image (config + disks) of the stopped instance."""
+    """The tz-base/tz-ready point: a machine image (config + disks) of the stopped instance.
+
+    Machine images are GLOBAL: the body references the zonal source, but the collection
+    lives under global/machineImages — the regional path is a frontend 404 (live-probed).
+    """
     log(f"  snapshot  : {name}")
-    compute.wait_op(creds, gapi(creds, "POST", f"regions/{compute.region()}/machineImages", data={
+    compute.wait_op(creds, gapi(creds, "POST", "global/machineImages", data={
         "name": name,
         "sourceInstance": f"zones/{compute.zone()}/instances/{instance_name}",
         "labels": labels}), timeout=3600)
@@ -118,5 +122,4 @@ def list_marks(creds, labels):
 
 def delete_machine_image(creds, name):
     return compute.delete_op(
-        creds, f"https://compute.googleapis.com/compute/v1/projects/"
-               f"{creds['project_id']}/regions/{compute.region()}/machineImages/{name}")
+        creds, f"projects/{creds['project_id']}/global/machineImages/{name}")

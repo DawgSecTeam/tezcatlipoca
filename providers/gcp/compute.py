@@ -102,8 +102,11 @@ def newest_family_image(creds, image_project, family):
 
 
 def machine_image(creds, name):
+    # Machine images are a GLOBAL resource (the only live route is
+    # projects/<id>/global/machineImages; a regions/<r>/machineImages path is a
+    # frontend 404 — probed live, the HTML error page, not a JSON resource error).
     try:
-        return gapi(creds, "GET", f"regions/{region()}/machineImages/{name}")
+        return gapi(creds, "GET", f"global/machineImages/{name}")
     except RuntimeError as e:
         if "404" in str(e):
             return None
@@ -114,7 +117,7 @@ def machine_images(creds, label_filter=None):
     params = {"maxResults": 500}
     if label_filter:
         params["filter"] = " ".join(f"labels.{k}={v}" for k, v in label_filter)
-    return gapi(creds, "GET", f"regions/{region()}/machineImages", params=params).get("items") or []
+    return gapi(creds, "GET", "global/machineImages", params=params).get("items") or []
 
 
 def network(creds, name):
