@@ -108,6 +108,44 @@ class SettleWaiterCarriesTheGuarantee(unittest.TestCase):
         self.assertEqual(unsettled, set())
         gate.assert_called_once_with(CTX, [TARGET], timeout=123)
 
+    def test_gcp_settles_via_the_ssh_probe_and_never_dials_the_agent(self):
+        # A dead channel reads False ("not settled"), not the None that arms the
+        # fallback — so pre-fix the loop idled its whole deadline on PVE dials against
+        # a box no qemu agent ever answers (live, gcp-acc14).
+        probes = []
+
+        def fallback(t):
+            probes.append(t["ip"])
+            return True
+
+        with patch.object(box_settle_ops, "wait_boxes_cloud_init"), \
+                patch.object(box_settle_ops, "_box_settled",
+                             side_effect=AssertionError("guest agent dialed on gcp")):
+            unsettled = box_settle_ops.wait_boxes_settled(
+                [TARGET], "pve", cloud_init_ctx=dict(CTX, platform="gcp"),
+                ssh_fallback=fallback)
+
+        self.assertEqual(unsettled, set())
+        self.assertEqual(probes, [TARGET["ip"]])
+
+    def test_proxmox_keeps_the_agent_probe_as_the_settle_channel(self):
+        probes = []
+
+        def agent_probe(node, vmid):
+            probes.append((node, vmid))
+            return True
+
+        def fallback(t):
+            raise AssertionError("ssh fallback fired on the agent path")
+
+        with patch.object(box_settle_ops, "wait_boxes_cloud_init"), \
+                patch.object(box_settle_ops, "_box_settled", side_effect=agent_probe):
+            unsettled = box_settle_ops.wait_boxes_settled(
+                [TARGET], "pve", cloud_init_ctx=CTX, ssh_fallback=fallback)
+
+        self.assertEqual(unsettled, set())
+        self.assertEqual(probes, [("pve", TARGET["vmid"])])
+
 
 
 if __name__ == "__main__":

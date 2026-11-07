@@ -133,10 +133,15 @@ def wait_boxes_settled(targets, node, timeout=240, ssh_fallback=None, *,
 # fatal). cloud_init_ctx is keyword-only because a box is not settled until cloud-init is done.
     wait_boxes_cloud_init(cloud_init_ctx, targets, timeout=cloud_init_timeout)
     deadline = time.time() + timeout
+    # gcp boxes have no guest-agent channel (nothing runs the qemu agent on compute
+    # engine): the PVE dial can only burn its 20s and, because a dead channel reads
+    # False — "not settled", not the None that arms the fallback — the loop would idle
+    # the whole deadline against a box the SSH probe settles in one pass (live, gcp-acc).
+    agentless = (cloud_init_ctx or {}).get("platform") == "gcp"
 
     def _wait(t):
         while time.time() < deadline:
-            settled = _box_settled(node, t["vmid"])
+            settled = ssh_fallback(t) if agentless else _box_settled(node, t["vmid"])
             if settled is True:
                 return True
             if settled is None and ssh_fallback is not None and ssh_fallback(t):

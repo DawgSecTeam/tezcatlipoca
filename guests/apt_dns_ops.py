@@ -71,7 +71,10 @@ def prep_apt_on_boxes(targets, ctx, use_proxy=True):
         script = _apt_prep_script(gateway)
         remote_cmd = f"sudo bash -c {shlex.quote(script)}"
         box_node = t.get("node") or default_node
-        wait_for_guest_agent(box_node, t["vmid"], timeout=120)
+        # No guest-agent channel on gcp: the wait is a dead 120s stall there, and the
+        # SSH retry below is the whole channel.
+        if (ctx or {}).get("platform") != "gcp":
+            wait_for_guest_agent(box_node, t["vmid"], timeout=120)
         ok, _ = box_ssh_retry(ctx, ip, box_username, remote_cmd,
                               timeout=240, attempts=5, what="apt prep")
         if ok:
