@@ -459,6 +459,22 @@ class DestroyEstateTest(GcpBase):
             doc.record(kind, "", name)
         return doc
 
+    def test_an_unrecorded_labeled_instance_is_swept_before_the_network_tier(self):
+        # A crash between create and record leaves a live, labeled, INVISIBLE-to-the-
+        # inventory machine; its subnet refuses to die while it stands, and the
+        # machinery's sweep only ran after the estate step had already failed.
+        comp, run = "c1", "run-0e6474eb"
+        self.fake.add_instance("tz-c1-0e6474eb-loose-box", comp, run, unit=1234)
+        self.fake.networks["tz-c1-0e6474eb"] = {
+            "name": "tz-c1-0e6474eb",
+            "selfLink": "https://compute.googleapis.com/compute/v1/projects/"
+                        "t-proj/global/networks/tz-c1-0e6474eb"}
+        doc = self._document_with_range(comp, run)
+        lines = []
+        summary = pipeline.destroy_estate(doc.document, full=True, log=lines.append)
+        self.assertNotIn("tz-c1-0e6474eb-loose-box", self.fake.instances)
+        self.assertTrue(any("swept instance tz-c1-0e6474eb-loose-box" in ln for ln in lines))
+
     def test_a_network_delete_sweeps_this_runs_firewalls_first(self):
         # GCP refuses to delete a network a firewall still references (live, gcp-acc's
         # teardown stalled on fw-fw-t101-to-engine with everything else already gone).

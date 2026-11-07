@@ -497,6 +497,17 @@ def destroy_estate(document, *, full=True, nodes=None, log=print):
             destroyed.append(dict(row))
             log(f"  destroyed {kind} {name}")
 
+    # Drain unrecorded labeled instances BEFORE the subnet deletes: an instance the
+    # inventory never recorded still pins its subnet, and the API refuses the subnet
+    # (live: net-t101 held by an unrecorded team box — every teardown pass died at
+    # the network delete before the machinery's after-the-fact sweep ever ran).
+    for info in [i for i in compute.instances(creds)
+                 if naming.owned(i, comp, run_id)]:
+        if not full and (info.get("labels") or {}).get(naming.LABEL_ROLE):
+            continue
+        instance_ops.delete(creds, info["name"])
+        log(f"  swept instance {info['name']} (label net)")
+
     # restore points first-refusal-free: machine images can only be this run's names
     for mark in [m for m in image_ops.list_marks(creds, ownership_labels(comp, run_id))]:
         image_ops.delete_machine_image(creds, mark)
