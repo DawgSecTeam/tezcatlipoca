@@ -45,8 +45,17 @@ def round_loop_state(engine_payload, now=None, freshness_seconds=None) -> dict:
     if zero_current:
         current = None  # the Go zero time — the loop is not cycling
     started = parse_rfc3339((engine_payload.get("last_round") or {}).get("StartTime"))
+    # The same Go zero time can arrive on last_round.StartTime: it means no round has completed,
+    # which is what an absent value means. Left alone it becomes ~2025 years of age and the
+    # verifier prints "last round 1065493565 min ago", sending an operator hunting a round that
+    # never happened (2025*365*24*60 is that number exactly).
+    if started is not None and started.year <= 1:
+        started = None
 
     age_seconds = None if started is None else (now - _naive_utc(started)).total_seconds()
+    # A negative age means the clock moved under us; it is not evidence of a stopped loop.
+    if age_seconds is not None and age_seconds < 0:
+        age_seconds = None
     stale = age_seconds is not None and age_seconds >= window
 
     if engine_payload.get("running") is False:

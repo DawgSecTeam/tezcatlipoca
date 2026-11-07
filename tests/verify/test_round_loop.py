@@ -217,3 +217,27 @@ class GcpDockerEgressMask(unittest.TestCase):
         from engine import engine_bootstrap_ops as bo
         src = inspect.getsource(bo._install_firewall_and_healthcheck)
         self.assertIn("gcp_docker_egress_pair", src)
+
+
+    def test_zero_start_time_is_not_a_2025_year_old_round(self):
+        """The Go zero time on last_round.StartTime must not become an age.
+
+        verifier/engine.py prints "last round {age_min:.0f} min ago". An unclamped zero value
+        is ~2025 years, which is 1,065,493,565 minutes — the number on a range page that sent
+        an operator hunting a round that never happened. A zero StartTime means no round has
+        completed, which is exactly what an absent value means.
+        """
+        payload = {"running": True, "current_round_time": ZERO,
+                   "last_round": {"ID": 0, "StartTime": ZERO}}
+        verdict = round_loop.round_loop_state(payload, now=NOW)
+        self.assertIsNone(verdict["age_seconds"], verdict)
+        self.assertIsNone(verdict["started"], verdict)
+        self.assertNotEqual(verdict["age_seconds"], 1065493565 * 60, verdict)
+
+    def test_a_real_start_time_still_ages(self):
+        """The clamp must not blind the stopped-loop detection."""
+        payload = {"running": False, "current_round_time": ZERO,
+                   "last_round": {"ID": 7, "StartTime": "2026-09-30T12:00:00Z"}}
+        verdict = round_loop.round_loop_state(payload, now=NOW)
+        self.assertEqual(verdict["state"], round_loop.STALE, verdict)
+        self.assertAlmostEqual(verdict["age_seconds"], 2 * 86400, delta=5)
