@@ -60,6 +60,16 @@ class RenderPolicyTest(unittest.TestCase):
         # the full-access group is always present exactly once (definition + its grant)
         self.assertEqual(text.count('"group:full-access"'), 2)
 
+    def test_empty_preserved_group_is_dropped_not_rendered(self):
+        # An empty group rendered as [,] and huJSON refused the whole policy
+        # ("invalid character ',' at start of value", run-ee52bf26). headscale treats
+        # an undefined group as empty, so dropping it is the same meaning.
+        grants = [{"src": ["group:alumni"], "dst": ["192.168.100.0/24"], "ip": ["*"]}]
+        text = ra.render_policy(FULL_ACCESS, COMPS_ONE, preserved_grants=grants,
+                                preserved_groups={"group:alumni": []})
+        self.assertNotIn("[,]", text)
+        self.assertIn('"group:alumni"', text)  # the grant stays
+
     def test_no_preserved_groups_renders_the_foundation_shape(self):
         text = ra.render_policy(FULL_ACCESS, COMPS_ONE)
         self.assertIn('"group:full-access"', text)

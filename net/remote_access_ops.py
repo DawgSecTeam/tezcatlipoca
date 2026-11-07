@@ -164,6 +164,11 @@ def render_policy(full_access_users, comps, preserved_grants=None, preserved_gro
     users = ", ".join(f'"{u}"' for u in full_access_users)
     group_rows = [f'"group:full-access": [{users},]']
     for name, members in sorted((preserved_groups or {}).items()):
+        # An EMPTY group renders as [,] — huJSON refuses it ("invalid character ',' at
+        # start of value", run-ee52bf26). A group with no members is dropped instead:
+        # headscale treats an undefined group as empty, which is what it means here.
+        if not members:
+            continue
         row = ", ".join(f'"{m}"' for m in members)
         group_rows.append(f'"{name}": [{row},]')
     out.append("  \"groups\": {" + ", ".join(group_rows) + "},")
