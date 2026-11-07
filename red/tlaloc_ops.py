@@ -817,6 +817,11 @@ def resize_red_disk(comp_dir, red_ip, vmid, *, ssh_key, target_gb=None,
             naming.prefix(flat["comp_name"], flat["run_id"]), "tlaloc-red01")
         disk = instance_ops.boot_disk(creds, name)
         current_gb = instance_ops.resize_boot_disk(creds, disk, target)
+        # A fresh red01's sshd lands 20-60s after the create op reports RUNNING —
+        # the proxmox flow leans on red01_deploy's guest-agent wait (420s); dialing
+        # immediately timed the phase out on the very first attempt (live, gcp-acc18).
+        from common.ssh_ops import wait_for_ssh
+        wait_for_ssh(str(ssh_key), RED_USER, red_ip, timeout=180)
     else:
         node = None
         for vm in ((proxmox_api("GET", "/cluster/resources", params={"type": "vm"}) or {})

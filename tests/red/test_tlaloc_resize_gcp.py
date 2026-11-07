@@ -45,12 +45,14 @@ class ResizeRedDiskOnGcp(unittest.TestCase):
                                              "tlaloc-red01")
             with patch("providers.gcp.client.load_credentials",
                         return_value={"project_id": "t"}), \
+                    patch("common.ssh_ops.wait_for_ssh") as waited, \
                     patch("providers.gcp.instance_ops.boot_disk", side_effect=boot_disk), \
                     patch("providers.gcp.instance_ops.resize_boot_disk", side_effect=grow):
                 grown = tlaloc_ops.resize_red_disk(Path(d), "34.1.1.1", 1160,
                                                    ssh_key="/k", target_gb=60,
                                                    runner=runner)
 
+        waited.assert_called_once_with("/k", "sysadmin", "34.1.1.1", timeout=180)
         self.assertEqual(seen["name"], expected)
         self.assertEqual(seen["disk"], "projects/t/global/disks/d1")
         self.assertEqual(seen["target"], 60)
