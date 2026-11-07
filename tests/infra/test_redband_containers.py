@@ -44,12 +44,48 @@ class GuestIpv4sTest(unittest.TestCase):
         with patch.object(collisions, "proxmox_api", self._api(cfg)):
             self.assertEqual(sorted(collisions.guest_ipv4s(vm)), ["10.0.0.240", "192.168.9.5"])
 
-    def test_a_container_on_dhcp_with_no_agent_stays_unknown(self):
+    def test_a_dhcp_container_reads_its_live_interface(self):
+        # `ip=dhcp` declares nothing, but the container is RUNNING, so Proxmox reports the
+        # address it actually holds (live: 200 timestat, run-6185ae9f).
+        vm = {"vmid": 200, "node": "proxmox", "type": "lxc", "status": "running"}
+
+        def fake(method, path, **kwargs):
+            if path.endswith("/interfaces"):
+                return {"data": [{"name": "eth0", "inet": "10.0.0.200/24"},
+                                 {"name": "lo", "inet": "127.0.0.1/8"}]}
+            return {"data": {"net0": "name=eth0,bridge=vmbr0,ip=dhcp"}}
+
+        with patch.object(collisions, "proxmox_api", fake):
+            self.assertEqual(collisions.guest_ipv4s(vm), ["10.0.0.200", "127.0.0.1"])
+
+    def test_a_dhcp_container_stays_unknown_when_its_interfaces_cannot_be_read(self):
         vm = {"vmid": 9, "node": "proxmox", "type": "lxc", "status": "running"}
-        cfg = {"net0": "name=eth0,bridge=vmbr0,ip=dhcp"}
-        with patch.object(collisions, "proxmox_api", self._api(cfg)):
+
+        def fake(method, path, **kwargs):
+            if path.endswith("/interfaces"):
+                raise RuntimeError("container not running")
+            return {"data": {"net0": "name=eth0,bridge=vmbr0,ip=dhcp"}}
+
+        with patch.object(collisions, "proxmox_api", fake):
             self.assertIsNone(collisions.guest_ipv4s(vm),
-                              "a dhcp container with no agent is genuinely unknown")
+                              "an unreadable dhcp container is genuinely unknown")
+
+    def test_a_guest_confined_to_another_bridge_does_not_refuse_the_band(self):
+        # The club's untrustedbr lab VMs (137 testing-nix, 148 example, 165, 99999999) have no
+        # agent and no declared address. Their only NIC is on untrustedbr, so they cannot hold a
+        # 10.0.0.x address on the management bridge -- refusing the band for them was the bug.
+        vms = [{"vmid": v, "node": "proxmox", "type": "qemu", "status": "running", "name": f"lab{v}"}
+               for v in (137, 148, 165)]
+
+        def fake(method, path, **kwargs):
+            if "/agent/" in path:
+                raise RuntimeError("no guest agent")
+            return {"data": {"net0": "virtio=BC:24:11:00:00:01,bridge=untrustedbr,firewall=1"}}
+
+        with patch.object(collisions, "proxmox_api", fake):
+            ip, unchecked = collisions.select_red_ip(vms, bridges={"vmbr0"})
+        self.assertEqual(unchecked, [], "an unreachable guest is not an unverifiable one")
+        self.assertEqual(ip, "10.0.0.240")
 
     def test_a_vm_falls_back_to_its_cloud_init_address(self):
         vm = {"vmid": 1420, "node": "proxmox", "type": "qemu", "status": "running"}

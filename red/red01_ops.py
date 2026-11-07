@@ -79,6 +79,7 @@ def identity(comp_dir, engine_vmid, node, placement=None):
 
 def select_red_ip(comp_dir, placement, engine_mgmt_ip="", comp_tags=None):
     from infra import collisions
+    from multinode.placement_record import resolved_mgmt_bridge
     from multinode.placement_record import write_red01_ip
     claimed = {engine_mgmt_ip or "", config.active().engine.mgmt_gw or ""}
     nodes = [config.active().proxmox.node]
@@ -89,7 +90,11 @@ def select_red_ip(comp_dir, placement, engine_mgmt_ip="", comp_tags=None):
         skip |= {s["jump_vmid"] for s in placement.get("satellites") or []}
         skip.add(placement.get("engine_vmid") or 0)
     ip, unchecked = collisions.select_red_ip(
-        collisions.scan_vms_for(nodes), claimed, skip, comp_tags)
+        collisions.scan_vms_for(nodes), claimed, skip, comp_tags,
+        # The band lives on the management bridge; a guest whose NICs are all on another
+        # bridge (the untrustedbr lab) cannot hold an address there, so the scan skips it
+        # instead of refusing the whole band on its account.
+        bridges={resolved_mgmt_bridge(placement)})
     if ip and placement:
         write_red01_ip(comp_dir, placement, ip)
     return ip, unchecked

@@ -223,13 +223,13 @@ RED01_IP_BAND = ("10.0.0.240", "10.0.0.249")
 RED01_LEGACY_IPS = ("10.0.0.196", "10.0.0.197", "10.0.0.198", "10.0.0.199")
 
 
-def select_red_ip(vms, claimed=(), skip_vmids=(), ours_tags=None):
+def select_red_ip(vms, claimed=(), skip_vmids=(), ours_tags=None, bridges=None):
     """The lowest red-band address nothing answers and no claimant holds, or (None, unchecked).
     `claimed` is everything this placement already takes on the L2 (engine, gateway, jumps).
 
     An unverifiable guest makes every candidate a guess, so an incomplete scan selects nothing
     (the caller refuses or asks the operator) — the same contract as `select_engine_ip`."""
-    takers, unchecked = running_guest_ips(vms, set(skip_vmids), ours_tags)
+    takers, unchecked = running_guest_ips(vms, set(skip_vmids), ours_tags, bridges)
     if unchecked:
         return None, unchecked
     taken = set(takers) | set(claimed) | set(RED01_LEGACY_IPS)
@@ -308,16 +308,63 @@ def guest_ipv4s(vm):
     addrs = _agent_ipv4s(vm) if kind == "qemu" else None
     if addrs is not None:
         return addrs
-    try:
-        data = proxmox_api("GET", f"/nodes/{vm['node']}/{kind}/{vm['vmid']}/config")["data"]
-    except Exception:
+    data = _guest_config(vm)
+    if data is None:
         return None
     declared = []
-    for key, value in (data or {}).items():
+    for key, value in data.items():
         if key.startswith("net") or key.startswith("ipconfig"):
             declared.extend(_declared_ipv4s(value))
-    # An all-dhcp guest with no agent is genuinely unknown; saying so keeps the refusal honest.
-    return declared or None
+    if declared:
+        return declared
+    # A container that declares dhcp still knows its address once it is running.
+    if kind == "lxc":
+        return _lxc_live_ipv4s(vm)
+    # An all-dhcp VM with no agent is genuinely unknown; saying so keeps the refusal honest.
+    return None
+
+
+def _guest_config(vm):
+    """A guest's Proxmox config dict, or None when it cannot be read."""
+    kind = (vm.get("type") or "qemu").lower()
+    try:
+        return proxmox_api("GET", f"/nodes/{vm['node']}/{kind}/{vm['vmid']}/config")["data"] or {}
+    except Exception:
+        return None
+
+
+def _lxc_live_ipv4s(vm):
+    """A running container's addresses, from Proxmox's view of its interfaces."""
+    try:
+        data = proxmox_api("GET", f"/nodes/{vm['node']}/lxc/{vm['vmid']}/interfaces")["data"]
+    except Exception:
+        return None
+    out = []
+    for ifc in data or []:
+        inet = str(ifc.get("inet") or "").strip()
+        if inet:
+            out.append(inet.split("/")[0])
+    return out or None
+
+
+def guest_bridges(vm):
+    """The bridges a guest's NICs attach to, or None when its config cannot be read.
+
+    Used to rule a guest OUT of a band before calling it unverifiable: a NIC list entirely on
+    another bridge (the club's `untrustedbr` lab) cannot hold an address on the management L2.
+    """
+    data = _guest_config(vm)
+    if data is None:
+        return None
+    found = set()
+    for key, value in data.items():
+        if not key.startswith("net"):
+            continue
+        for part in str(value).split(","):
+            part = part.strip()
+            if part.startswith("bridge="):
+                found.add(part.split("=", 1)[1].strip())
+    return found
 
 
 def _agent_ipv4s(vm):
@@ -333,8 +380,13 @@ def _agent_ipv4s(vm):
             if addr.get("ip-address-type") == "ipv4"]
 
 
-def running_guest_ips(vms, skip_vmids, ours_tags=None):
-    """(takers, unchecked): the first running guest to answer each address, and those it cannot tell."""
+def running_guest_ips(vms, skip_vmids, ours_tags=None, bridges=None):
+    """(takers, unchecked): the first running guest to answer each address, and those it cannot tell.
+
+    `bridges` are the bridges that carry the band. A guest whose NICs are all on OTHER bridges
+    cannot hold an address in the band, so it is skipped rather than reported unverifiable — on
+    this estate the club's untrustedbr lab VMs made every red-stage deploy refuse the band.
+    """
     takers, unchecked = {}, []
     for vm in vms:
         if vm.get("status") != "running" or vm.get("template") == 1 or vm.get("vmid") in skip_vmids:
@@ -346,6 +398,9 @@ def running_guest_ips(vms, skip_vmids, ours_tags=None):
         label = f"{vm.get('vmid')} ({vm.get('name') or '?'} on {vm.get('node') or '?'})"
         addrs = guest_ipv4s(vm)
         if addrs is None:
+            nic_bridges = guest_bridges(vm)
+            if bridges and nic_bridges is not None and not (nic_bridges & set(bridges)):
+                continue  # only NICs on unrelated bridges: it cannot reach this band
             unchecked.append(label)
             continue
         for ip in addrs:
