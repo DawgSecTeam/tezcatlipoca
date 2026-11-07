@@ -26,11 +26,13 @@ TAILSCALE_INSTALL_CMD = (
 TAILNET_SRC = "100.64.0.0/10"
 INFRA_USER_DEFAULT = "cyberrange-infra"
 POLICY_STATE_FILE = "/home/sysadmin/headscale/config/tezcatlipoca-remote-access.json"
-# The HOST-side path: the headscale container's /etc/headscale is a mount of the host's
-# /home/sysadmin/headscale/config, so a path spelled for the container's view does not
-# exist on the host the SSH helper lands on (every read refused, deploys with remote
-# access enabled died at phase 3 — live 2026-11-06, run-43b70a7f).
+# Two views of ONE file: the host's /home/sysadmin/headscale/config is the container's
+# /etc/headscale (docker mount). Reads/writes go through the HOST path (the SSH helper
+# lands on the host, where the container path does not exist — run-43b70a7f); the
+# headscale CLI runs INSIDE the container (docker exec), so its --file argument must be
+# the container path (run-ecd1bb6f: a host path there reads as missing).
 POLICY_FILE = "/home/sysadmin/headscale/config/acl.hujson"
+POLICY_FILE_IN_CONTAINER = "/etc/headscale/acl.hujson"
 
 PERSON_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
@@ -395,7 +397,7 @@ def _apply_policy(full_access, comps):
     remote = (f"cat > /tmp/acl.next.hujson <<'TEZEOF'\n{policy}TEZEOF\n"
               f"sudo -S -p '' cp /tmp/acl.next.hujson /home/sysadmin/headscale/config/acl.hujson")
     _hs_ssh(remote, pw, input_text=pw + "\n", timeout=60)
-    r = hs_cli(f"policy check --file {POLICY_FILE}", check=False)
+    r = hs_cli(f"policy check --file {POLICY_FILE_IN_CONTAINER}", check=False)
     if r.returncode != 0:
         raise SystemExit(f"  ERROR: generated headscale policy failed validation:\n"
                          f"{r.stdout}{r.stderr}")
