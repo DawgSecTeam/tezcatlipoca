@@ -459,6 +459,31 @@ class DestroyEstateTest(GcpBase):
             doc.record(kind, "", name)
         return doc
 
+    def test_a_network_delete_sweeps_this_runs_firewalls_first(self):
+        # GCP refuses to delete a network a firewall still references (live, gcp-acc's
+        # teardown stalled on fw-fw-t101-to-engine with everything else already gone).
+        vpc = "tz-c1-0e6474eb"
+        self.fake.networks[vpc] = {
+            "name": vpc,
+            "selfLink": "https://compute.googleapis.com/compute/v1/projects/"
+                        "t-proj/global/networks/" + vpc}
+        link = ("https://compute.googleapis.com/compute/v1/projects/"
+                "t-proj/global/firewalls/")
+        self.fake.firewalls[vpc + "-fw-t101"] = {"name": vpc + "-fw-t101",
+                                                "selfLink": link + vpc + "-fw-t101"}
+        self.fake.firewalls[vpc + "-fw-red-mgmt"] = {"name": vpc + "-fw-red-mgmt",
+                                                   "selfLink": link + vpc + "-fw-red-mgmt"}
+        self.fake.firewalls["someone-else-fw"] = {"name": "someone-else-fw",
+                                                 "selfLink": link + "someone-else-fw"}
+        deletions = []
+        ok = network_ops.delete_network(
+            {"project_id": self.fake.project}, vpc, log=lambda m: deletions.append(m))
+        self.assertTrue(ok)
+        self.assertNotIn(vpc + "-fw-t101", self.fake.firewalls)
+        self.assertNotIn(vpc + "-fw-red-mgmt", self.fake.firewalls)
+        self.assertIn("someone-else-fw", self.fake.firewalls)
+        self.assertTrue(deletions[0].strip().endswith("destroyed firewall " + vpc + "-fw-t101"))
+
     def test_owned_resources_die_and_the_network_lasts_till_last(self):
         comp, run = "c1", "run-0e6474eb"
         self.fake.add_instance("tz-c1-0e6474eb-team1-web01", comp, run, unit=1010)

@@ -78,11 +78,11 @@ def ensure_network(document, *, comp_name, run_id, team_identifiers,
     # the fabric, around the engine's isolation DROP. The per-team source rules keep
     # team-subnet flows inside their tag, so a cross-team packet has no allow on any path.
     for identifier in team_identifiers:
-        _ensure_rule(creds, prefix, f"fw-t{identifier}", net_link,
+        _ensure_rule(creds, prefix, f"t{identifier}", net_link,
                      source=f"192.168.{identifier}.0/24",
                      target=naming.team_tag(identifier),
                      record=record)
-        _ensure_rule(creds, prefix, f"fw-t{identifier}-to-engine", net_link,
+        _ensure_rule(creds, prefix, f"t{identifier}-to-engine", net_link,
                      source=f"192.168.{identifier}.0/24",
                      target=ENGINE_TAG,
                      record=record)
@@ -91,11 +91,11 @@ def ensure_network(document, *, comp_name, run_id, team_identifiers,
         # SOURCES onto every team's boxes (and the engine); nothing admits a team
         # subnet toward red — same asymmetry as the engine's iptables trio.
         for identifier in team_identifiers:
-            _ensure_rule(creds, prefix, f"fw-red-to-t{identifier}", net_link,
+            _ensure_rule(creds, prefix, f"red-to-t{identifier}", net_link,
                          source="10.200.0.0/24",
                          target=naming.team_tag(identifier),
                          record=record)
-        _ensure_rule(creds, prefix, "fw-red-to-engine", net_link,
+        _ensure_rule(creds, prefix, "red-to-engine", net_link,
                      source="10.200.0.0/24", target=ENGINE_TAG,
                      record=record)
         # tlaloc is staged over red01's EPHEMERAL public IP (resize's in-guest grow,
@@ -236,11 +236,20 @@ def ensure_engine_route(creds, prefix, engine_name, team_identifiers=(), record=
 
 
 def delete_network(creds, vpc, log=print):
-    """Subnets (firewalls die with the network) out first — GCP refuses an in-use subnet."""
+    """Rules and routes out first, then subnets/routers — GCP refuses to delete a
+    network a firewall rule still references (the "rules die with the network"
+    belief was console behavior, not the API's)."""
     net = compute.network(creds, vpc)
     if net is None:
         return False
     prefixes = f"projects/{creds['project_id']}/global/networks/{vpc}"
+    # Firewall rules reference the network and BLOCK its delete; this range's rules
+    # all carry the run prefix (the VPC name), so sweep by name.
+    for fw in [f for f in (gapi(creds, "GET", "global/firewalls",
+                                params={"maxResults": 500}).get("items") or [])
+               if (f["name"] or "").startswith(vpc)]:
+        compute.delete_op(creds, fw["selfLink"])
+        log(f"  destroyed firewall {fw['name']}")
     # Routes block a network delete; sweep this range's own before the network goes.
     for route in [r for r in (gapi(creds, "GET", "global/routes",
                                    params={"maxResults": 500}).get("items") or [])
