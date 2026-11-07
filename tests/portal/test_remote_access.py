@@ -72,6 +72,28 @@ class RenderPolicyTest(unittest.TestCase):
         self.assertIn('"group:alumni": []', text)
         self.assertIn('"group:alumni"', text)  # the grant stays too
 
+    def test_grant_naming_an_undefined_group_gets_a_definition(self):
+        # The live file had a grant naming group:alumni while its `groups` block defined only
+        # full-access and team-friends. Re-emitting that faithfully produced an illegal policy:
+        #   parsing policy: group not defined in policy: "group:alumni"   (run-06274eab)
+        # Every group a preserved grant names must therefore get a definition, defaulting to no
+        # members (undefined and empty mean the same thing to headscale, so access is unchanged).
+        grants = [{"src": ["group:team-friends", "group:alumni"],
+                   "dst": ["192.168.100.0/24"], "ip": ["*"]}]
+        text = ra.render_policy(FULL_ACCESS, COMPS_ONE, preserved_grants=grants,
+                                preserved_groups={"group:team-friends": ["amerrym1@"]})
+        self.assertIn('"group:alumni": []', text)
+        self.assertIn('"group:team-friends": ["amerrym1@"]', text)
+        # and the policy has no dangling group reference
+        import json as _json
+        stripped = "\n".join(line for line in text.splitlines()
+                              if not line.lstrip().startswith("//"))
+        stripped = re.sub(r",(\s*[\]}])", r"\1", stripped)
+        data = _json.loads(stripped)
+        named = {s for g in data["grants"] for s in g.get("src", [])
+                 if s.startswith("group:")}
+        self.assertEqual(sorted(n for n in named if n not in data["groups"]), [])
+
     def test_no_preserved_groups_renders_the_foundation_shape(self):
         text = ra.render_policy(FULL_ACCESS, COMPS_ONE)
         self.assertIn('"group:full-access"', text)

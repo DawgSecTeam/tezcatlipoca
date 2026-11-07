@@ -163,7 +163,18 @@ def render_policy(full_access_users, comps, preserved_grants=None, preserved_gro
     out.append("  // full-access grant preserves that for the pre-existing users.")
     users = ", ".join(f'"{u}"' for u in full_access_users)
     group_rows = [f'"group:full-access": [{users},]']
-    for name, members in sorted((preserved_groups or {}).items()):
+    # A preserved grant may name a group the live file never defined (the roster and the
+    # groups block are edited by different hands). headscale refuses the whole policy for an
+    # undefined group -- 'group not defined in policy: "group:alumni"' (run-06274eab) -- so
+    # every group a grant references is defined here, defaulting to no members. Undefined and
+    # empty mean the same thing to headscale, so this cannot grant anyone access.
+    definitions = dict(preserved_groups or {})
+    for grant in (preserved_grants or []):
+        for src_name in grant.get("src") or []:
+            if isinstance(src_name, str) and src_name.startswith("group:"):
+                definitions.setdefault(src_name, [])
+
+    for name, members in sorted(definitions.items()):
         # An EMPTY group must render as [] — the members form carries a trailing comma
         # ([m,] for huJSON leniency) which degenerates to [,] when empty, and huJSON
         # refuses that ("invalid character ',' at start of value", run-ee52bf26).
