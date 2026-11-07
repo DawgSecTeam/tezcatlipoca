@@ -283,6 +283,19 @@ def fix_services_on_boxes(comp_dir, targets, ctx, box_creds):
             result = ssh_via_gateway(ctx, ip, deploy_cmd, timeout=60,
                                       user=ctx.get("box_username", "ubuntu"))
             if result.returncode != 0:
+                if (ctx or {}).get("platform") == "gcp":
+                    # No guest-agent channel on gcp (the PVE dial can only fail):
+                    # the SSH retry IS the fallback — the first dial races the
+                    # post-snapshot reboot of the box.
+                    retry = ssh_via_gateway(ctx, ip, deploy_cmd, timeout=120,
+                                             user=ctx.get("box_username", "ubuntu"))
+                    with PRINT_LOCK:
+                        if retry.returncode == 0:
+                            print(f"    Services hardened on {ip} (ssh retried)")
+                        else:
+                            print(f"    Service hardening still failing on {ip}: "
+                                  f"{retry.stderr.strip()[:200]}")
+                    return
                 with PRINT_LOCK:
                     print(f"    Service hardening warning on {ip}: {result.stderr.strip()[:200]}")
                     print(f"    Retrying {ip} via guest agent (as root, no sudo needed)...")

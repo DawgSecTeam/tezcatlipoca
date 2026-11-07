@@ -618,8 +618,13 @@ def _red01_user_data(pub):
         f"                via: {RED_SEGMENT_GW}\n"
         "              - to: 172.31.0.0/16\n"
         f"                via: {RED_SEGMENT_GW}\n"
+        # tlaloc is staged, never pip-installed — proxmox's red01 template bakes its
+        # deps; a stock GCE image bakes nothing, and the seed died importing paramiko
+        # (live gcp-acc20: 'ssh admin@192.168.101.10: No module named paramiko').
         "runcmd:\n"
         "  - [netplan, apply]\n"
+        "  - [apt-get, update]\n"
+        "  - [apt-get, install, -y, python3-paramiko, python3-requests]\n"
     )
 
 

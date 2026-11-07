@@ -673,6 +673,9 @@ class Red01UserDataTest(GcpBase):
         self.assertIn("to: 172.31.0.0/16", data)
         self.assertEqual(data.count(f"via: {RED_SEGMENT_GW}"), 2)
         self.assertIn("netplan, apply", data)
+        # the stock image bakes none of tlaloc's deps (the seed died on paramiko)
+        self.assertIn("python3-paramiko", data)
+        self.assertIn("python3-requests", data)
 
 
 class TeamAddressTest(unittest.TestCase):
