@@ -109,24 +109,22 @@ def _read_live_grants():
     # re-emits them verbatim. A read failure is fatal: rendering without them
     # would just re-strip the policy.
     policy = _read_live_policy()
+    groups = {name: members for name, members in (policy.get("groups") or {}).items()
+              if name != "group:full-access"}
     preserved = []
     for g in policy.get("grants", []):
         srcs = g.get("src", [])
         if "group:full-access" in srcs or any(s.startswith("comp-") for s in srcs):
             continue  # this module owns those rows
+        # A grant naming a group the live policy no longer DEFINES is stale (the ldap
+        # sync drops an emptied group; its grant survived one render longer — live:
+        # 'group not defined in policy: group:alumni', run-00be5b01). Re-emitting it
+        # would refuse the whole file, so the stale grant is dropped with its group:
+        # the access it granted is already gone (an absent group grants nothing).
+        if not all(s in groups for s in srcs):
+            print(f"  dropping a preserved grant whose group is gone: {srcs}")
+            continue
         preserved.append(g)
-    # The preserved grants' GROUPS ride along: a grant naming group:team-friends is
-    # invalid on its own — headscale's policy check refuses the whole file with
-    # 'group not defined in policy' (live: run-ee2f342f preserved the grant and the
-    # render still failed validation). The ldap sync owns those groups' definitions;
-    # this module never invents one, it only carries the live file's through.
-    generated = {"group:full-access"}
-    for comp in _read_policy_state().get("comps", {}).values():
-        for team in comp.get("teams", []):
-            for p in team.get("participants", []):
-                generated.add(f"group:comp-{p}")  # not a real form; comp grants key on users
-    groups = {name: members for name, members in (policy.get("groups") or {}).items()
-              if name != "group:full-access"}
     return groups, preserved
 
 
