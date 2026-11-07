@@ -129,9 +129,14 @@ def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None)
             identifier_defaults=_fresh_identifier_defaults(
                 ctx.state_path.parent, ctx.previous_state),
             team_identifiers=team_identifiers)
-        # skeleton only: an abort at preflight leaves the lineage (run id) with no credentials
+        # skeleton only: an abort at preflight leaves the lineage (run id) with no credentials.
+        # platform must ride along: prepare() set it on ctx.state before this dict replaced
+        # it, and absorb(replace=True) deletes any flat key absent here — without it every
+        # state doc lost identity.platform at its first save, and the stale-estate gate then
+        # read a gcp range's state as proxmox and refused the relaunch (live, gcp-acc13).
         ctx.state = {
             "last_phase": 0,
+            "platform": ctx.platform,
             "pipeline_version": PIPELINE_VERSION,
             "teams": ctx.teams,
             "scoring_vm_id": ctx.engine_vmid,

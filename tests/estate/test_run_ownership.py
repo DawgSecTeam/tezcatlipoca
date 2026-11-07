@@ -289,6 +289,20 @@ class RunIdMinting(unittest.TestCase):
         self.assertRegex(ctx.run_id, r"^run-[0-9a-f]{8}$")
         self.assertEqual(ctx.state["run_id"], ctx.run_id)
 
+    def test_fresh_skeleton_carries_the_platform_through_the_replacement(self):
+        # prepare() wrote ctx.platform onto the dict this skeleton replaces; absorb
+        # deletes flat keys the saved dict omits, so a platform-less skeleton dropped
+        # identity.platform from every state doc (live: gcp-acc13 refused its own
+        # relaunch, its state read as a proxmox host mismatch).
+        with tempfile.TemporaryDirectory() as d:
+            ctx = self._ctx(Path(d) / "s.json", platform="gcp")
+            with dpatch("persist_state"), \
+                    dpatch("collect_teams",
+                                 return_value={"team1": {"identifier": "101",
+                                                         "password": "x"}}):
+                dl_secrets.resolve_competition_teams(ctx, 1, 1)
+        self.assertEqual(ctx.state["platform"], "gcp")
+
     def test_fresh_deploy_uses_saved_identifiers_but_not_saved_passwords(self):
         with tempfile.TemporaryDirectory() as d:
             state_path = estate_state.state_path(Path(d))

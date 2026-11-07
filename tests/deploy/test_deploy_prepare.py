@@ -338,6 +338,15 @@ class EstateInputs(unittest.TestCase):
             self._stale_gate({"deployed_endpoint": "https://new:8006", "scoring_vm_id": 1090})
         self.assertIn("1090", str(raised.exception))
 
+    def test_pre_split_state_without_platform_is_judged_as_proxmox(self):
+        # A doc with no identity.platform is proxmox by the pre-split fallback; a gcp://
+        # deployed_endpoint on such a doc reads as a host mismatch and refuses. Fixed
+        # docs always carry platform (the mint skeleton keeps it), so this is only the
+        # pre-split document's documented behavior.
+        with self.assertRaises(SystemExit) as raised:
+            self._stale_gate({"deployed_endpoint": "gcp://proj/zone", "scoring_vm_id": 1000})
+        self.assertIn("this run targets https://new:8006", str(raised.exception))
+
 
 
 
