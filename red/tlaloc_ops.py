@@ -550,6 +550,11 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     mythic_result = None
     if mythic is None:
         mythic = gaia_ops.mythic_enabled(comp_dir)
+    # State the decision and the file it came from: `red.c2 off` in the Compfile disables the
+    # C2 stage, and a run that reports "no C2 callback port" on a competition that opted out is
+    # indistinguishable from a competition that forgot to declare one without this.
+    print(f"  mythic      : {'on' if mythic else 'off'} "
+          f"(red.c2 in {comp_dir / 'Compfile'})")
     if mythic:
         plan = gaia_ops.c2_plan(comp_dir, red_ip=red_ip, comp_id=comp_id)
         callback_port, callback_host = plan["callback_port"], plan["callback_host"]
