@@ -124,7 +124,7 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
     env_content = (
         f"POSTGRES_PASSWORD={postgres_password}\n"
         "POSTGRES_USER=engineuser\n"
-        "POSTGRES_HOST=quotient_database\n"
+        "POSTGRES_HOST=db\n"
         "POSTGRES_DB=engine\n"
         f"REDIS_PASSWORD={redis_password}\n"
     )

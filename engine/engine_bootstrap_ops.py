@@ -245,7 +245,7 @@ def push_quotient_env(ctx, postgres_password, redis_password):
     quotient_env = (
         f"POSTGRES_PASSWORD={postgres_password}\n"
         "POSTGRES_USER=engineuser\n"
-        "POSTGRES_HOST=quotient_database\n"
+        "POSTGRES_HOST=db\n"
         "POSTGRES_DB=engine\n"
         f"REDIS_PASSWORD={redis_password}\n"
     )
