@@ -52,7 +52,7 @@ class ResizeRedDiskOnGcp(unittest.TestCase):
                                                    ssh_key="/k", target_gb=60,
                                                    runner=runner)
 
-        waited.assert_called_once_with("/k", "sysadmin", "34.1.1.1", timeout=180)
+        waited.assert_called_once_with("/k", "sysadmin", "34.1.1.1", timeout=300)
         self.assertEqual(seen["name"], expected)
         self.assertEqual(seen["disk"], "projects/t/global/disks/d1")
         self.assertEqual(seen["target"], 60)

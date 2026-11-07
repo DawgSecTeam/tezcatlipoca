@@ -591,17 +591,35 @@ def _pub_of(key):
 
 
 def _red01_user_data(pub):
-    # Identity only: both NICs lease their pinned addresses from GCE DHCP, and the VPC
-    # default route (next hop: the engine) carries red-to-team and egress traffic — the
-    # guest needs no static route of its own.
+    # Identity + the red-segment route pair: DHCP gives red01 no route for the team
+    # or transit nets (they are not its subnets), so team-facing dials fell to the
+    # mgmt default and left with src 10.224.0.20 — fw-red-to-t<id> admits 10.200.0.0/24
+    # only, and the day-0 seed died on every box (live gcp-acc19: `ip route get` picked
+    # ens4; proxmox's red01 carries the same route pair in its netplan).
     return (
         "#cloud-config\n"
         "users:\n"
         "  - name: sysadmin\n"
-        "    sudo: ALL=(ALL) NOPASSWD:ALL\n"
+        "    sudo: ALL:(ALL) NOPASSWD:ALL\n"
         "    shell: /bin/bash\n"
         "    ssh_authorized_keys:\n"
         f"      - {pub}\n"
+        "write_files:\n"
+        "  - path: /etc/netplan/70-red-segment-routes.yaml\n"
+        "    permissions: '0600'\n"
+        "    content: |\n"
+        "      network:\n"
+        "        version: 2\n"
+        "        ethernets:\n"
+        # GCE NIC order: ens4 = mgmt, ens5 = red
+        "          ens5:\n"
+        "            routes:\n"
+        "              - to: 192.168.0.0/16\n"
+        f"                via: {RED_SEGMENT_GW}\n"
+        "              - to: 172.31.0.0/16\n"
+        f"                via: {RED_SEGMENT_GW}\n"
+        "runcmd:\n"
+        "  - [netplan, apply]\n"
     )
 
 

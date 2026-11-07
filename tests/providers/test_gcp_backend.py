@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from estate import config as estate_config
+from common.constants import RED_SEGMENT_GW  # noqa: E402
 from providers.gcp import compute, image_ops, instance_ops, network_ops, naming, pipeline, preflight
 from providers.gcp.naming import (LABEL_COMP, LABEL_RANGE, LABEL_ROLE, LABEL_RUN, LABEL_UNIT)
 
@@ -660,6 +661,18 @@ class CreateEngineTest(GcpBase):
         self.assertEqual(doc.document.data["identity"]["engine_mgmt_ip"],
                          ctx.engine_mgmt_ip)
         self.assertIn(engine, [r["name"] for r in doc.resources("engine")])
+
+
+class Red01UserDataTest(GcpBase):
+    def test_team_and_transit_nets_route_via_the_red_segment(self):
+        # DHCP leaves red01 with no route for nets it does not sit on: without this
+        # pair the seed's dials left through the mgmt NIC (src 10.224.0.20) and
+        # fw-red-to-t<id> refused every one (live, gcp-acc19).
+        data = pipeline._red01_user_data("KEY pub")
+        self.assertIn("to: 192.168.0.0/16", data)
+        self.assertIn("to: 172.31.0.0/16", data)
+        self.assertEqual(data.count(f"via: {RED_SEGMENT_GW}"), 2)
+        self.assertIn("netplan, apply", data)
 
 
 class TeamAddressTest(unittest.TestCase):
