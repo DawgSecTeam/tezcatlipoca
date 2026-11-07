@@ -210,7 +210,10 @@ def create_estate(ctx):
             meta=instance_ops.metadata(username, _ssh_public_key()))
         document.record("engine", compute.zone(), engine_name, vmid=ctx.engine_vmid)
         document.save()
-        network_ops.ensure_engine_route(creds, prefix, engine_name)
+    # Outside the create branch: an ADOPTED engine must still converge its route —
+    # the via-engine default is team-tag-scoped now, and adopt-not-rescope left a
+    # stale scope steering red01's egress into the un-MASQUERADE'd engine path.
+    network_ops.ensure_engine_route(creds, prefix, engine_name, teams)
     # The engine's PUBLIC ip is the run's mgmt address (firewalled to ingress_sources)
     # and the address every later tool records as the scoring engine.
     primary = instance_ops.primary_nic_info(creds, engine_name)

@@ -181,15 +181,21 @@ def _ensure_mgmt_rule(creds, prefix, net_link, labels, record):
                             MGMT_PORTS, ENGINE_TAG, record)
 
 
-def ensure_engine_route(creds, prefix, engine_name, record=print):
+def ensure_engine_route(creds, prefix, engine_name, team_identifiers=(), record=print):
     """Two routes make the engine the range's router.
 
-    The 0/0-by-engine route (priority 900) sends every other subnet's default traffic
-    through it — boxes, red01, all of it. The ENGINE'S OWN traffic is NOT exempt from
-    next-hop routes (live proof: its public-SSH dialed "filtered" while the route
-    stood, replies looping into their own next hop), so a higher-priority TAGGED
-    route (800, network tag tz-engine) sends the engine's own egress to the default
-    internet gateway, where Cloud NAT picks it up.
+    The 0/0-by-engine route (priority 900) is TAG-SCOPED to the team boxes: they have
+    no external IPs and this is their only path out. red01 is an ops box with its own
+    1:1 NAT — scoped in, its replies left through the engine, whose MASQUERADE covers
+    team subnets only, so every driver dial to red01's public IP timed out while the
+    firewall was provably correct (live, gcp-acc17). Scoped out, red01's egress rides
+    the VPC's implied default-internet route like any GCE VM with an external IP.
+
+    The ENGINE'S OWN traffic is NOT exempt from next-hop routes (live proof: its
+    public-SSH dialed "filtered" while the route stood, replies looping into their
+    own next hop), so a higher-priority TAGGED route (800, network tag tz-engine)
+    sends the engine's own egress to the default internet gateway, where Cloud NAT
+    picks it up.
     """
     wan = naming.route_wan_name(prefix)
     via = naming.route_name(prefix)
@@ -209,14 +215,23 @@ def ensure_engine_route(creds, prefix, engine_name, record=print):
             "tags": [ENGINE_TAG],
             "description": "tezcatlipoca — the engine's own egress (its next-hop-route "
                            "exemption is a myth; this route keeps its replies alive)"}))
+    # Routes are immutable in place: a changed team set (tags) means replace the route.
+    wanted = sorted(naming.team_tag(i) for i in team_identifiers)
+    existing = next((r for r in listed if r["name"] == via), None)
+    if existing and sorted(existing.get("tags") or []) != wanted:
+        record(f"  network: re-scoping the via-engine route to this team set")
+        compute.delete_op(creds, existing["selfLink"])
+        have.discard(via)
     if via not in have:
-        record(f"  network: default traffic via the engine ({via}, priority 900)")
+        record(f"  network: team boxes' default via the engine ({via}, priority 900, "
+               f"tags {', '.join(wanted) or 'none'})")
         compute.wait_op(creds, gapi(creds, "POST", "global/routes", data={
             "name": via, "network": network,
             "destRange": "0.0.0.0/0", "priority": 900,
             "nextHopInstance": (f"https://compute.googleapis.com/compute/v1/projects/"
                                 f"{creds['project_id']}/{compute.zone_and(engine_name)}"),
-            "description": f"tezcatlipoca — boxes default through the engine ({prefix})"}))
+            "tags": wanted,
+            "description": f"tezcatlipoca — scored boxes default through the engine ({prefix})"}))
     return via
 
 

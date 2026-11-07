@@ -350,6 +350,47 @@ class EnsureNetworkTest(GcpBase):
             self.config.deactivate(previous)
 
 
+class EngineRouteTest(GcpBase):
+    """The via-engine default is a TEAM-tag route: scored boxes (no external IPs) route
+    through the engine; red01 — an ops box with its own 1:1 NAT — escapes it and rides
+    the VPC's implied internet route. Scoped in, its replies left through the engine,
+    whose MASQUERADE covers team subnets only, and every dial to red01's public IP
+    timed out (live, gcp-acc17)."""
+
+    def _ensure(self, teams=("101",)):
+        network_ops.ensure_engine_route(
+            {"project_id": self.fake.project}, "tz-c1-0e6474eb",
+            "tz-c1-0e6474eb-quotient-engine",
+            team_identifiers=list(teams), record=lambda *_: None)
+
+    def test_the_via_route_carries_team_tags_and_the_wan_route_the_engine_tag(self):
+        self._ensure()
+        via = self.fake.routes[naming.route_name("tz-c1-0e6474eb")]
+        self.assertEqual(via["tags"], ["tz-team-101"])
+        wan = self.fake.routes[naming.route_wan_name("tz-c1-0e6474eb")]
+        self.assertEqual(wan["tags"], ["tz-engine"])
+
+    def test_a_changed_team_set_replaces_the_route_not_stacks_a_stale_scope(self):
+        self._ensure(teams=("101",))
+        posts_before = sum(1 for m, p, _ in self.fake.calls
+                           if m == "POST" and p == "global/routes")
+        self._ensure(teams=("101", "102"))
+        via = self.fake.routes[naming.route_name("tz-c1-0e6474eb")]
+        self.assertEqual(via["tags"], ["tz-team-101", "tz-team-102"])
+        self.assertEqual(sum(1 for m, p, _ in self.fake.calls
+                             if m == "POST" and p == "global/routes"),
+                         posts_before + 1)
+
+    def test_the_same_team_set_adopts_the_existing_route(self):
+        self._ensure(teams=("101",))
+        posts_before = sum(1 for m, p, _ in self.fake.calls
+                           if m == "POST" and p == "global/routes")
+        self._ensure(teams=("101",))
+        self.assertEqual(sum(1 for m, p, _ in self.fake.calls
+                             if m == "POST" and p == "global/routes"),
+                         posts_before)
+
+
 class _Document:
     """estate.state.EstateState against a tmp comp dir (the real document, no fake)."""
 
