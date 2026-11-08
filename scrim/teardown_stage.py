@@ -1,5 +1,7 @@
 import json
 import os
+import shutil
+from pathlib import Path
 
 from common.comp_paths import resolve_comp_dir
 from common.utils import competition_name, load_compfile
@@ -100,6 +102,36 @@ def run_range_teardown(args, *, evidence_done=False, red_vmid=None):
                            + report.render())
 
 
+def flush_evidence(args):
+    """A6 — evidence out before the wrecking ball.
+
+    The test folder lives inside the run's comp workspace, and that workspace is
+    destroy-bound (retention GCs the rest): run-14ac7f14's 30MB of team logs and red
+    state survived teardown only because an operator archived it by hand with minutes
+    to spare. When TEZ_EVIDENCE_DIR is set — the dashboard exports runs/<run-id>/
+    evidence — copy the test folder there before ANY destroy begins. Warn-only:
+    flushing must never block a teardown; a live range costs more than a lost log."""
+    ev_dir = os.environ.get("TEZ_EVIDENCE_DIR")
+    test_dir = getattr(args, "test_dir", None)
+    if not ev_dir or not test_dir:
+        return None
+    src = Path(test_dir)
+    if not src.is_dir():
+        return None
+    dest = Path(ev_dir) / src.name
+    try:
+        src_r, dest_r = src.resolve(), dest.resolve()
+        if src_r == dest_r or dest_r.is_relative_to(src_r):
+            return None            # already inside the source — copying nests forever
+        shutil.copytree(str(src), str(dest), dirs_exist_ok=True)
+    except Exception as e:                                    # noqa: BLE001
+        log(f"WARNING: evidence flush failed ({type(e).__name__}: {e}) — destroy proceeds")
+        return None
+    n = sum(1 for p in dest.rglob("*") if p.is_file())
+    log(f"evidence flush: {n} file(s) -> {dest} (survives the comp-workspace destroy)")
+    return dest
+
+
 def stage_teardown(args, creds=None):
     tunnel = getattr(args, "red_tunnel", None)
     if hasattr(tunnel, "shutdown"):
@@ -117,6 +149,9 @@ def stage_teardown(args, creds=None):
         # unreachable red01 is recorded as `unreachable` in collection.json.
         collected = test_folder.collect_run_artifacts(args)
         test_folder.write_interaction_report(args)
+    # OUT BEFORE THE WRECKING BALL: the comp workspace holding the test folder is the very
+    # thing destroy deletes next, so flush while the range is still up and the tree complete.
+    flush_evidence(args)
     log("teardown: red01 + NAT")
     # --keep-range means the RANGE stays up, red01 included: resume-event re-enters
     # against a red01 that is still running. Destroying it here stranded the kept
