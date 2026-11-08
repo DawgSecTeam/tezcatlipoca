@@ -7,6 +7,9 @@ is the exact text the PRE-REFACTOR `fix_services_on_boxes` produced (captured by
 running the unmodified function with a stubbed ssh_via_gateway, which base64-decodes to
 the script the box would receive), and the first test asserts the pure builder still
 produces every case identically — not "line-equivalent", byte-identical.
+The tail was regenerated deliberately on 2026-11-08 (splunk/splunkd added to the
+start loop and reset-failed appended): the old tail left the scored splunk pin DOWN at
+T0 with nothing having tried to start it.
 
 Case matrix:
   * every catalog service keyword any branch keyed on (kw_*);
@@ -102,11 +105,14 @@ GOLDEN = {
         "if [ -d /etc/httpd/conf.d ] && [ ! -f /etc/httpd/conf.d/00-tzc-servername.conf ]; then echo 'ServerName localhost' | sudo tee /etc/httpd/conf.d/00-tzc-servername.conf >/dev/null; sudo systemctl restart httpd 2>/dev/null || true; fi || true",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_httpd": [
         "#!/bin/bash",
@@ -127,11 +133,14 @@ GOLDEN = {
         "if [ -d /etc/httpd/conf.d ] && [ ! -f /etc/httpd/conf.d/00-tzc-servername.conf ]; then echo 'ServerName localhost' | sudo tee /etc/httpd/conf.d/00-tzc-servername.conf >/dev/null; sudo systemctl restart httpd 2>/dev/null || true; fi || true",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_bind": [
         "#!/bin/bash",
@@ -196,11 +205,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_mysql": [
         "#!/bin/bash",
@@ -238,11 +250,14 @@ GOLDEN = {
         "rm -f /tmp/setup_mysql.sql",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_mariadb": [
         "#!/bin/bash",
@@ -280,11 +295,14 @@ GOLDEN = {
         "rm -f /tmp/setup_mysql.sql",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_postfix": [
         "#!/bin/bash",
@@ -314,11 +332,14 @@ GOLDEN = {
         "echo 'ubuntu:p2' | sudo chpasswd",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_smtp": [
         "#!/bin/bash",
@@ -348,11 +369,14 @@ GOLDEN = {
         "echo 'ubuntu:p2' | sudo chpasswd",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_nginx": [
         "#!/bin/bash",
@@ -373,11 +397,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_http": [
         "#!/bin/bash",
@@ -398,11 +425,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_web": [
         "#!/bin/bash",
@@ -423,11 +453,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_vsftpd": [
         "#!/bin/bash",
@@ -451,11 +484,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_ftp": [
         "#!/bin/bash",
@@ -479,11 +515,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_dovecot": [
         "#!/bin/bash",
@@ -512,11 +551,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_imap": [
         "#!/bin/bash",
@@ -545,11 +587,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_named": [
         "#!/bin/bash",
@@ -612,11 +657,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_dns": [
         "#!/bin/bash",
@@ -679,11 +727,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_telnet_service": [
         "#!/bin/bash",
@@ -705,11 +756,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_telnet": [
         "#!/bin/bash",
@@ -731,11 +785,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "kw_splunk": [
         "#!/bin/bash",
@@ -761,11 +818,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "no_services": [
         "#!/bin/bash",
@@ -782,11 +842,14 @@ GOLDEN = {
         "sudo systemctl is-active --quiet ssh || sudo systemctl start ssh 2>/dev/null || true",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "one_cred": [
         "#!/bin/bash",
@@ -805,11 +868,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "three_creds": [
         "#!/bin/bash",
@@ -881,11 +947,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "empty_creds": [
         "#!/bin/bash",
@@ -902,11 +971,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "all_services": [
         "#!/bin/bash",
@@ -1055,11 +1127,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "reverse_order": [
         "#!/bin/bash",
@@ -1199,11 +1274,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "bind_and_named": [
         "#!/bin/bash",
@@ -1268,11 +1346,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "duplicate_pins": [
         "#!/bin/bash",
@@ -1306,11 +1387,14 @@ GOLDEN = {
         "rm -f /tmp/setup_mysql.sql",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "dict_pins": [
         "#!/bin/bash",
@@ -1361,11 +1445,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "smtp_mail_users": [
         "#!/bin/bash",
@@ -1399,11 +1486,14 @@ GOLDEN = {
         "echo 'root:p3' | sudo chpasswd",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "apache_group": [
         "#!/bin/bash",
@@ -1424,11 +1514,14 @@ GOLDEN = {
         "if [ -d /etc/httpd/conf.d ] && [ ! -f /etc/httpd/conf.d/00-tzc-servername.conf ]; then echo 'ServerName localhost' | sudo tee /etc/httpd/conf.d/00-tzc-servername.conf >/dev/null; sudo systemctl restart httpd 2>/dev/null || true; fi || true",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "mysql_mariadb_group": [
         "#!/bin/bash",
@@ -1466,11 +1559,14 @@ GOLDEN = {
         "rm -f /tmp/setup_mysql.sql",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "nginx_http_web_group": [
         "#!/bin/bash",
@@ -1491,11 +1587,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "vsftpd_ftp_group": [
         "#!/bin/bash",
@@ -1519,11 +1618,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "dovecot_imap_group": [
         "#!/bin/bash",
@@ -1552,11 +1654,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "bind_named_dns_group": [
         "#!/bin/bash",
@@ -1621,11 +1726,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "telnet_group": [
         "#!/bin/bash",
@@ -1647,11 +1755,14 @@ GOLDEN = {
         "sleep 1",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ],
     "unknown_service": [
         "#!/bin/bash",
@@ -1668,11 +1779,14 @@ GOLDEN = {
         "sudo systemctl is-active --quiet ssh || sudo systemctl start ssh 2>/dev/null || true",
         "",
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
-        "done"
+        "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true"
     ]
 }
 

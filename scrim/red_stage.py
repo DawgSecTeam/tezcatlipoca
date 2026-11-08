@@ -22,7 +22,8 @@ def verify_red_reaches_teams(args, comp, creds):
     log("pre-T0: red01 -> every team reachability gate [authoritative verify]")
     from scrim import compworld
     r = procs.run(compworld.verify_cmd(comp, creds, "--red-ip", args.red_ip,
-                                       "--red-identity", "--red-teams", "all"),
+                                       "--red-identity", "--red-teams", "all",
+                                       "--strict-services"),
                   cwd=core.REPO, timeout=900, check=False, tail=25)
     fire_test.write_verify_log(args, "pre-T0 (authoritative)", r)
     summary = {}
@@ -37,6 +38,22 @@ def verify_red_reaches_teams(args, comp, creds):
             f"red reachability gate failed: {', '.join(failed)} did not PASS "
             f"(verify rc={r.returncode}); red01 cannot reach every team — not an "
             f"event to start. stderr: {(r.stderr or '')[-400:]}")
+    # An availability competition whose scored pins are already down at T0 is not an event
+    # either: red cannot take down what is down, blue restores nothing it did not break, and
+    # the scoreboard runs flat for two hours (live: scrim-one, 6/12 and 5/12 at T0 and at the
+    # bell). --strict-services makes that a refusal here, at the last gate before the clock.
+    down, team = [], ""
+    for line in (r.stdout or "").splitlines():
+        head = line.strip().split()
+        if head and head[0].endswith(":") and "services UP" in line:
+            team = head[0].rstrip(":")
+        elif head and head[0] == "DOWN:" and len(head) > 1:
+            down.append(f"{team}:{head[1]}")
+    if down:
+        raise RuntimeError(
+            f"{len(down)} scored pin(s) are DOWN before T0 — the estate is not an event: "
+            f"{', '.join(down[:12])}. Fix the deploy's service "
+            f"bring-up; a degraded start scores nothing and reads as a red failure.")
 
 
 def red_pacing_caps():

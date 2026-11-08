@@ -249,11 +249,17 @@ def service_fixup_script(services, creds):
 
     lines.extend([
         "# Ensure all installed services are running",
-        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2; do",
+        # splunk belongs here: it is a scored service on splunk01 and was absent, so the
+        # splunk pin came up DOWN at T0 with nothing ever having tried to start it (live:
+        # scrim-one, both teams, 2026-11-08).",
+        "for svc in mysql mariadb postfix nginx vsftpd dovecot bind9 lighttpd apache2 splunk splunkd; do",
         "  if systemctl list-unit-files \"$svc.service\" &>/dev/null; then",
         "    sudo systemctl start $svc 2>/dev/null || true",
         "  fi",
         "done",
+        "# A stopped service is not the only way a pin reads DOWN: the auth-based checks need",
+        "# the credlist accounts to exist in the service AND the service to accept them.",
+        "sudo systemctl reset-failed 2>/dev/null || true",
     ])
 
     return "\n".join(lines)

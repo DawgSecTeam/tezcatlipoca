@@ -54,6 +54,10 @@ def main():
     p.add_argument("--from-template", default=None)
     p.add_argument("--teams", type=int, default=2)
     p.add_argument("--duration-min", type=int, default=90)
+    # A real incident cycle costs 20-30 min on the club's endpoint (docs/rehearsal-gates.md), so
+    # the 600 s knob cuts every cycle before it can log, restore or submit. Per-run override.
+    p.add_argument("--cycle-timeout", dest="cycle_timeout", type=int, default=None,
+                   help="seconds per blue cycle (default: knobs.cycle_timeout, 600)")
     p.add_argument("--blue-model", default="openai/gpt-5.6-luna", help="cheap cloud model for blue agents")
     p.add_argument("--red-model", default="openai/gpt-5.6-luna", help="cheap cloud model for red")
     p.add_argument("--reasoning-effort", default="",

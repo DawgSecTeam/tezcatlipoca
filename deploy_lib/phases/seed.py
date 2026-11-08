@@ -17,6 +17,16 @@ def phase8_seed(ctx):
     with timed(ctx.comp_dir, 8, "wait_quotient_http"):
         wait_for_http(f"http://{ctx.scoring_ip}/api/login", timeout=120)
 
+    # The final disruption pass (phase 7) runs AFTER phase 6's fix_services and can leave a
+    # scored service stopped or its credlist accounts rebuilt away — the estate then starts
+    # with pins already DOWN, which scores nothing and blames red (live: scrim-one, 6/12 and
+    # 5/12 at T0 and at the bell). Re-ensure now, with the engine up and before the clock.
+    from guests.service_fixup_ops import fix_services_on_boxes
+    if (ctx.comp_dir / "box_services.json").exists() and ctx.linux_targets:
+        with timed(ctx.comp_dir, 8, "reensure_services"):
+            fix_services_on_boxes(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx,
+                                  box_creds=ctx.box_creds)
+
     quotient_ctx = {
         "teams": {team_key: team_data["identifier"] for team_key, team_data in ctx.teams.items()},
         "quotient_admin_password": ctx.admin_password,

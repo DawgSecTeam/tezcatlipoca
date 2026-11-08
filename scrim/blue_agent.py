@@ -139,7 +139,8 @@ def _opencode_run(args, prompt, wd, env, stop=None):
                             cwd=wd, env=child_env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
                             text=True, start_new_session=True)
-    deadline = time.time() + core.CYCLE_TIMEOUT
+    cap = getattr(args, "cycle_timeout", None) or core.CYCLE_TIMEOUT
+    deadline = time.time() + cap
     reason = "cap"
     while True:
         try:
@@ -171,7 +172,7 @@ def _opencode_run(args, prompt, wd, env, stop=None):
             re.sub(r"\x1b\[[0-9;]*m", "", (out or "") + (err or ""))[-4000:])
     except OSError:
         pass
-    raise CycleTimeout(proc.args, core.CYCLE_TIMEOUT, reason)
+    raise CycleTimeout(proc.args, cap, reason)
 
 
 def _reap_managed_servers(home, wd=None):
