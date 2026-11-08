@@ -60,6 +60,28 @@ def _kill_tree(proc, grace=TREE_STOP_GRACE):
         os.killpg(proc.pid, signal.SIGKILL)
 
 
+def _reap(proc):
+    """Drain a killed child without trusting Popen's post-timeout internals.
+
+    `proc.communicate()` a SECOND time after TimeoutExpired raises AttributeError on
+    Python 3.13 ('Popen' object has no attribute '_fileobj2output'): the timeout path
+    leaves the pipe bookkeeping cleared, so the documented "call communicate() again"
+    recipe is a crash there — and it replaced the real timeout with that AttributeError
+    (run-700f7719, stage_verify). Read the pipes directly once the tree is dead.
+    """
+    out, err = [], []
+    for stream, sink in ((proc.stdout, out), (proc.stderr, err)):
+        if stream is None:
+            continue
+        try:
+            sink.append(stream.read() or "")
+        except (OSError, ValueError):
+            pass
+    with contextlib.suppress(Exception):
+        proc.wait(timeout=5)
+    return "".join(out), "".join(err)
+
+
 # Own session so a timeout reaps the whole tree: subprocess.run kills only the direct child,
 # leaving create-competition/nakon/ssh grandchildren alive and holding the deploy lock.
 def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
@@ -76,12 +98,12 @@ def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_tree(proc, grace)
-        proc.communicate()
+        out, err = _reap(proc)
         raise ScrimTimeout(cmd, timeout) from None
     except BaseException:
         # A driver-side abort (Ctrl-C) must not orphan the tree either.
         _kill_tree(proc, grace)
-        proc.communicate()
+        out, err = _reap(proc)
         raise
     r = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
     if tail and r.stdout:
