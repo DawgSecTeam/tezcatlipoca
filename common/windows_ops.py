@@ -95,23 +95,25 @@ if (-not $adapter) {{ throw "no up NetAdapter found" }}
 # remove-then-add of the SAME address, which raced and died with "Instance MSFT_NetIPAddress
 # already exists" while the box was already correctly addressed. Desired address present = done.
 #
-# Scope the check to EVERY interface, not just the one we picked: a clone can carry the
-# inherited address on a second adapter (the golden's NIC plus the new one), and
-# New-NetIPAddress refuses an address that exists ANYWHERE while the per-interface guard
-# saw nothing to do (live: scrim-one team clones, run-bc0cee43, 'New-NetIPAddress :
-# Instance MSFT_NetIPAddress already exists'). Clear it wherever it is, then assign.
-$holders = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+# When the address is NOT reported by Get-NetIPAddress yet New-NetIPAddress still calls it a
+# duplicate, the MSFT_NetIPAddress INSTANCE STORE holds a ghost the cmdlet's own view cannot
+# see (a clone of a sysprepped template carries one; run-d6fb9214 after the any-adapter
+# holder scan found nothing). netsh replaces the interface's whole v4 configuration and does
+# not consult that instance store, so it is the assignment path here — with a read-back that
+# fails loudly instead of trusting rc.
+$onTarget = @(Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
     Where-Object {{ $_.IPAddress -eq '{ip}' }})
-foreach ($h in $holders) {{
-    if ($h.InterfaceIndex -ne $adapter.ifIndex) {{
-        Remove-NetIPAddress -InterfaceIndex $h.InterfaceIndex -IPAddress '{ip}' -Confirm:$false -ErrorAction SilentlyContinue
+if ($onTarget.Count -eq 0) {{
+    & netsh interface ipv4 set address name="$($adapter.Name)" static {ip} 255.255.255.0 {gateway} | Out-Null
+    if ($LASTEXITCODE -ne 0) {{
+        Remove-NetIPAddress -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
+        New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress '{ip}' -PrefixLength 24 -DefaultGateway '{gateway}'
     }}
 }}
-$onTarget = @($holders | Where-Object {{ $_.InterfaceIndex -eq $adapter.ifIndex }})
-if ($onTarget.Count -eq 0) {{
-    Remove-NetIPAddress -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
-    Remove-NetRoute -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
-    New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress '{ip}' -PrefixLength 24 -DefaultGateway '{gateway}'
+$assigned = @(Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.IPAddress -eq '{ip}' }})
+if ($assigned.Count -eq 0) {{
+    throw "static address {ip} is not on adapter '$($adapter.Name)' after netsh and New-NetIPAddress"
 }}
 if (-not (Get-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)) {{
     New-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -NextHop '{gateway}' | Out-Null

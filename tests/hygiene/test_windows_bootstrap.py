@@ -83,17 +83,24 @@ if __name__ == "__main__":
 
 
 class StaticAddressAcrossAdapters(unittest.TestCase):
-    """A clone can carry the inherited address on a SECOND adapter: the per-interface
-    guard saw nothing to do while New-NetIPAddress refused the address that exists
-    elsewhere ("Instance MSFT_NetIPAddress already exists", run-bc0cee43)."""
+    """A clone can report no holder through Get-NetIPAddress while New-NetIPAddress still
+    calls the address a duplicate — the MSFT_NetIPAddress instance store holds a ghost the
+    cmdlet's view cannot see (run-d6fb9214). netsh replaces the interface config and does
+    not consult that store, so it is the assignment path, with a read-back that fails loud."""
 
-    def test_the_guard_scopes_the_holder_search_to_every_interface(self):
+    def test_the_assignment_uses_netsh_and_verifies_the_result(self):
         script = _capture_bootstrap_script()
-        # the holder lookup is not interface-scoped...
-        self.assertIn("$holders = @(Get-NetIPAddress -AddressFamily IPv4", script)
-        self.assertNotIn(
-            "Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4", script)
-        # ...and a holder on another adapter is cleared before the add
-        self.assertIn("Remove-NetIPAddress -InterfaceIndex $h.InterfaceIndex", script)
-        # the add still only runs when the target adapter lacks the address
+        self.assertIn("netsh interface ipv4 set address", script)
+        # netsh runs only when the target adapter lacks the address
         self.assertIn("$onTarget.Count -eq 0", script)
+        # the netsh failure path still has the cmdlet fallback
+        self.assertIn("New-NetIPAddress -InterfaceIndex $adapter.ifIndex", script)
+        # and the result is read back, never assumed
+        self.assertIn("$assigned.Count -eq 0", script)
+        self.assertIn("is not on adapter", script)
+
+    def test_a_present_address_skips_reassignment(self):
+        script = _capture_bootstrap_script()
+        # the guard precedes netsh, so an already-correct box does nothing
+        self.assertLess(script.index("$onTarget = @(Get-NetIPAddress"),
+                        script.index("netsh interface ipv4 set address"))
