@@ -116,7 +116,17 @@ class _PipelineCtx:
         self.comp_name = competition_name(self.comp_dir)
         self.run_id = flat.get("run_id") or ""
         self.engine_vmid = flat.get("scoring_vm_id")
+        # The state document does not always carry the engine address (this range's
+        # identity section held only comp_name/platform/run_id/scoring_vm_id), and an
+        # EMPTY value reached red01_ops.install_engine_rules as an empty ssh host
+        # ("Could not resolve hostname :", run-71b66c15). credentials.txt is what the
+        # deploy wrote for every reader — the same source the scrim's own creds use.
         self.engine_ip = flat.get("engine_mgmt_ip") or ""
+        if not self.engine_ip:
+            try:
+                self.engine_ip = core.engine_ip_from(self.comp_dir)
+            except (OSError, AttributeError):
+                self.engine_ip = ""
         self.scoring_ip = self.engine_ip
         self.scoring_user = estate_config.active().engine.username
         self.node = estate_config.active().proxmox.node
