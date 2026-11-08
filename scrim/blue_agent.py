@@ -163,7 +163,7 @@ def _opencode_run(args, prompt, wd, env, stop=None):
     # (~16 min observed, run-43b9011b) — the cycle's cap is 6 min, so every cycle overran the
     # event by a quarter hour and blue managed a handful of cycles instead of twenty.
     # HOME is per-cycle and unique, so it identifies it.
-    _reap_managed_servers(child_env.get("HOME", ""))
+    _reap_managed_servers(child_env.get("HOME", ""), wd)
     out, err = proc.communicate()
     try:
         (wd / "cycles").mkdir(exist_ok=True)
@@ -174,9 +174,16 @@ def _opencode_run(args, prompt, wd, env, stop=None):
     raise CycleTimeout(proc.args, core.CYCLE_TIMEOUT, reason)
 
 
-def _reap_managed_servers(home):
-    """SIGKILL leftover `opencode serve --service` processes started under `home`."""
-    if not home:
+def _reap_managed_servers(home, wd=None):
+    """SIGKILL leftover `opencode serve --service` processes started for this cycle.
+
+    HOME alone is not enough: the managed server can carry a scrubbed environment
+    (bun rewrites HOME for its own children), the match then misses, and the caller
+    blocks on the pipe that process holds — a 16-19 minute stall per capped cycle
+    (run-43b9011b, run-63d5287a). The server is started with the CYCLE's workdir as
+    its cwd, which is unique per team and per run, so cwd identifies it independently.
+    """
+    if not home and not wd:
         return
     for p in Path("/proc").iterdir():
         if not p.name.isdigit():
@@ -186,9 +193,13 @@ def _reap_managed_servers(home):
             if b"--service" not in cmd or b"opencode" not in cmd:
                 continue
             envb = (p / "environ").read_bytes().decode("utf-8", "replace")
+            cwd = os.readlink(p / "cwd")
         except OSError:
             continue
-        if f"HOME={home}" in envb.split("\0"):
+        ours = bool(home) and f"HOME={home}" in envb.split("\0")
+        if not ours and wd:
+            ours = str(cwd).startswith(str(wd))
+        if ours:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.kill(int(p.name), signal.SIGKILL)
 

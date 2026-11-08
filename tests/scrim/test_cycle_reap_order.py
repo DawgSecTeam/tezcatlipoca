@@ -17,6 +17,16 @@ class ReapBeforeDrain(unittest.TestCase):
 
     def test_the_managed_server_is_reaped_before_pipes_are_drained(self):
         src = (_REPO / "scrim" / "blue_agent.py").read_text()
-        reap = src.index('_reap_managed_servers(child_env.get("HOME", ""))')
+        reap = src.index('_reap_managed_servers(child_env.get("HOME", ""), wd)')
         drain = src.index("out, err = proc.communicate()", reap - 1)
         self.assertLess(reap, drain, "the reap must precede the drain")
+
+
+class MatcherCoverage(unittest.TestCase):
+    """HOME is not a reliable handle on the managed server (bun rewrites it); the
+    cycle's workdir is, and it is unique per team."""
+
+    def test_the_matcher_also_uses_the_cycle_workdir(self):
+        src = (_REPO / "scrim" / "blue_agent.py").read_text()
+        self.assertIn("def _reap_managed_servers(home, wd=None):", src)
+        self.assertIn('str(cwd).startswith(str(wd))', src)
