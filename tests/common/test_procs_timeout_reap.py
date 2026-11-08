@@ -24,3 +24,15 @@ class TimeoutReap(unittest.TestCase):
         r = procs.run_tree(["bash", "-c", "echo hello"], timeout=30)
         self.assertEqual(r.stdout.strip(), "hello")
         self.assertEqual(r.returncode, 0)
+
+    def test_stdin_text_reaches_the_child_and_still_returns(self):
+        # communicate(input=...) owns the pipe; a feeder thread that closed it first
+        # made communicate() raise "I/O operation on closed file" (run-ea2ddde7).
+        r = procs.run_tree(["bash", "-c", "read -r pw; echo got:$pw"],
+                           stdin_text="secret\n", timeout=30)
+        self.assertEqual(r.stdout.strip(), "got:secret")
+
+    def test_stdin_text_with_a_timeout_still_raises_scrim_timeout(self):
+        with self.assertRaises(procs.ScrimTimeout):
+            procs.run_tree(["bash", "-c", "sleep 30"], stdin_text="x\n",
+                           timeout=1, grace=1)

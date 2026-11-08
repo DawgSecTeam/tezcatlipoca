@@ -41,14 +41,6 @@ class ScrimTimeout(subprocess.TimeoutExpired):
 
 # Threaded because communicate(input=...) cannot be re-entered after TimeoutExpired; stdin
 # closes immediately — an open pipe keeps a straggler grandchild alive.
-def _feed_stdin(proc, text):
-    try:
-        proc.stdin.write(text)
-        proc.stdin.close()
-    except (BrokenPipeError, ValueError, OSError):
-        pass
-
-
 def _kill_tree(proc, grace=TREE_STOP_GRACE):
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGINT)
@@ -92,10 +84,12 @@ def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
                             stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             start_new_session=True)
-    if stdin_text is not None:
-        threading.Thread(target=_feed_stdin, args=(proc, stdin_text), daemon=True).start()
+    # stdin goes through communicate(input=...), never a feeder thread: the thread
+    # closes the pipe and communicate() then flushes it before reading, which raises
+    # "ValueError: I/O operation on closed file" on 3.13 (run-ea2ddde7, the fire
+    # test's sudo call). communicate's own writer thread owns the whole lifecycle.
     try:
-        out, err = proc.communicate(timeout=timeout)
+        out, err = proc.communicate(input=stdin_text, timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_tree(proc, grace)
         out, err = _reap(proc)
