@@ -157,11 +157,14 @@ def _opencode_run(args, prompt, wd, env, stop=None):
     # (start_new_session), so killpg takes the whole tree.
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGKILL)
-    out, err = proc.communicate()
     # ...but opencode's managed `serve --service` grandchild starts its OWN session, so killpg
-    # leaves it squatting the cycle's port and the next cycle dies on "port already in use".
+    # leaves it squatting the cycle's port AND holding the cycle's stdout pipe. Reap it BEFORE
+    # draining: communicate() otherwise blocks until that grandchild dies on its own idle timer
+    # (~16 min observed, run-43b9011b) — the cycle's cap is 6 min, so every cycle overran the
+    # event by a quarter hour and blue managed a handful of cycles instead of twenty.
     # HOME is per-cycle and unique, so it identifies it.
     _reap_managed_servers(child_env.get("HOME", ""))
+    out, err = proc.communicate()
     try:
         (wd / "cycles").mkdir(exist_ok=True)
         (wd / "cycles" / "last-timeout.partial.log").write_text(
