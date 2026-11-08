@@ -21,12 +21,39 @@ def _inject_reanchor_plan(comp_injects, remote_injects):
         if r is None:
             missing.append(inj["title"])
             continue
+
         updates.append((str(r["ID"]),
                         {"open-time": inj["open_time"],
                          "due-time": inj["due_time"],
                          "close-time": inj["close_time"]},
                         list(r.get("InjectFileNames") or [])))
     return updates, missing
+
+
+# mirrors quotient.setup.create_injects' multipart shape over the shared curl jar:
+# title/description/three RFC3339 times + files=@ attachments. Returns False on any
+# engine-side refusal so the caller can count and warn — never raises mid-staging.
+def _create_inject(creds, jar, inj):
+    cmd = ["curl", "-s", "--max-time", "20", "-b", jar, "-X", "POST",
+           f"http://{creds['ENGINE_IP']}/api/injects/create",
+           "-F", f"title={inj['title']}",
+           "-F", f"description={inj.get('description') or ''}",
+           "-F", f"open-time={inj['open_time']}",
+           "-F", f"due-time={inj['due_time']}",
+           "-F", f"close-time={inj['close_time']}"]
+    for fpath in inj.get("files") or []:
+        cmd += ["-F", f"files=@{fpath}"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True).stdout or ""
+    except OSError as e:
+        log(f"WARNING: inject create spawn failed for {inj['title']!r}: {e}")
+        return False
+    if quotient_api.json_error(out):
+        return False
+    log(f"created missing inject {inj['title']!r} on the engine clock "
+        f"(open {inj['open_time'][11:16]} due {inj['due_time'][11:16]} "
+        f"close {inj['close_time'][11:16]})")
+    return True
 
 
 # inject offsets resolve to absolute times at phase-7 deploy time, so a --skip-deploy
@@ -58,8 +85,22 @@ def reanchor_injects(args, comp, creds):
         log(f"WARNING: inject re-anchor skipped — /api/injects unreadable: {(r.stdout or '')[:120]}")
         return
     updates, missing = _inject_reanchor_plan(injects, remote)
-    for title in missing:
-        log(f"WARNING: inject {title!r} has no engine counterpart — deploy phase 7 never created it?")
+    if missing:
+        # --hold-start defers phase-8 inject creation to competition-ops start, and a
+        # scrim (skip_deploy or its own T0 path) never walks that door: run-bd70a985
+        # entered a 4-team event with 0 injects and only a WARNING beside it. Create
+        # them here on the engine clock — the same admin jar this function already
+        # holds, because Quotient allows ONE session per account and a fresh login
+        # would evict it mid-event.
+        by_title = {inj["title"]: inj for inj in injects}
+        failed = []
+        for title in missing:
+            if not _create_inject(creds, jar, by_title[title]):
+                failed.append(title)
+        if failed:
+            log(f"WARNING: {len(failed)} inject(s) had no engine counterpart and could "
+                f"not be created: {', '.join(failed)} — deploy phase 8 skipped them "
+                "(hold-start without competition-ops start?) and the T0 fallback failed")
     n_ok = 0
     for inject_id, fields, keep_files in updates:
         cmd = ["curl", "-s", "--max-time", "15", "-b", jar, "-X", "POST",
