@@ -25,7 +25,9 @@ def comps_root():
         return Path(env)
     for candidate in (Path("competitions"), REPO_ROOT / "competitions"):
         if candidate.is_dir():
-            return candidate
+            # absolute: a root handed back relative to this cwd breaks confusingly when a
+            # consumer resolves it later from anywhere else
+            return candidate.resolve()
     for base in (REPO_ROOT, _main_worktree()):
         if base and (base.parent / "tezcatlipoca-competitions").is_dir():
             return base.parent / "tezcatlipoca-competitions"
@@ -34,5 +36,10 @@ def comps_root():
 
 def resolve_comp_dir(name=None, comp_dir=None):
     if comp_dir:
-        return Path(comp_dir)
-    return comps_root() / (name or "")
+        base = Path(comp_dir)
+    else:
+        base = comps_root() / (name or "")
+    # a dangling link must name its dead target, not read as a plain missing dir
+    if base.is_symlink() and not base.is_dir():
+        raise SystemExit(f"no such competition: {base} — broken symlink to {base.readlink()}")
+    return base

@@ -63,8 +63,9 @@ RETRY_WAIT_S = 90  # slow-ingest grace: a forwarder mid-flush needs a beat to la
 
 
 def _probe_once(ctx, ip, e):
-    """(ok, note): ok False with note None means 'fresh-enough miss' (retry-able);
-    ok False with a note means a hard error (no point retrying the same ssh)."""
+    """(ok, note) — ok False always carries a human-readable note (ssh error, unreadable
+    answer, or the count that came back below min); the retry loop treats every miss the
+    same: one grace re-probe, then FAIL."""
     try:
         proc = context.ssh_via_gateway(ctx, ip, probe_cmd(e), timeout=45)
     except CheckError as e2:

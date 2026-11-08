@@ -30,6 +30,9 @@ INTERNAL_ENV = {
     "JAR": "scrim.env handoff written by run-agent-scrim.py",
     # The file's existence is the "hold at the next phase boundary" request.
     "TEZ_PAUSE_FILE": "tezcatlipoca-dashboard -> deploy_lib/pause.py boundary hold",
+    # The dashboard exports the run's evidence destination; teardown flushes the test folder
+    # there BEFORE any destroy (warn-only — a live range outranks a lost log).
+    "TEZ_EVIDENCE_DIR": "tezcatlipoca-dashboard -> scrim/teardown_stage.py evidence flush",
     # tests/conftest.py sets it before any test import; drivers skip .env when it is set
     # so the offline suite cannot inherit the developer's live estate identity.
     "TEZ_TEST_OFFLINE": "tests/conftest.py -> driver .env guard",

@@ -1,0 +1,4 @@
+[
+  {"name": "dc01",  "last_octet": 2, "cpu": 2, "memory_mb": 4096, "disk_gb": 60, "disk_iface": "sata0", "template": "base-windows-server"},
+  {"name": "web01", "last_octet": 4, "cpu": 1, "memory_mb": 2048, "disk_gb": 15, "disk_iface": "virtio0", "template": "base-ubuntu24.04"}
+]

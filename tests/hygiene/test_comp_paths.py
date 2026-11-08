@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from common import comp_paths
 from common.comp_paths import comps_root, resolve_comp_dir
 
@@ -17,7 +19,7 @@ def test_cwd_competitions_wins_over_checkout(monkeypatch, tmp_path):
     (tmp_path / "competitions").mkdir()
     monkeypatch.delenv("TEZ_COMPETITIONS_ROOT", raising=False)
     monkeypatch.chdir(tmp_path)
-    assert comps_root() == Path("competitions")
+    assert comps_root() == Path("competitions").resolve()
 
 
 
@@ -55,3 +57,12 @@ def test_artifacts_resolve_comp_accepts_path_or_name(monkeypatch, tmp_path):
     (elsewhere / "Compfile").write_text("name comp-a\n")
     assert resolve_comp(str(elsewhere)) == elsewhere
     assert resolve_comp("missing") is None
+
+
+def test_dangling_symlink_names_its_dead_target(monkeypatch, tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setenv("TEZ_COMPETITIONS_ROOT", str(root))
+    (root / "gone").symlink_to(tmp_path / "moved-away")
+    with pytest.raises(SystemExit, match=r"broken symlink to .*moved-away"):
+        resolve_comp_dir("gone")

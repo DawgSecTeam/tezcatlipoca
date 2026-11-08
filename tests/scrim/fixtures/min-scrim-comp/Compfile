@@ -1,0 +1,4 @@
+name min-scrim-comp
+scenario Synthetic two-box network for the offline scrim stage tests: one Windows domain controller and one nginx Linux box. All values are fake.
+difficulty 1
+remote_access 0

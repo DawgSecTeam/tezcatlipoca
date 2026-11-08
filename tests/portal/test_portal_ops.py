@@ -335,6 +335,7 @@ class DeployHook(unittest.TestCase):
         class Ctx:
             from_phase, comp_dir, scoring_ip = 1, Path("/nonexistent"), "10.0.0.9"
             teams, admin_password, injects = {}, "a", []
+            boxes, box_creds = [], {}  # falsy: the event.conf drift branch is not under test here
             state = {"seeded": True, "engine_unpaused": True}
 
             def save_state(self):

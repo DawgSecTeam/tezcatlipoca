@@ -72,7 +72,10 @@ def endpoint_label(platform):
         from estate import config
         from providers.gcp.client import load_credentials
         project = load_credentials(config.gcp_credentials_path())["project_id"]
-        return f"gcp://{project}/{config.active().gcp.zone}"
+        zone = config.active().gcp.zone
+        # the state write normalizes a trailing slash away — the derived label must be
+        # byte-identical to the recorded one or every gcp teardown self-refuses
+        return f"gcp://{project}/{zone}" if zone else f"gcp://{project}"
     return ""
 
 

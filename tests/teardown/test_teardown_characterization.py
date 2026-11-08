@@ -143,10 +143,15 @@ class OwnershipTotality(unittest.TestCase):
             comp = Path(tmp)
             document = estate_state.EstateState.load(comp)
             import providers
-            document.absorb({"run_id": RUN, "platform": "gcp",
-                            "deployed_endpoint": providers.endpoint_label("gcp")})
-            document.save()
-            with patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://new:8006"}):
+            # the fake SA spans the WHOLE test: load_ownership re-derives the label at
+            # teardown/machinery.py:52, and the host's real service account file is none of
+            # this test's business (live CLIs gate on require_identity before ever loading)
+            with patch("providers.gcp.client.load_credentials",
+                       return_value={"project_id": "test-proj"}), \
+                    patch.dict(os.environ, {"TEZ_PROXMOX_ENDPOINT": "https://new:8006"}):
+                document.absorb({"run_id": RUN, "platform": "gcp",
+                                "deployed_endpoint": providers.endpoint_label("gcp")})
+                document.save()
                 state, ownership = machinery.load_ownership(comp)
             self.assertEqual(ownership.run_id, RUN)
 

@@ -22,6 +22,10 @@ from unittest import mock
 REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO))
 
+# A checked-in fixture, not the live comps root: this suite claims "no infra", and the host's
+# ./competitions entries are symlinks whose target can move (it did) — which took down 10 tests.
+FIXTURE = REPO / "tests" / "scrim" / "fixtures" / "min-scrim-comp"
+
 from scrim import (blue_agent, blue_helpers, blue_prompt, blue_watchdog, core, evidence,  # noqa: E402
                    quotient_api, red_tunnel, run_manifest, scoreboard_monitor, test_folder)
 from scrim.runfiles import FINAL_SCOREBOARD, SCOREBOARD_STATE  # noqa: E402
@@ -70,7 +74,7 @@ class Base(unittest.TestCase):
         self.addCleanup(home.stop)
         self.root = self.tmp / "repo"
         self.comp = self.root / "competitions" / "c1"
-        shutil.copytree(comps_root() / "agent-scrim", self.comp)
+        shutil.copytree(FIXTURE, self.comp)
         estate_state.write_flat(self.comp, {
             "admin_password": "adminpw", "box_password": "boxpw", "inject_password": "injpw",
             "box_creds": {"obsadmin": "boxpw"}})
