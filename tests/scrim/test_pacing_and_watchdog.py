@@ -104,5 +104,40 @@ class StallWatchdog(unittest.TestCase):
             self.assertEqual(len(manifest["red_watchdog_restarts"]), 2)
 
 
+class WatchdogThreadIsLiveButUnsupervised(unittest.TestCase):
+    """stage_run must actually START the watchdog (the A5 unit tests call watch_loop
+    directly — a dead import is all the coverage they'd tolerate), and must NOT put it
+    in the supervised list (a watchdog that dies degrades protection, not the event)."""
+
+    def test_stage_run_starts_watch_loop_outside_the_supervised_set(self):
+        import threading as th
+        import time as tm
+        from scrim import blue_agent, endpoints, event_run, scoreboard_monitor, supervisor
+
+        started = th.Event()
+
+        def fake_watch(args, stop):
+            started.set()          # then leave immediately: a dead watchdog
+
+        def live_feed(n, a, creds, t0, stop, lock, first_delay=0.0):
+            stop.wait(5)           # supervised workers must live until the deadline
+
+        args = SimpleNamespace(duration_min=0.02, teams=1, blue_watchdog=False,
+                               run_dir="/tmp")
+        with mock.patch.object(red_watchdog, "watch_loop", fake_watch), \
+                mock.patch.object(blue_agent, "blue_feed_loop", live_feed), \
+                mock.patch.object(scoreboard_monitor, "monitor_loop",
+                                  lambda *a: a[3].wait(5)), \
+                mock.patch.object(endpoints, "blue_ep", lambda *a: ("http://llm.invalid/v1", "m")), \
+                mock.patch.object(supervisor, "EVENT_END_GRACE", 0.2):
+            try:
+                event_run.stage_run(args, {}, tm.time())   # pre-fix: watch_loop never ran
+            except supervisor.WorkerDiedError as e:
+                # whatever the supervisor says about the stubs, the UNSUPERVISED
+                # watchdog may never appear — its death is protection, not an event
+                self.assertNotIn("red-watchdog", str(e))
+        self.assertTrue(started.is_set(), "stage_run never started the red watchdog")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,6 +40,11 @@ def stage_run(args, creds, t0):
     if getattr(args, "blue_watchdog", False):
         threads.append(threading.Thread(target=blue_watchdog.blue_watchdog_loop, name="blue-watchdog",
                                         args=(args, creds, t0, stop)))
+    # red-loop watchdog (A5): best-effort guardian, deliberately NOT in the supervised
+    # list — a dead watchdog must degrade the event's protection, never WorkerDiedError
+    # it. stop is shared, so it ends with the event; daemon as a second guarantee.
+    threading.Thread(target=red_watchdog.watch_loop, name="red-watchdog",
+                     args=(args, stop), daemon=True).start()
     for t in threads:
         t.start()
     reported = supervisor.supervise_workers(threads, t0 + args.duration_min * 60, stop, t0=t0)
