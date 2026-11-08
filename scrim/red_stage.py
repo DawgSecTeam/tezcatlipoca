@@ -29,7 +29,9 @@ def _hard_gate_failures(stdout, allowed=()):
         if "[informational]" in s or ": FAIL" not in s:
             continue
         label = s.split(":", 1)[0].strip()
-        if label and label not in allowed:
+        if label in ("", "RESULT"):   # RESULT is the run footer, not a gate label
+            continue
+        if label not in allowed:
             bad.append(s[:140])
     return bad
 
