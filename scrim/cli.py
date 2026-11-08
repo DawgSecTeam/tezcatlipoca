@@ -100,6 +100,10 @@ def main():
     p.add_argument("--blue-watchdog", action="store_true", dest="blue_watchdog",
                    help="run a non-LLM loop that re-unmasks/starts stopped scored Linux units every "
                         f"{blue_watchdog.WATCHDOG_INTERVAL}s — keeps availability up through a blue-agent API outage")
+    p.add_argument("--allow-gate-fail", dest="allow_gate_fail", default="",
+                   help="comma-separated verify gate labels that may FAIL at the authoritative "
+                        "pre-T0 verify without refusing the event (e.g. telemetry,injects) — "
+                        "use for known-benign drift, never as a habit")
     args = p.parse_args()
     args.blue_base_url = args.blue_base_url or args.llm_base_url
 

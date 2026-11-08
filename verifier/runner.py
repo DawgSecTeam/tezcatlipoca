@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from quotient.setup import expected_service_names
 
 from verifier import (domains, engine, firewall, isolation, misconfig, packet, portal,
-                      red, remote_access, scoreboard, state_gates)
-from verifier.model import CheckError, bool_gate, gate_skip
+                      red, remote_access, scoreboard, state_gates, telemetry)
+from verifier.model import CheckError, bool_gate, gate_fail, gate_skip
 
 
 class PacketProfileError(Exception):
@@ -116,6 +116,13 @@ def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url):
     else:
         run.add(gate_skip("injects", "competition ships no injects/ dir", gating=False))
     run.add(engine.check_round_loop(base_url, admin_session, fix=args.fix_round_loop))
+    print("\n  (telemetry — declared feeds are actually indexing, per team)")
+    try:
+        run.add(telemetry.check_telemetry(ctx, comp_dir, teams, boxes))
+    except CheckError as e:
+        # declared expectations the check itself couldn't parse/run are BLOCKING: an
+        # unreadable telemetry.json must never read as "no expectations"
+        run.add(gate_fail("telemetry", f"declared expectations unusable: {e}"))
     print("\n  (M4 plant coverage — expected vs. actually planted, per machine)")
     coverage_result = state_gates.check_plant_coverage(comp_dir)
     run.add(coverage_result)

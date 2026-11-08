@@ -17,14 +17,34 @@ from multinode.placement_record import read_placement
 from red import red01_ops
 
 
+def _hard_gate_failures(stdout, allowed=()):
+    """Every summary line that FAILED and is NOT marked [informational].
+
+    The authoritative pre-T0 verify is the last cheap moment to refuse a broken
+    event: run-bd70a985 started with FAILed pins/injects/scoreboard lines in the
+    verify log and only a WARNING beside them, then paid for it for 120 minutes."""
+    bad = []
+    for line in (stdout or "").splitlines():
+        s = line.strip()
+        if "[informational]" in s or ": FAIL" not in s:
+            continue
+        label = s.split(":", 1)[0].strip()
+        if label and label not in allowed:
+            bad.append(s[:140])
+    return bad
+
+
 def verify_red_reaches_teams(args, comp, creds):
-    """Judge from red's summary lines, not verify's rc: unrelated gates ride the same rc."""
+    """Red lines judged by name; every OTHER gating FAIL also aborts — the summary is
+    the contract, not verify's rc (unrelated SKIPs ride it too)."""
     log("pre-T0: red01 -> every team reachability gate [authoritative verify]")
     from scrim import compworld
-    r = procs.run(compworld.verify_cmd(comp, creds, "--red-ip", args.red_ip,
-                                       "--red-identity", "--red-teams", "all",
-                                       "--strict-services"),
-                  cwd=core.REPO, timeout=900, check=False, tail=25)
+    allowed = {a.strip() for a in (getattr(args, "allow_gate_fail", "") or "").split(",")
+               if a.strip()}
+    cmd = compworld.verify_cmd(comp, creds, "--red-ip", args.red_ip,
+                               "--red-identity", "--red-teams", "all",
+                               "--strict-services")
+    r = procs.run(cmd, cwd=core.REPO, timeout=900, check=False, tail=25)
     fire_test.write_verify_log(args, "pre-T0 (authoritative)", r)
     summary = {}
     for line in (r.stdout or "").splitlines():
@@ -64,6 +84,13 @@ def verify_red_reaches_teams(args, comp, creds):
             f"{len(down)} scored pin(s) are DOWN before T0 — the estate is not an event: "
             f"{', '.join(down[:12])}. Fix the deploy's service "
             f"bring-up; a degraded start scores nothing and reads as a red failure.")
+    hard = _hard_gate_failures(r.stdout, allowed)
+    if hard:
+        raise RuntimeError(
+            f"pre-T0 verify refused the event: gating FAILs: {' | '.join(hard[:4])} "
+            f"(verify rc={r.returncode}). Fix the range, or name acceptable failures with "
+            f"--allow-gate-fail telemetry,injects — not an event to start. "
+            f"stderr: {(r.stderr or '')[-300:]}")
 
 
 def red_pacing_caps():
