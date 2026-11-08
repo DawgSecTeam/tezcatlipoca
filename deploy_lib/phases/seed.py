@@ -1,6 +1,7 @@
 """Phase 8: seed teams, unpause the engine, create injects (each once), then the opt-in portal."""
 
 from config.injects_config import injects_fingerprint, resolve_inject_times
+from engine.engine_event_ops import ensure_event_conf_current
 from portal.portal_ops import deploy_portal
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
 from common.ssh_ops import wait_for_http
@@ -26,6 +27,21 @@ def phase8_seed(ctx):
         with timed(ctx.comp_dir, 8, "reensure_services"):
             fix_services_on_boxes(ctx.comp_dir, ctx.linux_targets, ctx.tf_ctx,
                                   box_creds=ctx.box_creds)
+    # A resume re-runs this phase after the comp files were fixed, but only phase 3 ever
+    # pushed event.conf — without this, the engine keeps scoring the pre-fix pin set
+    # (run-14ac7f14 → run-bd70a985 phantom win01-iis). No-op when nothing changed.
+    if ctx.boxes and ctx.box_creds:
+        with timed(ctx.comp_dir, 8, "event_conf_drift"):
+            fresh = ensure_event_conf_current(
+                ctx.comp_dir, ctx.teams, ctx.boxes, ctx.tf_ctx, ctx.name,
+                admin_password=ctx.admin_password, scoring_password=ctx.scoring_password,
+                inject_password=ctx.inject_password, box_creds=ctx.box_creds,
+                extra_credlists=({"domain": ctx.domain_creds} if ctx.domain_creds else None))
+        if fresh is False:
+            ctx.state["event_conf_repushed"] = True
+            ctx.save_state()
+            with timed(ctx.comp_dir, 8, "wait_quotient_after_repush"):
+                wait_for_http(f"http://{ctx.scoring_ip}/api/login", timeout=180)
 
     quotient_ctx = {
         "teams": {team_key: team_data["identifier"] for team_key, team_data in ctx.teams.items()},

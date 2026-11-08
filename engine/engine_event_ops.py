@@ -65,6 +65,81 @@ def read_event_conf(ctx):
     return secrets
 
 
+def _quotient_ctx(teams, boxes, event_name, admin_password, scoring_password,
+                  inject_password):
+    return {
+        "teams": {team_key: team_data["identifier"] for team_key, team_data in teams.items()},
+        "boxes_per_team": boxes,
+        "team_passwords": {team_key: team_data["password"] for team_key, team_data in teams.items()},
+        "event_name": event_name,
+        "quotient_admin_password": admin_password,
+        "quotient_scoring_password": scoring_password or admin_password,
+        "inject_password": inject_password,
+    }
+
+
+def _write_event_conf(ctx, event_conf_toml):
+    event_conf_b64 = base64.b64encode(event_conf_toml.encode()).decode()
+    _run_engine_cmd(
+        ctx,
+        f"sudo mkdir -p /opt/quotient/config && "
+        f"echo '{event_conf_b64}' | base64 -d | "
+        f"sudo tee /opt/quotient/config/event.conf > /dev/null && "
+        "sudo chmod 600 /opt/quotient/config/event.conf",
+        timeout=30, step="push event.conf")
+
+
+# A resume that fixes box_services.json AFTER phase 3 pushed it leaves the engine scoring
+# the OLD pin set forever: run-14ac7f14 fixed IIS→SMB at its phase-4 failure boundary, and
+# run-bd70a985 opened with every team chasing a phantom `win01-iis` pin. Compare PARSED
+# TOML (formatting is not drift). On drift rewrite event.conf + credlists and restart only
+# the app service — never /opt/quotient/.env, whose postgres/redis secrets a resumed ctx
+# may not even carry. Returns True (current), False (re-pushed), or None (undecidable:
+# the engine file couldn't be read/parsed — the downstream verify gates still stand).
+def ensure_event_conf_current(comp_dir, teams, boxes, ctx, event_name, admin_password,
+                              scoring_password=None, inject_password=None, box_creds=None,
+                              extra_credlists=None):
+    try:
+        box_services = json.loads((comp_dir / "box_services.json").read_text())
+    except (OSError, ValueError) as e:
+        print(f"  [event.conf] box_services.json unreadable ({e}) — drift check skipped")
+        return None
+    desired_toml = toml.dumps(build_event_conf(
+        _quotient_ctx(teams, boxes, event_name, admin_password, scoring_password,
+                      inject_password), box_services))
+    try:
+        import tomllib
+        live = tomllib.loads(_run_engine_cmd(
+            ctx, "sudo cat /opt/quotient/config/event.conf", step="read event.conf",
+            capture=True, timeout=30).stdout)
+        same = (json.dumps(live, sort_keys=True)
+                == json.dumps(tomllib.loads(desired_toml), sort_keys=True))
+    except Exception as e:                                       # noqa: BLE001
+        print(f"  [event.conf] engine copy unreadable ({e}) — drift check skipped")
+        return None
+    if same:
+        return True
+    print("  [event.conf] DRIFT — engine pins differ from box_services.json; rewriting "
+          "and restarting the scoring app (phase-3 bake predates a resumed fix)")
+    _write_event_conf(ctx, desired_toml)
+    for list_name, pairs in ([("linux", box_creds or {})]
+                             + sorted((extra_credlists or {}).items())):
+        if not pairs:
+            continue
+        content = "".join(f"{user},{pw}\n" for user, pw in pairs.items())
+        content_b64 = base64.b64encode(content.encode()).decode()
+        _run_engine_cmd(
+            ctx,
+            f"sudo mkdir -p /opt/quotient/config/credlists && "
+            f"echo '{content_b64}' | base64 -d | "
+            f"sudo tee /opt/quotient/config/credlists/{list_name}.credlist > /dev/null && "
+            f"sudo chmod 600 /opt/quotient/config/credlists/{list_name}.credlist",
+            timeout=30, step=f"push {list_name}.credlist")
+    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose restart server",
+                    timeout=300, step="restart quotient server")
+    return False
+
+
 def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
                     postgres_password, redis_password, box_creds, inject_password=None,
                     extra_credlists=None, scoring_password=None):
@@ -77,27 +152,10 @@ def push_event_conf(comp_dir, teams, boxes, ctx, event_name, admin_password,
 
     box_services = json.loads((comp_dir / "box_services.json").read_text())
 
-    quotient_ctx = {
-        "teams": {team_key: team_data["identifier"] for team_key, team_data in teams.items()},
-        "boxes_per_team": boxes,
-        "team_passwords": {team_key: team_data["password"] for team_key, team_data in teams.items()},
-        "event_name": event_name,
-        "quotient_admin_password": admin_password,
-        "quotient_scoring_password": scoring_password or admin_password,
-        "inject_password": inject_password,
-    }
-
-    event_conf = build_event_conf(quotient_ctx, box_services)
-    event_conf_toml = toml.dumps(event_conf)
-
-    event_conf_b64 = base64.b64encode(event_conf_toml.encode()).decode()
-    _run_engine_cmd(
-        ctx,
-        f"sudo mkdir -p /opt/quotient/config && "
-        f"echo '{event_conf_b64}' | base64 -d | "
-        f"sudo tee /opt/quotient/config/event.conf > /dev/null && "
-        "sudo chmod 600 /opt/quotient/config/event.conf",
-        timeout=30, step="push event.conf")
+    event_conf = build_event_conf(_quotient_ctx(teams, boxes, event_name, admin_password,
+                                                scoring_password, inject_password),
+                                  box_services)
+    _write_event_conf(ctx, toml.dumps(event_conf))
 
     credlist = "".join(f"{user},{pw}\n" for user, pw in box_creds.items())
     credlist_b64 = base64.b64encode(credlist.encode()).decode()
