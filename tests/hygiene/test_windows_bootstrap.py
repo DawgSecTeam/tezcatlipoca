@@ -80,3 +80,20 @@ class RdpRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StaticAddressAcrossAdapters(unittest.TestCase):
+    """A clone can carry the inherited address on a SECOND adapter: the per-interface
+    guard saw nothing to do while New-NetIPAddress refused the address that exists
+    elsewhere ("Instance MSFT_NetIPAddress already exists", run-bc0cee43)."""
+
+    def test_the_guard_scopes_the_holder_search_to_every_interface(self):
+        script = _capture_bootstrap_script()
+        # the holder lookup is not interface-scoped...
+        self.assertIn("$holders = @(Get-NetIPAddress -AddressFamily IPv4", script)
+        self.assertNotIn(
+            "Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4", script)
+        # ...and a holder on another adapter is cleared before the add
+        self.assertIn("Remove-NetIPAddress -InterfaceIndex $h.InterfaceIndex", script)
+        # the add still only runs when the target adapter lacks the address
+        self.assertIn("$onTarget.Count -eq 0", script)

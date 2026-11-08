@@ -94,8 +94,21 @@ if (-not $adapter) {{ throw "no up NetAdapter found" }}
 # A clone inherits the base template's static address, so the re-assign below is a
 # remove-then-add of the SAME address, which raced and died with "Instance MSFT_NetIPAddress
 # already exists" while the box was already correctly addressed. Desired address present = done.
-if (-not (Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Where-Object {{ $_.IPAddress -eq '{ip}' }})) {{
+#
+# Scope the check to EVERY interface, not just the one we picked: a clone can carry the
+# inherited address on a second adapter (the golden's NIC plus the new one), and
+# New-NetIPAddress refuses an address that exists ANYWHERE while the per-interface guard
+# saw nothing to do (live: scrim-one team clones, run-bc0cee43, 'New-NetIPAddress :
+# Instance MSFT_NetIPAddress already exists'). Clear it wherever it is, then assign.
+$holders = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.IPAddress -eq '{ip}' }})
+foreach ($h in $holders) {{
+    if ($h.InterfaceIndex -ne $adapter.ifIndex) {{
+        Remove-NetIPAddress -InterfaceIndex $h.InterfaceIndex -IPAddress '{ip}' -Confirm:$false -ErrorAction SilentlyContinue
+    }}
+}}
+$onTarget = @($holders | Where-Object {{ $_.InterfaceIndex -eq $adapter.ifIndex }})
+if ($onTarget.Count -eq 0) {{
     Remove-NetIPAddress -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
     Remove-NetRoute -InterfaceIndex $adapter.ifIndex -Confirm:$false -ErrorAction SilentlyContinue
     New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress '{ip}' -PrefixLength 24 -DefaultGateway '{gateway}'
