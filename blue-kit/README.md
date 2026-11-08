@@ -1,7 +1,14 @@
 # blue-kit — the estate's hardening toolkit
 
 Scripts the estate's own operators run on a competition's boxes, shipped to blue
-as-is. **Run them from the box, not from here** — this directory is the kit's
+as-is.
+
+Provenance: copied from DawgSecTeam/quetzalcoatl at `eeadcde` (the estate's own
+automation suite — autofirewall/harden/watchdawg/baseline/auditd). The deploy-side
+`harden.sh` is deliberately NOT shipped: it replaces shells and locks accounts,
+which breaks the scored ssh pins mid-event (see below).
+
+**Run them from the box, not from here** — this directory is the kit's
 source, and everything in it is safe to copy to a box.
 
 ## What's here
