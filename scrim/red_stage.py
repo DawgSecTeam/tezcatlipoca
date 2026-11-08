@@ -40,15 +40,25 @@ def verify_red_reaches_teams(args, comp, creds):
             f"event to start. stderr: {(r.stderr or '')[-400:]}")
     # An availability competition whose scored pins are already down at T0 is not an event
     # either: red cannot take down what is down, blue restores nothing it did not break, and
-    # the scoreboard runs flat for two hours (live: scrim-one, 6/12 and 5/12 at T0 and at the
-    # bell). --strict-services makes that a refusal here, at the last gate before the clock.
-    down, team = [], ""
+    # the scoreboard runs flat for two hours. --strict-services makes the summary row gating;
+    # the DOWN scan only supplies detail. A reused range that still carries a previous run's
+    # unrecoverable takedowns (.tlaloc-off renames nothing restarts) is the way this happens
+    # live: scrim-one runs 4-7, where run4 started 12/12 and runs 5-7 inherited 4-6 pins down.
+    down, team, services_row = [], "", ""
     for line in (r.stdout or "").splitlines():
         head = line.strip().split()
         if head and head[0].endswith(":") and "services UP" in line:
             team = head[0].rstrip(":")
         elif head and head[0] == "DOWN:" and len(head) > 1:
             down.append(f"{team}:{head[1]}")
+        elif head and head[0] == "services" and ":" in line:
+            services_row = line
+    if services_row and "PASS" not in services_row:
+        raise RuntimeError(
+            f"the pre-T0 scoreboard is not green — {services_row.strip()}. "
+            f"{len(down)} scored pin(s) DOWN: {', '.join(down[:12]) or 'none listed'}. "
+            f"An availability event cannot start with pins already down; reset the range "
+            f"(destroy+redeploy) rather than reusing a run's corpse.")
     if down:
         raise RuntimeError(
             f"{len(down)} scored pin(s) are DOWN before T0 — the estate is not an event: "

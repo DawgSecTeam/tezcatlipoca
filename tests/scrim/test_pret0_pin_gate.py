@@ -20,6 +20,7 @@ GOOD = """  team1: 12/12 services UP
   EXPECTED-PINS  all 12 pinned checks registered
   red_identity      : PASS  red01 is 10.0.0.246
   red_teams         : PASS  red01 reached all 2 teams
+  services          : PASS
 """
 
 DOWN = """  team1: 6/12 services UP
@@ -30,6 +31,13 @@ DOWN = """  team1: 6/12 services UP
   EXPECTED-PINS  all 12 pinned checks registered
   red_identity      : PASS  red01 is 10.0.0.246
   red_teams         : PASS  red01 reached all 2 teams
+  services          : FAIL  some DOWN/unscored (query ok)
+"""
+
+UNSCORED = """  (no services reported yet — engine may not have scored a round)
+  red_identity      : PASS  red01 is 10.0.0.246
+  red_teams         : PASS  red01 reached all 2 teams
+  services          : FAIL  no service has been scored yet
 """
 
 
@@ -61,9 +69,16 @@ class PreT0PinGate(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             self._run(DOWN)
         msg = str(ctx.exception)
-        self.assertIn("DOWN before T0", msg)
+        self.assertIn("not green", msg)
         self.assertIn("team1:win02-ftp", msg)
         self.assertIn("team2:splunk01-splunk", msg)
+
+    def test_an_unscored_scoreboard_is_refused_too(self):
+        # a scoreboard with no scored round has no DOWN lines, so the DOWN scan alone
+        # would pass it — the services row is what makes that a refusal
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run(UNSCORED)
+        self.assertIn("not green", str(ctx.exception))
 
     def test_the_verify_runs_strict_on_services(self):
         seen = {}
