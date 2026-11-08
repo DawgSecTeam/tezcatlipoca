@@ -25,9 +25,31 @@ def load_manifest(run_dir):
     return data if isinstance(data, dict) else {}
 
 
+def note_red_watchdog_restart(run_dir):
+    """A5: every mid-event red-loop restart is part of the run's record — the report
+    must show a recovered stall, not a healthy-looking silence."""
+    manifest = load_manifest(run_dir)
+    manifest.setdefault("red_watchdog_restarts", []).append(core.now_iso())
+    save_manifest(run_dir, manifest)
+
+
+def _comp_dir_for(args):
+    """Competition dir for pacing-profile reads; None-safe — the manifest must never
+    fail because a comp name didn't resolve."""
+    name = getattr(args, "competition", None)
+    if not name:
+        return None
+    try:
+        from common.comp_paths import comps_root
+        p = Path(comps_root()) / str(name)
+    except Exception:                                   # noqa: BLE001
+        return None
+    return p if (p / "Compfile").exists() else None
+
+
 # Doubles as the pre-T0 marker for --resume-event; mirrored into the run's test.json so
 # the artifact reader sees progress without cross-referencing run.json.
-def record_phase(run_dir, args, phase, t0=None):
+def record_phase(run_dir, args, phase, t0=None, comp_dir=None):
     # `phases` feeds the dashboard's per-stage events (dashboard/runner.py `_scrim_phases`);
     # `phase` is the latest marker the resume path keys on.
     manifest = load_manifest(run_dir)
@@ -40,7 +62,9 @@ def record_phase(run_dir, args, phase, t0=None):
         "keep_templates": bool(getattr(args, "keep_templates", False)),
         "blue_watchdog": bool(getattr(args, "blue_watchdog", False)),
         # the scrim report's max_simultaneous_down gate judges against max_concurrent_down_end here
-        "pacing": red_pacing_caps(),
+        # (A5: comp-declared red.pacing.* overrides the defaults — a 3-box range isn't held
+        # to a 7-box cap; run-bd70a985's 3<4 FAIL was an invented threshold)
+        "pacing": red_pacing_caps(comp_dir or _comp_dir_for(args)),
         "phase": phase,
         "updated_at": core.now_iso(),
     })

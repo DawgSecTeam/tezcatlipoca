@@ -95,10 +95,26 @@ def verify_red_reaches_teams(args, comp, creds):
             f"stderr: {(r.stderr or '')[-300:]}")
 
 
-def red_pacing_caps():
-    """The report judges down-cap breaches against these same caps, via the run manifest."""
-    return {"max_concurrent_down_start": 2, "max_concurrent_down_end": 4,
-            "max_concurrent_down_endgame": 6}
+PACING_DEFAULTS = {"max_concurrent_down_start": 2, "max_concurrent_down_end": 4,
+                   "max_concurrent_down_endgame": 6}
+
+
+def red_pacing_caps(comp_dir=None):
+    """Phase down-caps: the defaults, overridden by the Compfile's `red.pacing.<phase>`
+    lines (A5). A 3-box competition cannot hold 4 services down at once — judging it
+    against the big-range cap invents a failure (run-bd70a985: max_simultaneous_down
+    3<4 FAIL on a range that could never do 4). The report judges against whatever the
+    manifest recorded, via these same caps."""
+    caps = dict(PACING_DEFAULTS)
+    if comp_dir:
+        from red.tlaloc_ops import compfile_lines
+        lines = compfile_lines(Path(comp_dir))
+        for key in caps:
+            phase = key.rsplit("_", 1)[-1]
+            raw = (lines.get(f"red.pacing.{phase}") or "").strip()
+            if raw.isdigit():
+                caps[key] = int(raw)
+    return caps
 
 
 def red_llm_config(args, base_url=None):

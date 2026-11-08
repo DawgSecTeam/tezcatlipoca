@@ -5,6 +5,7 @@ from scrim import blue_agent
 from scrim import blue_watchdog
 from scrim import endpoints
 from scrim import evidence
+from scrim import red_watchdog
 from scrim import run_manifest
 from scrim import scoreboard_monitor
 from scrim import supervisor
