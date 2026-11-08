@@ -37,13 +37,31 @@ engine's mgmt-IP gate had the same blind spot for the engine-template slot and i
 skip a bridge whose name matches one this plan would create when the node's engine VM carries
 this competition's tag.
 
-### `verify` passes with a scored service down
+### `verify` passes with a scored service down — PARTIALLY FIXED (A3)
 
-Every service verdict is reported `[informational]`, so a range whose SIEM ingest port is closed
-still ends `RESULT: PASS — competition looks healthy`. Live: `team1: 6/7 services UP, DOWN:
-splunk01-ingest` alongside a PASS summary. A scored service being down should fail the run (or
-at least the summary line should not read PASS); the split exists so an unscored service cannot
-fail an otherwise healthy range, but it currently also hides the scored ones.
+Every service verdict was reported `[informational]`, so a range whose SIEM ingest port is closed
+still ended `RESULT: PASS`. Live: `team1: 6/7 services UP, DOWN: splunk01-ingest` beside a PASS.
+FIXED for the path that matters: scrim's authoritative pre-T0 verify now runs `--strict-services`
+and refuses the event on ANY gating FAIL (not just red), so a scored service down can no longer
+ride into T0 behind warnings — `--allow-gate-fail <label>` is the only escape, and it is logged.
+Still informational on a bare `verify-competition.py` (no `--strict-services`) by design: an
+operator probing a half-built range wants the full picture, not a red gate. Unscored services
+remain informational in both paths.
+
+### Red loop ran before T0 on a `--hold-start` range — FIXED (A4)
+
+A held deploy started the tlaloc loop at phase-7 end, so red attacked a range the operator was
+still provisioning — it stripped freshly-installed forwarders 4.5h before T0 (run-14ac7f14).
+Now `--hold-start` leaves the loop enabled-but-stopped with `red_loop_held` in state; only
+`competition-ops.py start` (or scrim's T0) releases it. `telemetry.ensure.sh` runs between
+`stop_red_director` and the gates so forwarder wiring is red-free and the gate measures the result.
+
+### Zero injects reached the engine — FIXED (A2)
+
+A hold-start deferred inject creation to `competition-ops.py start`, a door the scrim flow never
+walked: run-bd70a985 played 120min with zero injects and only a warning. `reanchor_injects` now
+creates any missing title against the held jar instead of warning.
+
 
 ### The queue cannot resume a failed deploy (`--from-phase`)
 
