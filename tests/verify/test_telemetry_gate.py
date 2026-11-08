@@ -36,7 +36,8 @@ def _run(comp_dir, stdout='{"results":[{"n":"7"}]}', raises=None):
         calls.append((ip, cmd))
         return SimpleNamespace(stdout=stdout)
     calls = []
-    with mock.patch.object(telemetry.context, "ssh_via_gateway", fake):
+    with mock.patch.object(telemetry.context, "ssh_via_gateway", fake), \
+         mock.patch.object(telemetry.time, "sleep") as nap:
         result = telemetry.check_telemetry({}, comp_dir, TEAMS, BOXES)
     return result, calls
 
@@ -78,6 +79,34 @@ class TelemetryGate(unittest.TestCase):
             (Path(td) / "telemetry.json").write_text("{not json")
             with self.assertRaises(CheckError):
                 telemetry.load_expectations(Path(td))
+
+
+class RetryWindow(unittest.TestCase):
+    """A3: the slow-ingest race gets ONE grace re-probe before the gate reddens."""
+
+    def test_zero_then_fresh_passes_after_one_retry(self):
+        seen = []
+
+        def fake(ctx, ip, cmd, timeout=60):
+            seen.append(ip)
+            n = "0" if len(seen) == 1 else "5"
+            return SimpleNamespace(stdout='{"results":[{"n":"%s"}]}' % n)
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "telemetry.json").write_text(json.dumps({"expected": EXPECT}))
+            with mock.patch.object(telemetry.context, "ssh_via_gateway", fake), \
+                 mock.patch.object(telemetry.time, "sleep") as nap:
+                result = telemetry.check_telemetry({}, Path(td), {"team1": {"identifier": "130"}}, BOXES)
+            self.assertIs(result.status, Status.PASS)
+            nap.assert_called_once_with(telemetry.RETRY_WAIT_S)
+
+    def test_still_empty_after_retry_fails_once_per_feed(self):
+        # two teams x one feed, both empty: FAIL lists both, retries bounded
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "telemetry.json").write_text(json.dumps({"expected": EXPECT}))
+            result, calls = _run(Path(td), stdout='{"results":[{"n":"0"}]}')
+            self.assertIs(result.status, Status.FAIL)
+            self.assertEqual(result.detail.count("team"), 2)   # each team named once
+            self.assertEqual(len(calls), 4)                    # 2 teams x (probe + retry)
 
 
 class SummaryParse(unittest.TestCase):

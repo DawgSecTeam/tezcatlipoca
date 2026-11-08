@@ -21,6 +21,7 @@ packet-grade values; this file rides in the competition repo:
 
 import json
 import shlex
+import time
 from pathlib import Path
 
 from verifier import context
@@ -57,6 +58,24 @@ def _count_in(body, field):
     return int(float(results[0].get(field, 0)))
 
 
+RETRIES = 1        # one re-probe before a miss becomes a gate FAIL
+RETRY_WAIT_S = 90  # slow-ingest grace: a forwarder mid-flush needs a beat to land events
+
+
+def _probe_once(ctx, ip, e):
+    """(ok, note): ok False with note None means 'fresh-enough miss' (retry-able);
+    ok False with a note means a hard error (no point retrying the same ssh)."""
+    try:
+        proc = context.ssh_via_gateway(ctx, ip, probe_cmd(e), timeout=45)
+    except CheckError as e2:
+        return False, str(e2)
+    try:
+        count = _count_in(proc.stdout or "", e.get("count_field", "n"))
+    except (ValueError, KeyError) as e2:
+        return False, f"probe answer unreadable: {e2}"
+    return count >= int(e.get("min_count", 1)), f"count={count}"
+
+
 def check_telemetry(ctx, comp_dir, teams, boxes):
     expected = load_expectations(comp_dir)
     if not expected:
@@ -74,17 +93,16 @@ def check_telemetry(ctx, comp_dir, teams, boxes):
                 continue
             probes += 1
             ip = f"192.168.{ident}.{octet}"
-            try:
-                proc = context.ssh_via_gateway(ctx, ip, probe_cmd(e), timeout=45)
-                count = _count_in(proc.stdout or "", e.get("count_field", "n"))
-            except CheckError as e2:
-                failures.append(f"{label} ({e2})")
-                continue
-            except (ValueError, KeyError) as e2:
-                failures.append(f"{label} (probe answer unreadable: {e2})")
-                continue
-            if count < int(e.get("min_count", 1)):
-                failures.append(f"{label} count={count}")
+            for attempt in range(RETRIES + 1):
+                ok, note = _probe_once(ctx, ip, e)
+                if ok:
+                    break
+                if attempt < RETRIES:
+                    # any miss gets ONE grace re-probe — the slow-ingest race the plan
+                    # calls out (a forwarder mid-flush lands events seconds later)
+                    time.sleep(RETRY_WAIT_S)
+                else:
+                    failures.append(f"{label} ({note})")
     if failures:
         return bool_gate("telemetry", False,
                          f"{len(failures)}/{probes} feeds not fresh — "
