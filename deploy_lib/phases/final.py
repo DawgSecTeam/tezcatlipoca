@@ -96,8 +96,22 @@ def phase7_domains_and_final(ctx):
     print(f"  Snapshotting all boxes as '{SNAP_READY}' (as-delivered restore point)...")
     run_concurrent(ctx.all_targets, partial(snap_ready, ctx), max_workers=4)
 
-    # Last: the range is delivered, so red may begin attacking.
-    if red_summary:
-        with timed(ctx.comp_dir, 7, "red_start"):
-            tlaloc_ops.start_director(ctx.ssh_key, red_summary["red_ip"])
-        print(f"  tlaloc      : loop started on red01 ({red_summary['red_ip']})")
+    # Last: the range is delivered, so red may begin attacking — UNLESS the start is held.
+    begin_red_after_delivery(ctx, red_summary)
+
+
+def begin_red_after_delivery(ctx, red_summary):
+    # A --hold-start range is not delivered yet: run-14ac7f14 released the loop at deploy
+    # end and tlaloc stripped freshly-provisioned forwarders 4.5 hours before T0. The unit
+    # stays enabled-but-stopped; competition-ops.py start (or scrim's T0) begins play.
+    if not red_summary:
+        return
+    if ctx.state.get("hold_start"):
+        ctx.state["red_loop_held"] = True
+        ctx.save_state()
+        print("  tlaloc      : loop HELD (--hold-start) — red starts with the event "
+              "(competition-ops.py start releases it)")
+        return
+    with timed(ctx.comp_dir, 7, "red_start"):
+        tlaloc_ops.start_director(ctx.ssh_key, red_summary["red_ip"])
+    print(f"  tlaloc      : loop started on red01 ({red_summary['red_ip']})")

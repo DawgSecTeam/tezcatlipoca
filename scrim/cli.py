@@ -14,6 +14,7 @@ from scrim import core
 from scrim import event_run
 from scrim import fire_test
 from scrim import inject_sync
+from scrim import telemetry_ensure
 from scrim import lock_ops
 from common import procs
 from scrim import red_link
@@ -192,6 +193,9 @@ def main():
     # the red loop, and a reused one (--skip-deploy) is still attacking. stage_red restarts
     # it at T0.
     red_link.stop_red_director(args)
+    # A4: the comp's forwarder wiring (if it ships telemetry.ensure.sh) runs HERE — red is
+    # stopped, and the pre-T0 telemetry gate measures the result before committing the event.
+    telemetry_ensure.run_if_declared(args, comp)
     run_manifest.record_phase(run_dir, args, "verify")
     fire_test.stage_verify(args, comp, creds)
     run_manifest.record_phase(run_dir, args, "blues")

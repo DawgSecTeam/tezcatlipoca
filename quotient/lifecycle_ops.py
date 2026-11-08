@@ -61,6 +61,31 @@ def engine_status(session, base_url):
     return r.json()
 
 
+# a --hold-start deploy leaves tlaloc enabled-but-stopped (a held range must sleep —
+# run-14ac7f14's held deploy had red stripping freshly-provisioned forwarders hours
+# before T0); releasing the hold is the moment red begins. Returns 1 when red did NOT
+# come up, so `start` tells the operator to intervene rather than open red-less.
+def release_held_red(state):
+    if not state.get("red_loop_held"):
+        return 0
+    try:
+        from estate.config import ssh_key_path
+        from red import tlaloc_ops
+        red_ip = (state.get("red") or {}).get("red_ip")
+        if not red_ip:
+            print("  START WARNING: red loop was held but red01's ip is not in state — "
+                  "start it yourself: sudo systemctl start tlaloc.service on red01")
+            return 1
+        tlaloc_ops.start_director(str(ssh_key_path()), red_ip)
+        state["red_loop_held"] = False
+        print(f"  START: tlaloc loop released on red01 ({red_ip}) — red is attacking")
+        return 0
+    except Exception as e:                                   # noqa: BLE001
+        print(f"  START WARNING: releasing the red loop failed ({e}) — run "
+              "`sudo systemctl start tlaloc.service` on red01 before play begins")
+        return 1
+
+
 def cmd_start(args, comp_dir):
     state = load_state(comp_dir)
     base_url = engine_base(args, comp_dir)
@@ -104,6 +129,9 @@ def cmd_start(args, comp_dir):
             else:
                 state["injects_created"] = True
                 state["injects_fingerprint"] = want
+
+    held_red_rc = release_held_red(state)
+    rc = rc or held_red_rc
 
     state["started"] = True
     state["engine_unpaused"] = True
