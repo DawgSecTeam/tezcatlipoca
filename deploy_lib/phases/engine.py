@@ -61,10 +61,14 @@ def phase2_engine_template(ctx):
     if ctx.from_phase > 2:
         print("[2/8] Skipped (resume) — not re-creating the engine.")
         return
+    # The banner used to come AFTER the template build, so the longest step of the deploy
+    # (base-image docker build, then goldens) reported as phase 1 — the dashboard, the pause
+    # hold and anyone reading the log read a phase behind for its whole duration.
+    print("[2/8] Building the engine template, then the team bridges and the scoring engine "
+          "(team boxes come in phase 4)...")
     ensure_engine_template(ctx)
 
-    print("[2/8] Creating the team bridges and the scoring engine (team boxes come in "
-          "phase 4)...")
+    print("[2/8] Creating the team bridges and the scoring engine...")
     with timed(ctx.comp_dir, 2, "create_engine"):
         create_engine_and_bridges(ctx)
 
