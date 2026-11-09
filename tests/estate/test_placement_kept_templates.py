@@ -57,16 +57,26 @@ class ProbeKeptTemplates(unittest.TestCase):
         self.assertTrue(probe["ok"], probe["reasons"])
 
     def test_a_leftover_range_still_collides(self):
+        # The engine's own slots (1000, the template slot) are engine-role collisions: a node
+        # may host teams without hosting the engine, but it may not host the engine there.
         probe = self._probe([_vm(ET, template=1, tags="comp-comp;tezcatlipoca"),
                              _vm(1000, status="running"),
                              _vm(1400, status="running")])
-        self.assertEqual(probe["collisions"], [1000, 1400])
+        self.assertEqual(probe["collisions"], [1400])
+        self.assertEqual(probe["engine_collisions"], [1000])
         self.assertFalse(probe["ok"])
 
     def test_a_foreign_template_in_our_slot_is_still_a_collision(self):
         probe = self._probe([_vm(ET, template=1, tags="other-team;template", name="someone-else")])
-        self.assertEqual(probe["collisions"], [ET])
-        self.assertFalse(probe["ok"])
+        self.assertEqual(probe["engine_collisions"], [ET])
+        self.assertEqual(probe["collisions"], [])
+
+    def test_a_foreign_engine_slot_alone_does_not_disqualify_the_node_for_teams(self):
+        # The reported over-scope: an unrelated range's engine (same derived band) on a node
+        # that will only host satellites refused the whole node, with a misleading collision.
+        probe = self._probe([_vm(1000, status="running", tags="tezcatlipoca;comp-other;run-x")])
+        self.assertTrue(probe["ok"], probe["reasons"])
+        self.assertEqual(probe["engine_collisions"], [1000])
 
     def test_another_competitions_range_still_collides(self):
         # the template-slot exemption is not a licence to build over a foreign range

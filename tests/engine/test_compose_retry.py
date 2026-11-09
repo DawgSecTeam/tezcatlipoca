@@ -36,5 +36,20 @@ class Retry(unittest.TestCase):
         self.assertEqual(sum("compose up" in c for c in calls), 3)
 
 
+    def test_the_explicit_pull_skips_locally_built_images(self):
+        # `server` carries `image: quotient-server` AND a build stanza; a bare pull asked a
+        # registry for it and died "pull access denied for quotient-server" (run-7b648ae3).
+        calls = []
+
+        def fake(ctx, cmd, **kw):
+            calls.append(cmd)
+            return SimpleNamespace(stdout="")
+
+        with patch.object(engine_cmd_ops, "_run_engine_cmd", side_effect=fake):
+            engine_cmd_ops.start_quotient(SimpleNamespace())
+        pull = next(c for c in calls if "compose pull" in c)
+        self.assertIn("--ignore-buildable", pull)
+
+
 if __name__ == "__main__":
     unittest.main()

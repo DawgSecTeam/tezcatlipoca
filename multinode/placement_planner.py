@@ -15,7 +15,8 @@ from multinode.placement_record import (anchor_identifier, check_team_blocks,
 def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=""):
     from infra.client import proxmox_api_for
     probe = {"name": record.name, "node": record.node, "ok": True, "reasons": [],
-             "missing_templates": [], "collisions": [], "mem_free_bytes": None,
+             "missing_templates": [], "collisions": [], "engine_collisions": [],
+             "mem_free_bytes": None,
              "datastore_free": None, "running_ours": 0, "templates": {}}
     ep, token = record.endpoint, os.environ.get(record.token_env, "")
     if not token:
@@ -47,7 +48,12 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=
 
     vm_by_vmid = {vm.get("vmid"): vm for vm in vms if vm.get("node") == record.node}
     existing = set(vm_by_vmid)
-    wanted = {engine_vmid, engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}
+    # Only the engine's own two slots are engine-role-specific. Goldens, jumps and team bands
+    # are what a node needs to HOST TEAMS, so a node whose engine slot is taken by an unrelated
+    # range can still be a satellite — refusing it there disqualified a whole node for a role
+    # it will never play (a workaround was "pick another node").
+    engine_slots = {engine_vmid, engine_vmid + ENGINE_TEMPLATE_VMID_OFFSET}
+    wanted = set()
     for slot in range(MAX_SATELLITES + 1):
         wanted.update(golden_slot_span(engine_vmid, slot))
         wanted.add(jump_vmid_for(engine_vmid, slot))
@@ -73,6 +79,8 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=
         return True
 
     probe["collisions"] = sorted(v for v in wanted & existing if not _not_a_collision(v))
+    probe["engine_collisions"] = sorted(v for v in engine_slots & existing
+                                        if not _not_a_collision(v))
     if probe["collisions"]:
         probe["ok"] = False
         probe["reasons"].append(f"vmid collisions: {probe['collisions'][:6]}"
@@ -185,11 +193,24 @@ def compute_placement(records, balancing, teams, boxes, engine_vmid, comp_name,
         if engine_override not in known:
             raise SystemExit(f"  ERROR: --engine-node {engine_override}: no such node")
         engine_node = engine_override
+        if probes[engine_node]["engine_collisions"]:
+            raise SystemExit(
+                f"  ERROR: --engine-node {engine_override} cannot host the engine: its slots "
+                f"are taken ({probes[engine_node]['engine_collisions']}) — free them or pick "
+                f"another engine node")
     else:
         counts = {r.name: sum(1 for n in team_nodes.values() if n == r.name)
                   for r in records}
         best_count = max(counts.values())
-        cands = [r for r in records if counts[r.name] == best_count]
+        # A node whose engine slots are occupied can still host teams, just not the engine.
+        cands = [r for r in records if counts[r.name] == best_count
+                 and not probes[r.name]["engine_collisions"]]
+        if not cands:
+            raise SystemExit(
+                "  ERROR: every node with teams has its engine slots occupied — "
+                + "; ".join(f"{r.name}: engine vmids {probes[r.name]['engine_collisions']}"
+                            for r in records if probes[r.name]["engine_collisions"])
+                + ". Free them, or name an engine node with --engine-node.")
         cands.sort(key=lambda r: (_prefer_index(r.name, prefer),
                                   -(probes[r.name].get("mem_free_bytes") or 0), r.name))
         engine_node = cands[0].name

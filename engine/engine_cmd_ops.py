@@ -59,7 +59,11 @@ def start_quotient(ctx, *, attempts=3, timeout=600):
     # come from a registry, and on a flapping uplink compose's implicit pull gives up and `up`
     # then dies with "No such image: postgres:17" (live: run-9070c600, which had built the
     # whole app). Pull them explicitly first, with the same retries the build uses.
-    _retry_over_flaky_uplink(ctx, "cd /opt/quotient && sudo docker compose pull",
+    # --ignore-buildable: `server` declares `image: quotient-server` AND a `build:` stanza, so a
+    # bare pull asks a registry for an image that only ever exists after a local build and dies
+    # with "pull access denied for quotient-server" (live: run-7b648ae3), killing every deploy.
+    _retry_over_flaky_uplink(ctx,
+                             "cd /opt/quotient && sudo docker compose pull --ignore-buildable",
                              step="compose pull", timeout=1800)
     for attempt in range(attempts):
         try:

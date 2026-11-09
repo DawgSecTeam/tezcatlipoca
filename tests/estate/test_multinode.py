@@ -14,6 +14,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from deploy_lib import placement as dl_placement  # noqa: E402
@@ -37,13 +39,39 @@ def _rec(name, node=None, **kw):
     return nodes_config.NodeRecord(**base)
 
 
-def _probe(name, ok=True, mem_gib=64, templates=(), collisions=(), running=2):
+def _probe(name, ok=True, mem_gib=64, templates=(), collisions=(), running=2,
+           engine_collisions=()):
     return {"name": name, "node": name.upper(), "ok": ok,
             "reasons": [] if ok else ["probe: down"],
             "missing_templates": [], "collisions": list(collisions),
+            "engine_collisions": list(engine_collisions),
             "mem_free_bytes": mem_gib * 1024 ** 3, "datastore_free": 500 * 1024 ** 3,
             "running_ours": running,
             "templates": {t: 900 + i for i, t in enumerate(templates)}}
+
+
+def test_an_occupied_engine_slot_does_not_disqualify_a_satellite_node():
+    # Role-aware placement: the node with a foreign engine in its engine band still hosts
+    # teams; the engine simply goes to the other node.
+    records = [_rec("n1"), _rec("n2")]
+    probes = {"n1": _probe("n1", templates=[b["template"] for b in BOXES],
+                           engine_collisions=[1000]),
+              "n2": _probe("n2", templates=[b["template"] for b in BOXES])}
+    placement = placement_planner.compute_placement(
+        records, {}, {"team1": {"identifier": "120"}, "team2": {"identifier": "121"}},
+        BOXES, 1000, "comp", probes=probes)
+    assert placement["engine_node"] == "n2"
+    assert "n1" in placement["team_nodes"].values()
+
+
+def test_no_node_able_to_host_the_engine_says_so():
+    records = [_rec("n1")]
+    probes = {"n1": _probe("n1", templates=[b["template"] for b in BOXES],
+                           engine_collisions=[1000])}
+    with pytest.raises(SystemExit) as err:
+        placement_planner.compute_placement(
+            records, {}, {"team1": {"identifier": "120"}}, BOXES, 1000, "comp", probes=probes)
+    assert "engine slots occupied" in str(err.value)
 
 
 BOXES = [
