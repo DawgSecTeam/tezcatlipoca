@@ -28,6 +28,42 @@ def find_engine_template(node, engine_vmid):
     return vmid if cfg.get("template") else None
 
 
+def _ensure_sshd_via_agent(node, vmid):
+    """Start sshd on a build VM that booted with it disabled, if the agent channel exists.
+
+    Best effort by design: an image without qemu-guest-agent still gets the plain SSH wait,
+    and a failure here must not turn a slow boot into a deploy failure.
+    """
+    import time as _time
+
+    from infra.guest_exec import guest_agent_exec_root
+    # The agent answers well after start_vm() returns, so poll it instead of assuming one
+    # call lands: a single early attempt raced the boot and silently did nothing.
+    deadline = _time.time() + 180
+    while _time.time() < deadline:
+        try:
+            rc, out, err = guest_agent_exec_root(
+                node, vmid,
+                # Socket activation is the trap here: with ssh.socket started, connections
+                # complete TCP but hang in the banner exchange (the ssh@.service handoff
+                # never lands), so "listening on 22" is not the same as "accepting". The
+                # plain service is what actually answers.
+                "systemctl is-active --quiet ssh && exit 0; "
+                "systemctl disable --now ssh.socket >/dev/null 2>&1; "
+                "systemctl enable --now ssh >/dev/null 2>&1; "
+                "sleep 1; ss -ltn 2>/dev/null | grep -q ':22 ' && echo LISTENING || "
+                "systemctl is-active ssh 2>/dev/null",
+                timeout=60)
+        except Exception:
+            _time.sleep(5)
+            continue
+        state = (out or "").strip()
+        if state:
+            print(f"    build VM sshd via guest agent: {state}")
+            return
+        _time.sleep(5)
+
+
 def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                           postgres_password, redis_password, quotient_ref,
                           hash_value, inputs, run_id=None, mgmt_bridge=""):
@@ -135,6 +171,12 @@ def build_engine_template(node, comp_dir, engine_vmid, base_engine_vm_id, ctx,
                                "set TEZ_ENGINE_MGMT_IP (portable-node mode) or fix "
                                "the agent channel")
     forget_engine_host_key(build_ip)
+    # Some base images boot with sshd disabled (base-ubuntu24.04: ssh.service disabled and
+    # socket-activated; the socket was enabled but never started on the clone, so nothing
+    # listened on 22 and the build waited out its full 900s — run-a237d46e/2026-11-08).
+    # The guest agent is up long before sshd, so use it to start the socket instead of
+    # treating "no SSH" as "bad image".
+    _ensure_sshd_via_agent(node, vmid)
     # 900s: parallel deploys saturating the node pushed first-boot past 300s, twice.
     if not wait_for_ssh(ctx["ssh_key_path"], ctx.get("vm_username", "ubuntu"), build_ip,
                         timeout=900):

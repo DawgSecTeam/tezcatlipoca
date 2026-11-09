@@ -18,7 +18,13 @@ def _engine_opts(known_hosts=None, host=None):
 # accept-new pins the engine key on first connect and rejects a changed key afterwards (TOFU).
     kh = known_hosts or DEFAULT_KNOWN_HOSTS
     Path(kh).parent.mkdir(parents=True, exist_ok=True)
-    opts = ["-o", f"UserKnownHostsFile={kh}", "-o", "StrictHostKeyChecking=accept-new",
+    # -F /dev/null: a host whose /etc/ssh/ssh_config.d entry has bad ownership makes every
+    # ssh exit 255 before it connects ("Bad owner or permissions on ..."), which reads as
+    # "box not reachable" for the whole 900s wait. 2026-11-08: the engine's own probes died
+    # on 20-systemd-ssh-proxy.conf while a hand-run `ssh -F /dev/null` logged in fine.
+    # Everything below is passed explicitly, so the system config is not needed.
+    opts = ["-F", "/dev/null", "-o", f"UserKnownHostsFile={kh}", "-o",
+            "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=10",
             # A silently dropped node link otherwise hangs until the caller's full timeout.
             "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
