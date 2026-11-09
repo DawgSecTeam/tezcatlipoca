@@ -4,7 +4,7 @@ import base64
 import re
 import time
 
-from engine.engine_cmd_ops import _run_engine_cmd, start_quotient
+from engine.engine_cmd_ops import _retry_over_flaky_uplink, _run_engine_cmd, start_quotient
 from engine.engine_health_ops import gcp_docker_egress_pair, install_range_healthcheck
 
 
@@ -56,36 +56,6 @@ def _patch_quotient_injects_cmd():
     blob = base64.b64encode(_QUOTIENT_INJECTS_PY.encode()).decode()
     return (f"echo '{blob}' | base64 -d | sudo python3 - "
             f"/opt/quotient/static/templates/pages/injects.html")
-
-
-_BUILD_ATTEMPTS = 8
-# The lab's uplink delivers ~15s of connectivity then drops for tens of seconds, repeatedly
-# (sampled 2026-11-08: 6/10 short calls succeed, in runs). A build needs to outlast several
-# outages, and each retry keeps the layers/images the failed attempt already pulled, so the
-# delays grow instead of repeating: ~20s,30s,45s,60s,90s,120s,120s.
-_BUILD_RETRY_DELAYS = (20, 30, 45, 60, 90, 120, 120)
-
-
-def _retry_over_flaky_uplink(ctx, cmd, *, step, timeout, first_flags="", attempts=None):
-    """Run a network-bound step until it survives a flap.
-
-    The lab's WAN drops for tens of seconds at a time; a build or clone that needs a few
-    continuous minutes of egress otherwise dies on a blip and costs the whole deploy
-    (run-2ef1679d: "go mod download" timed out, and the same request answered 200 later).
-    The retries drop first_flags so work the failed attempt finished is reused.
-    """
-    attempts = attempts or _BUILD_ATTEMPTS
-    for attempt in range(1, attempts + 1):
-        try:
-            return _run_engine_cmd(ctx, cmd + (first_flags if attempt == 1 else ""),
-                                   timeout=timeout, step=step)
-        except RuntimeError:
-            if attempt == attempts:
-                raise
-            delay = _BUILD_RETRY_DELAYS[min(attempt - 1, len(_BUILD_RETRY_DELAYS) - 1)]
-            print(f"  {step} failed (attempt {attempt}/{attempts}) — the uplink is flaky; "
-                  f"retrying in {delay}s")
-            time.sleep(delay)
 
 
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
