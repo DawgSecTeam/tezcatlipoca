@@ -81,6 +81,9 @@ def print_live_summary(ctx):
 
 def finish_deploy(ctx):
     # the last thing deploy() does
+    # The slots are real VMs from here on, so the collision gate covers them by itself.
+    from infra import reservations
+    reservations.release(ctx.comp_dir)
     write_credentials_file(ctx)
     print_timing_summary(ctx.comp_dir)
     print_live_summary(ctx)

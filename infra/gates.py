@@ -83,6 +83,35 @@ def check_stale_estate_state(comp_dir, comp_name, previous_state, engine_vmid, f
         )
 
 
+def reserve_planned_slots(ctx, comp_dir, plan):
+    """Claim this run's slots before a single clone, in the same critical section as the check.
+
+    run_preflight reads Proxmox: between that read and the clone, another deploy on this host
+    can claim a vmid this one just saw free (2026-10-26: a destroyed range's 2000 was taken in
+    the gap). The ledger makes the check-and-set atomic across processes; the holder is named
+    because "collides with something" without an owner sends the operator to Proxmox.
+    """
+    from infra import reservations
+    from infra.collisions import expected_slots, expected_bridges
+    wanted = []
+    for share in plan.shares:
+        wanted += [slot.vmid for slot in expected_slots(share, plan)]
+        wanted += expected_bridges(share, plan.boxes)
+    conflicts = reservations.claim(comp_dir, wanted, run_id=ctx.run_id)
+    if not conflicts:
+        return
+    vmids = sorted(str(r) for r, _ in conflicts if str(r).isdigit())
+    bridges = sorted(str(r) for r, _ in conflicts if not str(r).isdigit())
+    holders = ", ".join(sorted({f"{e.get('owner')} (run {e.get('run_id') or 'unknown'})"
+                                for _, e in conflicts}))
+    clauses = ([f"vmid collisions: [{', '.join(vmids)}]"] if vmids else []) + \
+              ([f"bridge collisions: [{', '.join(bridges)}]"] if bridges else [])
+    raise SystemExit(
+        f"  ERROR: preflight refused: {'; '.join(clauses)} — another deploy running on this "
+        f"host reserved them: {holders}. Wait for that run to finish (or destroy it), then "
+        f"deploy again.")
+
+
 def run_capacity_preflight(ctx, comp_dir, from_phase):
     """Phase-2 boundary only: a later resume must not re-refuse against an already-deployed range."""
     if from_phase <= 2:
@@ -91,13 +120,15 @@ def run_capacity_preflight(ctx, comp_dir, from_phase):
         reclaim_tag = ctx.previous_state.get("run_id") or ctx.run_id
         from infra.plan import multinode_plan, single_node_plan
         if ctx.placement:
-            run_preflight(multinode_plan(comp_dir, ctx.boxes, ctx.teams, ctx.engine_vmid,
-                                         ctx.placement, ctx.engine_mgmt_ip,
-                                         not ctx.resuming, reclaim_tag))
+            plan = multinode_plan(comp_dir, ctx.boxes, ctx.teams, ctx.engine_vmid,
+                                  ctx.placement, ctx.engine_mgmt_ip,
+                                  not ctx.resuming, reclaim_tag)
         else:
-            run_preflight(single_node_plan(comp_dir, ctx.boxes, ctx.number_of_teams,
-                                           ctx.teams, ctx.engine_vmid, not ctx.resuming,
-                                           ctx.engine_mgmt_ip, reclaim_tag))
+            plan = single_node_plan(comp_dir, ctx.boxes, ctx.number_of_teams,
+                                    ctx.teams, ctx.engine_vmid, not ctx.resuming,
+                                    ctx.engine_mgmt_ip, reclaim_tag)
+        run_preflight(plan)
+        reserve_planned_slots(ctx, comp_dir, plan)
 
 
 def run_range_gates(ctx, comp_dir, from_phase):

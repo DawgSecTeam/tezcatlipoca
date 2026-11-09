@@ -33,6 +33,11 @@ INTERNAL_ENV = {
     # The dashboard exports the run's evidence destination; teardown flushes the test folder
     # there BEFORE any destroy (warn-only — a live range outranks a lost log).
     "TEZ_EVIDENCE_DIR": "tezcatlipoca-dashboard -> scrim/teardown_stage.py evidence flush",
+    # Overrides where infra/reservations.py keeps the cross-process slot ledger (tests point it
+    # at tmp_path; an operator may want it on shared storage).
+    "TEZ_SLOT_LEDGER": "infra/reservations.py ledger location override",
+    # Standard XDG variable, read for the same default.
+    "XDG_STATE_HOME": "infra/reservations.py ledger location default",
     # tests/conftest.py sets it before any test import; drivers skip .env when it is set
     # so the offline suite cannot inherit the developer's live estate identity.
     "TEZ_TEST_OFFLINE": "tests/conftest.py -> driver .env guard",

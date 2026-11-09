@@ -64,7 +64,12 @@ def run_terminal_teardown(comp_dir, teams, boxes, name, *, env=None, full=True,
     plan = build_terminal_plan()
     engine = TeardownEngine(ctx, log=log)
     results = engine.execute(plan)
-    return engine.verify_clean(plan, results)
+    clean = engine.verify_clean(plan, results)
+    # Even a partially clean teardown frees the slots for the next deploy; anything it left
+    # behind is still visible to the preflight's live read.
+    from infra import reservations
+    reservations.release(comp_dir)
+    return clean
 
 
 # records steps the CALLER already completed (the scrim harness) so the standard plan skips them

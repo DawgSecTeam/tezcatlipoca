@@ -23,8 +23,8 @@ def _path():
     explicit = os.environ.get("TEZ_SLOT_LEDGER")
     if explicit:
         return Path(explicit).expanduser()
-    base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
-    return Path(base) / "tezcatlipoca-engine" / "slot-reservations.json"
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".tezcatlipoca")
+    return Path(base) / "slot-reservations.json"
 
 
 @contextmanager
@@ -46,20 +46,34 @@ def _transaction():
         os.replace(tmp, path)
 
 
-def claim(owner, resources, run_id="", ttl=TTL):
-    """Reserve `resources` for `owner`; returns [(resource, holder)] conflicts, empty when claimed."""
+def _owner(comp_dir):
+    """Key reservations by the competition's workspace: a resume must re-claim, not collide."""
+    return str(Path(comp_dir).resolve())
+
+
+def claim(comp_dir, resources, run_id="", ttl=TTL):
+    """Reserve `resources`; returns [(resource, holder)] conflicts, empty when claimed."""
+    owner = _owner(comp_dir)
     with _transaction() as (entries, now):
         conflicts = [(r, entries[r]) for r in map(str, resources)
-                     if r in entries and entries[r].get("owner") != str(owner)]
+                     if r in entries and entries[r].get("owner") != owner]
         if conflicts:
             return conflicts
         for resource in map(str, resources):
-            entries[resource] = {"owner": str(owner), "run_id": str(run_id), "expires": now + ttl}
+            entries[resource] = {"owner": owner, "run_id": str(run_id), "expires": now + ttl}
     return []
 
 
-def release(owner):
-    """Drop every reservation `owner` holds."""
-    with _transaction() as (entries, _now):
-        for resource in [r for r, e in entries.items() if e.get("owner") == str(owner)]:
-            del entries[resource]
+def release(comp_dir):
+    """Drop every reservation this competition's workspace holds.
+
+    Best effort: this is bookkeeping, and a teardown must never fail because the ledger is
+    unwritable (a read-only home, a full disk) — the live VMs are the real collision evidence.
+    """
+    owner = _owner(comp_dir)
+    try:
+        with _transaction() as (entries, _now):
+            for resource in [r for r, e in entries.items() if e.get("owner") == owner]:
+                del entries[resource]
+    except OSError:
+        pass
