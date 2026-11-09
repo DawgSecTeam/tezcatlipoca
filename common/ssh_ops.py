@@ -30,9 +30,15 @@ def _engine_opts(known_hosts=None, host=None):
             "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
     if host:
         # %C hashes (user, host, port) into a fixed-length token: the old `cm-<ip>-22-%r` was
-        # a Unix socket path that overflowed UNIX_PATH_MAX on a deep $HOME.
+        # a Unix socket path that overflowed UNIX_PATH_MAX on a deep $HOME. %C is 40 hex
+        # characters and OpenSSH appends a suffix, so a deep $HOME still overflows (~120
+        # bytes under a 48-character state dir): ssh then dies before connecting, which reads
+        # as "box not reachable" for the whole timeout (2026-11-09, second time).
+        control = Path(kh).parent / "cm-%C"
+        if len(str(control)) > 85:
+            control = Path("/tmp") / f"tz-cm-{os.getuid()}-%C"
         opts += ["-o", "ControlMaster=auto",
-                 "-o", f"ControlPath={Path(kh).parent / 'cm-%C'}",
+                 "-o", f"ControlPath={control}",
                  "-o", "ControlPersist=900"]
     return opts
 
