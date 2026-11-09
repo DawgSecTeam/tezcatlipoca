@@ -58,6 +58,11 @@ def _patch_quotient_injects_cmd():
             f"/opt/quotient/static/templates/pages/injects.html")
 
 
+_BUILD_ATTEMPTS = 4
+# Long enough for a flap to pass, short enough not to burn the deploy's budget.
+_BUILD_RETRY_DELAY = 20
+
+
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
     # Grow the root to the disk we sized before the packages/Docker/Quotient build.
     from guests.root_disk_ops import grow_root_command
@@ -68,6 +73,12 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     # domain); on a network that filters 8.8.8.8 every apt/git step fails while the gateway
     # resolver answers (live: run-deba55da "Temporary failure resolving" on the engine).
     _run_engine_cmd(ctx, dns_fix_cmd(), timeout=60, step="fix engine DNS")
+    # A flapping uplink makes apt give up inside one connection timeout; retries turn a blip
+    # into a slower step instead of a dead deploy (same symptom as the compose build).
+    _run_engine_cmd(ctx, "printf 'Acquire::Retries \"5\";\\nAcquire::http::Timeout \"30\";"
+                         "\\nAcquire::https::Timeout \"30\";\\n' | "
+                         "sudo tee /etc/apt/apt.conf.d/99flaky-uplink >/dev/null",
+                    timeout=30, step="apt retry policy")
     _run_engine_cmd(ctx, (
         # unattended-upgrades holds the dpkg/archives locks past Lock::Timeout and re-fires
         # mid-upgrade; stopping the units alone let apt-daily-upgrade spawn apt-get between
@@ -162,8 +173,24 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     push_quotient_env(ctx, postgres_password, redis_password)
 
     print("  Building Quotient Docker images...")
-    _run_engine_cmd(ctx, "cd /opt/quotient && sudo docker compose build --no-cache",
-                    timeout=1800, step="compose build")
+    # The lab's uplink flaps: a build that needs a few minutes of continuous egress dies on a
+    # blip and costs the whole deploy (live: run-2ef1679d, "go mod download" failed with
+    # proxy.golang.org timing out; sampled minutes later the same request returned 200).
+    # Retry, and let the retries reuse the layers the failed attempt did finish — only the
+    # first attempt forces --no-cache.
+    for attempt in range(1, _BUILD_ATTEMPTS + 1):
+        flags = " --no-cache" if attempt == 1 else ""
+        try:
+            _run_engine_cmd(ctx, f"cd /opt/quotient && sudo docker compose build{flags}",
+                            timeout=1800, step="compose build")
+            break
+        except RuntimeError:
+            if attempt == _BUILD_ATTEMPTS:
+                raise
+            print(f"  compose build failed (attempt {attempt}/{_BUILD_ATTEMPTS}) — the "
+                  f"uplink is flaky; retrying in {_BUILD_RETRY_DELAY}s with the layers "
+                  f"already built")
+            time.sleep(_BUILD_RETRY_DELAY)
 
     print("  Starting Quotient Docker containers...")
     start_quotient(ctx)
