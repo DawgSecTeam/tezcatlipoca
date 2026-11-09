@@ -301,3 +301,41 @@ class TailscaleInstallTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FlakyUplinkRetry(unittest.TestCase):
+    """The headscale host is across the lab's WAN, which flaps; an ssh transport failure (255)
+    killed a deploy that had already built its engine (run-14b03417). Retry 255 only."""
+
+    def test_a_transport_failure_is_retried_then_succeeds(self):
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(1)
+            rc = 255 if len(calls) == 1 else 0
+            return subprocess.CompletedProcess(argv, rc, "ok", "")
+
+        import subprocess
+        with patch.object(ra.subprocess, "run", side_effect=fake_run), \
+             patch.object(ra.time, "sleep", lambda s: None), \
+             patch.object(ra, "_headscale_env", return_value={
+                 "TEZ_HEADSCALE_SSH_USER": "u", "TEZ_HEADSCALE_SSH_HOST": "h"}):
+            r = ra._hs_ssh("true", "pw")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(len(calls), 2)
+
+    def test_a_non_transport_failure_is_not_retried(self):
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(1)
+            return subprocess.CompletedProcess(argv, 1, "", "bad password")
+
+        import subprocess
+        with patch.object(ra.subprocess, "run", side_effect=fake_run), \
+             patch.object(ra.time, "sleep", lambda s: None), \
+             patch.object(ra, "_headscale_env", return_value={
+                 "TEZ_HEADSCALE_SSH_USER": "u", "TEZ_HEADSCALE_SSH_HOST": "h"}):
+            with self.assertRaises(Exception):
+                ra._hs_ssh("true", "pw")
+        self.assertEqual(len(calls), 1)

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from common.constants import comp_slug
@@ -330,14 +331,30 @@ def _headscale_env():
     return values
 
 
+_HS_SSH_ATTEMPTS = 3
+# A flap runs ~10-20s; three tries spaced by this outlast one.
+_HS_SSH_RETRY_DELAY = 10
+
+
 def _hs_ssh(cmd, password, input_text="", timeout=90, check=True, capture=True):
     # `cmd` runs under `sudo -S` with the password on stdin (sysadmin has passworded sudo).
     env = _headscale_env()
     argv = ["sshpass", "-p", password, "ssh",
             "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=15",
             f"{env['TEZ_HEADSCALE_SSH_USER']}@{env['TEZ_HEADSCALE_SSH_HOST']}", cmd]
-    return subprocess.run(argv, input=input_text, text=capture, capture_output=capture,
-                          timeout=timeout, check=check)
+    # The headscale host is across the lab's WAN, which flaps for tens of seconds at a time: an
+    # ssh transport failure (255) here killed a deploy that had already built its engine
+    # (run-14b03417). Retry transport failures only — a wrong password or a refused command is
+    # not a flap and must fail immediately.
+    for attempt in range(1, _HS_SSH_ATTEMPTS + 1):
+        r = subprocess.run(argv, input=input_text, text=capture, capture_output=capture,
+                           timeout=timeout, check=False)
+        if r.returncode == 0 or r.returncode != 255 or attempt == _HS_SSH_ATTEMPTS:
+            break
+        time.sleep(_HS_SSH_RETRY_DELAY)
+    if check and r.returncode != 0:
+        raise subprocess.CalledProcessError(r.returncode, argv, r.stdout, r.stderr)
+    return r
 
 
 def hs_cli(args, timeout=90, check=True):
