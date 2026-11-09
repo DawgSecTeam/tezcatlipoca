@@ -20,13 +20,19 @@ import json
 from pathlib import Path
 
 from common import utils
-from common.constants import RED_SEGMENT_GW, RED_SEGMENT_IP, RED_SEGMENT_SUBNET, GOLDEN_TAG
+from common.constants import RED_SEGMENT_GW, RED_SEGMENT_IP, RED_SEGMENT_SUBNET, \
+    WINDOWS_ADMIN_USER, GOLDEN_TAG
 from common.ssh_ops import forget_engine_host_key, ssh_via_gateway, wait_for_ssh
 from common.timing import timed
 from providers.gcp import compute, image_ops, instance_ops, network_ops, naming
 from providers.gcp.naming import labels as ownership_labels
 
 PLATFORM = "gcp"
+
+# The windows bootstrap marker must hold this long before the box is called done:
+# the script writes it immediately before a pending-features reboot, so one sighting
+# can race the shutdown.
+BOOTSTRAP_STABLE_S = 60
 
 # The engine's and red01's management NICs live on the mgmt subnet (ops ingress).
 MGMT_ENGINE_IP = network_ops.MGMT_ENGINE_IP
@@ -273,11 +279,22 @@ def build_golden_sets(ctx, stored, coverage_recorder):
             print(f"  Golden {box}: hash differs — rebuilding {image}")
             image_ops.delete_image(creds, image)
 
-        built = _build_one_golden(ctx, creds, prefix, target, machine, by_box, coverage_recorder)
         image_labels = ownership_labels(ctx.comp_name, ctx.run_id, GOLDEN_TAG,
                                         unit=target["vmid"])
         if digest:
             image_labels = {**image_labels, image_ops.HASH_LABEL: digest}
+        if box in (ctx.unbooted or ()):
+            # A domain controller's golden stays unbooted: the base cut straight into an
+            # image, so each team's clone specializes its own SID and the pre-domain
+            # stage promotes per team (proxmox's _build_unbooted_goldens, with the
+            # image replacing clone+qm-template).
+            image_ops.create_from_image(
+                creds, image, image_ops.resolve_base(creds, target["box"]["template"]),
+                image_labels)
+            golden_ids[box] = target["vmid"]
+            print(f"  Golden {box}: unbooted (dc) — image cut straight from the base")
+            continue
+        built = _build_one_golden(ctx, creds, prefix, target, machine, by_box, coverage_recorder)
         image_ops.create_from_instance(creds, image, built, labels=image_labels)
         instance_ops.delete(creds, machine)
         golden_ids[box] = target["vmid"]
@@ -288,16 +305,28 @@ def build_golden_sets(ctx, stored, coverage_recorder):
 def _build_one_golden(ctx, creds, prefix, target, machine, by_box, coverage_recorder):
     from common.constants import SNAP_BASE
     from common.ssh_ops import wait_for_boxes_ssh, wait_for_cloud_init
+    from common.windows_ops import is_windows_template
     from guests.apt_dns_ops import fix_dns_on_boxes, prep_apt_on_boxes
     from guests.ubuntu_auth_ops import setup_ubuntu_auth
+    from golden.golden_ops import windows_plan_features
     from nakonops.nakon_bundle_ops import build_nakon_bundle
     from nakonops.nakon_run_ops import run_nakon
 
     box = target["box"]["name"]
     identifier = target["ip"].split(".")[2]  # goldens sit on team1's subnet at .240+
+    windows = is_windows_template(target["box"]["template"])
     info = compute.instance(creds, machine)
     if info is None:
         base = image_ops.resolve_base(creds, target["box"]["template"])
+        # Windows boxes boot with no cloud-init: the SAME startup script the team boxes
+        # get bakes the full proxmox bootstrap contract (admin password, defender off,
+        # RDP, plan features) into the golden disk, so every clone inherits it complete.
+        meta = instance_ops.metadata(
+            ctx.box_username, _ssh_public_key(),
+            image_ops.cloud_config_user(ctx.box_username, ctx.box_password,
+                                        _ssh_public_key()),
+            windows_startup_ps1=windows_startup_script(
+                windows_plan_features(ctx.comp_dir, box), ctx.box_password) if windows else "")
         info = instance_ops.create(
             creds, machine, image=base,
             machine=instance_ops.machine_type(target["box"]["cpu"],
@@ -306,21 +335,24 @@ def _build_one_golden(ctx, creds, prefix, target, machine, by_box, coverage_reco
                                    target["ip"])],
             labels=ownership_labels(ctx.comp_name, ctx.run_id, "golden-build",
                                     unit=target["vmid"]),
-            network_tags=(naming.team_tag(identifier),),
-            disk_gb=target["box"].get("disk_gb") or 10,
-            meta=instance_ops.metadata(
-                ctx.box_username, _ssh_public_key(),
-                image_ops.cloud_config_user(ctx.box_username, ctx.box_password,
-                                           _ssh_public_key())))
+            meta=meta,
+            network_tags=(naming.team_tag(identifier),))
         print(f"  Golden {box}: instance {machine} from {base}")
     else:
         print(f"  Golden {box}: adopting the staged instance {machine} (re-planting)")
         instance_ops.start(creds, machine)
-    wait_for_boxes_ssh(ctx.tf_ctx, [target], timeout=600)
-    wait_for_cloud_init(ctx.tf_ctx, [target], timeout=240)
-    setup_ubuntu_auth([target], ctx.tf_ctx)
-    fix_dns_on_boxes([target], ctx.tf_ctx)
-    prep_apt_on_boxes([target], ctx.tf_ctx)
+    # Windows goldens spend 5-15 min in sysprep specialize before first logon, and
+    # sshd's capability install lands only after that; 1800 s is the honest ceiling.
+    wait_for_boxes_ssh(ctx.tf_ctx, [target], timeout=1800)
+    if windows:
+        # The marker wait also covers the script's pending-features reboot: the box
+        # must come back up and HOLD the marker before the plant dials it.
+        windows_bootstrap(ctx, target)
+    else:
+        wait_for_cloud_init(ctx.tf_ctx, [target], timeout=240)
+        setup_ubuntu_auth([target], ctx.tf_ctx)
+        fix_dns_on_boxes([target], ctx.tf_ctx)
+        prep_apt_on_boxes([target], ctx.tf_ctx)
     image_ops.machine_image_mark(
         creds, naming.machine_image_name(prefix, target["vm_name"], SNAP_BASE),
         machine, ownership_labels(ctx.comp_name, ctx.run_id))
@@ -338,8 +370,15 @@ def _build_one_golden(ctx, creds, prefix, target, machine, by_box, coverage_reco
             raise RuntimeError(f"golden plant for {box} had {len(result.failed)} FAILED "
                               f"step(s) — strict mode requires green")
     coverage_recorder(machines, result)
-    cloud_clean = ssh_via_gateway(ctx.tf_ctx, target["ip"],
-                                  "sudo cloud-init clean --logs --machine-id", timeout=120)
+    if not windows:
+        # Clones must re-run cloud-init as themselves; a failed clean ships the golden's
+        # machine-id (and first-boot state) to every clone. The proxmox golden flow
+        # checks the same rc before converting.
+        clean = ssh_via_gateway(ctx.tf_ctx, target["ip"],
+                                "sudo cloud-init clean --logs --machine-id", timeout=120)
+        if clean.returncode != 0:
+            raise RuntimeError(f"golden {box}: cloud-init clean failed rc={clean.returncode} "
+                               f"{(clean.stderr or '').strip()[:120]}")
     instance_ops.stop(creds, machine)
     return compute.instance(creds, machine)
 
@@ -348,6 +387,8 @@ def apply_team_boxes(ctx, sources):
     creds = _creds()
     prefix = _prefix(ctx)
     from common.utils import is_unmanaged
+    from common.windows_ops import is_windows_template
+    from golden.golden_ops import windows_plan_features
     for target in ctx.all_targets:
         box = target["box"]
         if is_unmanaged(box):
@@ -359,6 +400,14 @@ def apply_team_boxes(ctx, sources):
         if compute.instance(creds, name) is not None:
             continue
         golden_image = naming.image_name(prefix, "golden", box["name"])
+        if is_windows_template(box["template"]):
+            meta = instance_ops.metadata(
+                ctx.box_username, _ssh_public_key(),
+                windows_startup_ps1=windows_startup_script(
+                    windows_plan_features(ctx.comp_dir, box["name"]),
+                    ctx.box_password))
+        else:
+            meta = instance_ops.metadata(ctx.box_username, _ssh_public_key())
         instance_ops.create(
             creds, name,
             image=f"projects/{creds['project_id']}/global/images/{golden_image}",
@@ -369,20 +418,133 @@ def apply_team_boxes(ctx, sources):
                                     unit=target["vmid"]),
             network_tags=(naming.team_tag(target["identifier"]),),
             disk_gb=box.get("disk_gb") or 10,
-            meta=instance_ops.metadata(
-                ctx.box_username, _ssh_public_key(),
-                image_ops.cloud_config_user(ctx.box_username, ctx.box_password,
-                                           _ssh_public_key())))
+            meta=meta)
         ctx.document().record("team_box", compute.zone(), name, vmid=target["vmid"])
     ctx.document().save()
 
 
-def windows_bootstrap(ctx, target, features=()):
-    raise SystemExit(
-        "  ERROR: Windows boxes on the gcp platform are not implemented yet (the "
-        "boot-time channel moves from the QEMU guest agent to startup-script-ps1 on "
-        "GCE stock images) — deploy this competition on proxmox, or trim the Windows "
-        "boxes. Tracked as the gcp provider's Windows workstream.")
+def windows_startup_script(features, admin_password):
+    # The gcp Windows boot channel: the GCE guest environment runs
+    # windows-startup-script-ps1 as SYSTEM at EVERY boot, so the script must be
+    # idempotent and marker-guarded the way a resume is. The body mirrors the proxmox
+    # bootstrap_windows_box contract (defender off, RDP on, firewall profiles on,
+    # plan features) minus the transport-specific pieces (static IP re-assign, QEMU-GA).
+    feature_block = ""
+    reboot_line = ""
+    if features:
+        feature_list = ", ".join(f"'{f}'" for f in features)
+        # A feature install can hit ERROR_SHARING_VIOLATION (0x80070020) while setup
+        # holds the file; that is transient, so retry it (the proxmox block, verbatim).
+        feature_block = f"""
+$featureOk = $false
+for ($attempt = 0; $attempt -lt 3 -and -not $featureOk; $attempt++) {{
+  try {{
+    $installed = Install-WindowsFeature -Name @({feature_list}) -IncludeManagementTools -ErrorAction Stop
+    $featureOk = $true
+    if ($installed.RestartNeeded -eq 'Yes') {{ $reboot = $true }}
+  }} catch {{
+    if ($_.Exception.Message -notmatch '0x80070020|being used by another process') {{ throw }}
+    Start-Sleep -Seconds 20
+  }}
+}}
+if (-not $featureOk) {{ throw 'Install-WindowsFeature failed after 3 attempts' }}"""
+        # Features stay InstallPending until a real restart: the marker is WITHHELD and
+        # the box reboots; the next boot's script finds nothing pending and writes it.
+        reboot_line = "\nif ($reboot) { Restart-Computer -Force }"
+    return f"""
+$ErrorActionPreference = 'Stop'
+$marker = 'C:\\ProgramData\\tezcatlipoca\\bootstrap.done'
+try {{
+  $sshKeys = Invoke-RestMethod -Headers @{{ MetadataFlavor = 'Google' }} -Uri 'http://metadata.google.internal/computeMetadata/v1/instance/attributes/ssh-keys'
+  $sshDir = 'C:\\\\ProgramData\\\\ssh'
+  New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+  $authorized = Join-Path $sshDir 'administrators_authorized_keys'
+  If (-not (Test-Path $authorized)) {{ New-Item -ItemType File -Path $authorized | Out-Null }}
+  foreach ($line in ($sshKeys -split "`n" | Where-Object {{ $_.Trim() }})) {{
+    $u, $keyType = ($line -split ':', 2)
+    $u = $u.Trim()
+    If (-not (Get-LocalUser -Name $u -ErrorAction SilentlyContinue)) {{
+      net user $u '{admin_password}' /add /y | Out-Null
+    }} Else {{
+      net user $u '{admin_password}' /y | Out-Null
+    }}
+    net localgroup Administrators $u /add | Out-Null
+    $have = @(Get-Content $authorized -ErrorAction SilentlyContinue)
+    $key = ($line -split ':', 2)[1].Trim()
+    If (($have | Where-Object {{ $_  -eq $key }}).Count -eq 0) {{ Add-Content -Path $authorized -Value $key }}
+  }}
+  icacls $authorized /inheritance:r /grant 'SYSTEM:F' /grant 'BUILTIN\\\\Administrators:F' | Out-Null
+  Get-Service sshd -ErrorAction SilentlyContinue | Restart-Service -Force
+}} catch {{
+  Write-Output "ssh-key sync failed: $($_.Exception.Message)"
+}}
+net user {WINDOWS_ADMIN_USER} "{admin_password}" /y /active:yes
+if ($LASTEXITCODE -ne 0) {{ throw "net user failed rc=$LASTEXITCODE" }}
+try {{ Uninstall-WindowsFeature -Name Windows-Defender -ErrorAction SilentlyContinue | Out-Null }} catch {{}}
+# The uninstall alone is not the competition standard: the realtime scanners
+# quarantine red's payloads on sight even while the uninstall is pending a restart.
+if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {{
+    Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+    Set-MpPreference -DisableIOAVProtection $true -ErrorAction SilentlyContinue
+    Set-MpPreference -DisableScriptScanning $true -ErrorAction SilentlyContinue
+}}
+sc.exe config WinDefend start= disabled | Out-Null
+sc.exe stop WinDefend | Out-Null
+New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender' -Force -ErrorAction SilentlyContinue | Out-Null
+Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender' -Name DisableAntiSpyware -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender' -Name DisableAntiVirus -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+{feature_block}
+$cap = Get-WindowsCapability -Online | Where-Object {{ $_.Name -like 'OpenSSH.Server*' }}
+if ($cap -and $cap.State -ne 'Installed') {{
+    Add-WindowsCapability -Online -Name $cap.Name | Out-Null
+}}
+Set-Service -Name sshd -StartupType Automatic
+Start-Service -Name sshd
+# The stock image ships all three firewall profiles disabled: until they are on, the
+# sshd rule below (and any later blue hardening) is dead paper. Idempotent.
+try {{ Set-NetFirewallProfile -All -Enabled True -ErrorAction SilentlyContinue | Out-Null }} catch {{}}
+if (-not (Get-NetFirewallRule -Name sshd -ErrorAction SilentlyContinue)) {{
+    New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
+}}
+# Every CCDC blue team administers Windows over RDP: the scored 3389 dial is filtered
+# without both the terminal-server setting and the rule group (proxmox contract).
+Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue
+Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue
+Start-Service -Name TermService -ErrorAction SilentlyContinue
+Enable-NetFirewallRule -Name RemoteDesktop-UserMode-In-TCP,RemoteDesktop-UserMode-In-UDP,RemoteDesktop-Shadow-In-TCP -ErrorAction SilentlyContinue
+New-Item $marker -Force | Out-Null{reboot_line}
+"""
+
+
+def windows_bootstrap(ctx, target, features=(), timeout=1800):
+    """Windows boxes self-bootstrap at first boot from windows-startup-script-ps1,
+    baked into the instance metadata at box create (the plan features ride the same
+    metadata). This wait verifies the channel came up: sshd answering through the
+    engine gateway and the bootstrap marker written. The marker only proves the
+    script finished with nothing pending a restart, but its first sighting can race
+    the pending-features reboot's shutdown — so it must survive one poll cycle."""
+    import time
+    from common.ssh_ops import ssh_via_gateway
+    deadline = time.time() + timeout
+    ip = target["ip"]
+    marker_cmd = ('powershell -NoProfile -Command "exit [int](-not (Test-Path '
+                  "'C:\\ProgramData\\tezcatlipoca\\bootstrap.done'))\"")
+    stable_since = None
+    while True:
+        ok = ssh_via_gateway(ctx.tf_ctx, ip, marker_cmd, timeout=30,
+                             user=ctx.tf_ctx.get("box_username", "ubuntu")).returncode == 0
+        if ok:
+            now = time.time()
+            if stable_since and now - stable_since >= BOOTSTRAP_STABLE_S:
+                return {"ok": True, "vmid": target.get("vmid"), "ip": ip,
+                        "channel": "windows startup script + sshd"}
+            stable_since = stable_since or now
+        else:
+            stable_since = None
+        if time.time() >= deadline:
+            raise RuntimeError(f"vmid {target.get('vmid')}: the windows bootstrap never "
+                               f"settled on {ip} within {timeout}s (sshd + bootstrap.done marker)")
+        time.sleep(10)
 
 
 # ---- restore points (machine images) ----
@@ -468,7 +630,7 @@ def destroy_estate(document, *, full=True, nodes=None, log=print):
         for row in document.resources(kind):
             name = row["name"]
             if kind in ("golden", "engine_template") and not full:
-                skipped.append(dict(row))
+                kept.append(dict(row))
                 log(f"  kept {kind} {name} (--teams-only: templates stay)")
                 continue
             if kind in ("golden", "engine_template"):
@@ -646,8 +808,8 @@ def red01_destroy(comp_dir, **kwargs):
     own = kwargs.get("ownership")
     creds = _creds()
     comp = utils.competition_name(comp_dir)
-    unit = red01_ops.recorded_identity(comp_dir).get("vmid")
-    if unit and own:
+    removed_vm = False
+    if own:
         mine = [i for i in compute.instances(creds)
                 if i["name"].endswith("tlaloc-red01")
                 and naming.owned(i, comp, own.run_id)]
@@ -656,7 +818,8 @@ def red01_destroy(comp_dir, **kwargs):
         if mine:
             instance_ops.delete(creds, mine[0]["name"])
             print(f"  red01      : destroyed {mine[0]['name']}")
-    removed = {"vm": bool(unit), "rules": False}
+            removed_vm = True
+    removed = {"vm": removed_vm, "rules": False}
     if kwargs.get("engine_ip") and kwargs.get("ssh_key") and kwargs.get("engine_user"):
         removed["rules"] = red01_ops.remove_engine_rules(
             kwargs["engine_ip"], kwargs["ssh_key"], engine_user=kwargs["engine_user"]

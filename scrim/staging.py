@@ -139,6 +139,8 @@ def stage_deploy(args, comp):
     if getattr(args, "nodes", None):
         # without this the deploy silently targets whatever TEZ_ENGINE_ENV_FILE points at
         cmd += ["--nodes", str(args.nodes)]
+    if getattr(args, "platform", None):
+        cmd += ["--platform", str(args.platform)]
     # placement inputs travel with the run: sharing the env's engine vmid / block / mgmt IP collides
     for flag, key in (("--scoring-vmid", "scoring_vmid"),
                       ("--team-identifiers", "team_identifiers"),

@@ -58,27 +58,30 @@ whole red01/Mythic install (real phase 7) and only jumped to `phase 8/8 seed` on
 The gcp backend deploys the Linux stack end to end (engine, goldens, boxes, red01, teardown).
 Refused at preflight by NAME until each lands — never a silent half-deploy:
 
-- **Windows + AD boxes** — the boot-time channel moves from the QEMU guest agent to
-  `startup-script-ps1` on stock GCE images, and the DC boxes' unbooted-golden semantics map to
-  reusing the stock image; both are unproven. Refusal: _"Windows boxes need the gcp boot-time
-  channel"_.
 - **In-path firewalls** — pfSense cannot run on GCP at all; VyOS needs an imported appliance
   image tier, not the PVE clone path. Refusal names the box.
 - **unmanaged appliance boxes** — same tier, no gcp path.
+
+Windows boxes ride the implemented boot-time channel (`windows-startup-script-ps1` metadata
+carrying the full proxmox bootstrap contract; unbooted DC goldens cut straight from the base
+image so each team's clone specializes its own SID). It is unit-covered against the in-memory
+API but has NOT survived a live bake yet — the first Windows gcp deploy is the proof.
 
 Known-open beyond the matrix (these greet you with a clear refusal at use time):
 
 - **redeploy's rollback modes** — a machine image restores by RECREATING the instance; the redeploy
   engine still assumes in-place rollback. `--mode reconfigure` is the only mode wired for gcp.
-- **scrim harness on gcp** — `run-agent-scrim.py` does not forward the platform to its internal
-  deploy; the dashboard's `platform` param covers deploy/plan only. red01's management channel
-  (public-IP SSH, firewalled) works; the harness just needs the pass-through.
 - **portal consoles on gcp** — there is no VNC on GCP, so the portal's vncproxy tier has no gcp
   path. A browser-SSH console gateway is the pending design; `portal 1` ranges deploy on proxmox
   only for now.
 - **restore points reboot** — a machine image requires a stopped instance, so taking `tz-base`/
   `tz-ready` reboots the box (disk-equivalent restore state, which is what redeploy restores
   anyway; documented in the architecture map).
+- **the golden-hash path still dials Proxmox** — `deploy_lib/configs.py` resolves base-template
+  vmids through `_template_vmid_map` → `proxmox_api`, whose `config.require("proxmox.endpoint")`
+  refuses a gcp-only profile. A gcp deploy today needs a reachable Proxmox endpoint in the
+  profile purely so the golden hash inputs can carry a base-template id (a meaningless number
+  on gcp). The engine template's sha256-of-image-URL base key is the pattern to extend here.
 
 Also pending: the dashboard's web UI has no platform toggle yet — `platform` rides the MCP tool
 and the HTTP API's `params` dict.

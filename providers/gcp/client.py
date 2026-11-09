@@ -69,3 +69,16 @@ def gapi(creds, method, path, *, params=None, data=None, timeout=120):
     if response.status_code >= 300:
         raise RuntimeError(f"GCP {method} {url} -> {response.status_code}: {response.text[:400]}")
     return response.json() if response.content else {}
+
+
+def gapi_all(creds, path, *, params=None):
+    """Every page of a list endpoint: a shared project's collections run past one
+    maxResults=500 page, and a silently truncated list reads as "absent"."""
+    items, params = [], dict(params or {})
+    params["maxResults"] = 500
+    while True:
+        page = gapi(creds, "GET", path, params=params)
+        items.extend(page.get("items") or [])
+        if not page.get("nextPageToken"):
+            return items
+        params["pageToken"] = page["nextPageToken"]

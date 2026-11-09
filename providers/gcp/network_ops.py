@@ -1,10 +1,11 @@
 """The range's network: one VPC per run — isolation by unrouted VPC, ownership by name.
 
 GCP's implied rules make this simpler than the PVE bridge work: cross-subnet ingress
-is denied by default between the team subnets, the red subnet is unreachable from the
-teams (and vice versa), and every box's default gateway is its subnet's .1 — which is
-the ENGINE's interface. The engine's iptables isolation/NAT code runs unchanged as
-the only inter-subnet router. Egress rides the Cloud NAT configured here.
+is denied by default between the team subnets, and the red subnet is unreachable from
+the teams (and vice versa). GCP's fabric owns each subnet's .1, so the engine holds
+.2 per team and a tag-scoped default route steers the team boxes' egress through it —
+the engine's iptables isolation/NAT code runs unchanged as the only inter-subnet
+router. Egress rides the Cloud NAT configured here.
 
 Firewalls do not carry labels on this API, so network objects carry their ownership
 in the name (the tz-<comp>-<run8> prefix) — the same scheme the recorded inventory
@@ -12,7 +13,7 @@ uses; deletion goes through tier order so instances are gone before their subnet
 """
 
 from providers.gcp import compute
-from providers.gcp.client import gapi
+from providers.gcp.client import gapi, gapi_all
 from providers.gcp import naming
 
 # The engine's NIC0 lives here; its RESERVED external IP is the run's mgmt address.
@@ -134,19 +135,46 @@ def _ensure_router_nat(creds, prefix, mgmt_subnet, record):
 
 
 def _ensure_rule(creds, prefix, role, net_link, *, source, target, record=print):
-    # No port lists: intra-range flows are port-agnostic by design (apt-proxy 3142,
-    # nakon'd service ports, red's DNAT targets); the isolation is the src/tgt scope,
-    # the same way a PVE team bridge has no port filters either.
-    name = naming.firewall_name(prefix, role)
-    listed = gapi(creds, "GET", "global/firewalls", params={"maxResults": 500}).get("items") or []
-    if any(r["name"] == name for r in listed):
+    body = {"name": naming.firewall_name(prefix, role), "network": net_link,
+            "direction": "INGRESS",
+            "allowed": [{"IPProtocol": proto} for proto in ("tcp", "udp", "icmp")],
+            "sourceRanges": [source], "targetTags": [target],
+            "description": f"tezcatlipoca intra-range — {role}"}
+    return _converge_rule(creds, body, record)
+
+
+def _converge_rule(creds, body, record=print):
+    """Create-or-converge a firewall rule: an existing rule that drifted from the
+    profile (a moved operator egress, a widened tag) is PATCHed into line instead of
+    silently surviving past its config's useful life."""
+    name = body["name"]
+    listed = gapi_all(creds, "global/firewalls")
+    existing = next((r for r in listed if r["name"] == name), None)
+    if existing is None:
+        record(f"  firewall  : creating {name} ({body['sourceRanges']} -> "
+               f"{body.get('targetTags')})")
+        compute.wait_op(creds, gapi(creds, "POST", "global/firewalls", data=body))
         return name
-    record(f"  firewall  : {name} (from {source} -> {target})")
-    compute.wait_op(creds, gapi(creds, "POST", "global/firewalls", data={
-        "name": name, "network": net_link, "direction": "INGRESS",
-        "allowed": [{"IPProtocol": proto} for proto in ("tcp", "udp", "icmp")],
-        "sourceRanges": [source], "targetTags": [target],
-        "description": f"tezcatlipoca intra-range — {role}"}))
+    # The API returns `network` as a full URL where the profile carries the short
+    # project path — compare by suffix, never by equality, or every pass would
+    # "converge" every rule.
+    def _norm(items):
+        return sorted((str(a.get("IPProtocol")),
+                       tuple(sorted(str(p) for p in a.get("ports") or [])))
+                      for a in items or [])
+
+    drift = []
+    if not str(existing.get("network") or "").endswith(body["network"]):
+        drift.append("network")
+    if sorted(existing.get("sourceRanges") or []) != sorted(body["sourceRanges"]):
+        drift.append("sourceRanges")
+    if sorted(existing.get("targetTags") or []) != sorted(body["targetTags"]):
+        drift.append("targetTags")
+    if _norm(existing.get("allowed")) != _norm(body["allowed"]):
+        drift.append("allowed")
+    if drift:
+        record(f"  firewall  : converging {name} — {'/'.join(drift)} drifted from the profile")
+        compute.wait_op(creds, gapi(creds, "PATCH", f"global/firewalls/{name}", data=body))
     return name
 
 
@@ -162,18 +190,13 @@ def _ops_sources():
     return sources
 
 
-def _ensure_ops_rule(creds, prefix, role, net_link, sources, ports, target, record):
-    rule = naming.firewall_name(prefix, role)
-    listed = gapi(creds, "GET", "global/firewalls", params={"maxResults": 500}).get("items") or []
-    if any(r["name"] == rule for r in listed):
-        return rule
-    record(f"  network: ops firewall {rule} ({', '.join(ports)} from {', '.join(sources)} -> {target})")
-    compute.wait_op(creds, gapi(creds, "POST", "global/firewalls", data={
-        "name": rule, "network": net_link,
-        "direction": "INGRESS", "allowed": [{"IPProtocol": "tcp", "ports": list(ports)}],
-        "sourceRanges": sources, "targetTags": [target],
-        "description": f"tezcatlipoca ops — {rule}"}))
-    return rule
+def _ensure_ops_rule(creds, prefix, role, net_link, sources, ports, target, record=print):
+    body = {"name": naming.firewall_name(prefix, role), "network": net_link,
+            "direction": "INGRESS",
+            "allowed": [{"IPProtocol": "tcp", "ports": list(ports)}],
+            "sourceRanges": list(sources), "targetTags": [target],
+            "description": f"tezcatlipoca ops — {role}"}
+    return _converge_rule(creds, body, record)
 
 
 def _ensure_mgmt_rule(creds, prefix, net_link, labels, record):
@@ -201,7 +224,7 @@ def ensure_engine_route(creds, prefix, engine_name, team_identifiers=(), record=
     via = naming.route_name(prefix)
     # Name-match over the plain list: a filtered network= query returns nothing for
     # these routes (live 409 against a route it should have seen), so don't trust it.
-    listed = gapi(creds, "GET", "global/routes", params={"maxResults": 500}).get("items") or []
+    listed = gapi_all(creds, "global/routes")
     have = {r["name"] for r in listed}
     network = f"projects/{creds['project_id']}/global/networks/{naming.vpc_name(prefix)}"
     if wan not in have:
@@ -248,33 +271,28 @@ def delete_network(creds, vpc, log=print):
         return str(ref or "").endswith(f"/global/networks/{vpc}")
 
     # Routes block a network delete; sweep this range's own before the network goes.
-    for route in [r for r in (gapi(creds, "GET", "global/routes",
-                                   params={"maxResults": 500}).get("items") or [])
+    for route in [r for r in gapi_all(creds, "global/routes")
                   if (r["name"] or "").startswith(vpc)]:
         compute.delete_op(creds, route["selfLink"])
         log(f"  destroyed route {route['name']}")
     # Firewall rules reference the network and BLOCK its delete; this range's rules
     # all carry the run prefix (the VPC name), so sweep by name.
-    for fw in [f for f in (gapi(creds, "GET", "global/firewalls",
-                                params={"maxResults": 500}).get("items") or [])
+    for fw in [f for f in gapi_all(creds, "global/firewalls")
                if (f["name"] or "").startswith(vpc)]:
         compute.delete_op(creds, fw["selfLink"])
         log(f"  destroyed firewall {fw['name']}")
     # The router first: its Cloud NAT references the subnets, and the API refuses a
     # subnet delete (and the network's) while the referencing config stands.
-    routers = gapi(creds, "GET", f"regions/{compute.region()}/routers",
-                   params={"maxResults": 500}).get("items") or []
-    for router in [r for r in routers if _ours(r.get("network"))]:
+    for router in [r for r in gapi_all(creds, f"regions/{compute.region()}/routers")
+                   if _ours(r.get("network"))]:
         compute.delete_op(creds, router["selfLink"])
         log(f"  destroyed router {router['name']}")
-    listed = gapi(creds, "GET", f"regions/{compute.region()}/subnetworks",
-                  params={"maxResults": 500}).get("items") or []
-    for sub in [s for s in listed if _ours(s.get("network"))]:
+    for sub in [s for s in gapi_all(creds, f"regions/{compute.region()}/subnetworks")
+                if _ours(s.get("network"))]:
         compute.delete_op(creds, sub["selfLink"])
         log(f"  destroyed subnet {sub['name']}")
-    addresses = gapi(creds, "GET", f"regions/{compute.region()}/addresses",
-                     params={"maxResults": 500}).get("items") or []
-    for addr in [a for a in addresses if a["name"].startswith(vpc)]:
+    for addr in [a for a in gapi_all(creds, f"regions/{compute.region()}/addresses")
+                 if a["name"].startswith(vpc)]:
         compute.delete_op(creds, addr["selfLink"])
         log(f"  destroyed address {addr['name']}")
     compute.delete_op(creds, net["selfLink"])

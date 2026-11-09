@@ -23,7 +23,6 @@ def run_capacity_preflight(ctx, comp_dir, from_phase):
 
 
 def _matrix_gate(ctx):
-    from common.windows_ops import is_windows_template
     problems = []
     for box in ctx.boxes:
         if box.get("in_path"):
@@ -33,10 +32,10 @@ def _matrix_gate(ctx):
                 f"run on GCP at all)")
         if box.get("unmanaged"):
             problems.append(f"{box['name']}: unmanaged appliance boxes have no gcp path")
-        if is_windows_template(box["template"]):
-            problems.append(
-                f"{box['name']}: Windows boxes need the gcp boot-time channel "
-                f"(startup-script-ps1 on stock GCE images), not implemented yet")
+    # Windows boxes: the boot-time channel IS implemented (windows_startup_script bakes
+    # the proxmox bootstrap contract into windows-startup-script-ps1 metadata; the gcp
+    # guest environment runs it as SYSTEM at first boot) — a stale refusal here used to
+    # block any Windows lineup before that channel could prove itself.
     if problems:
         raise SystemExit(
             "  ERROR: this lineup is not deployable on the gcp platform:\n      - "
@@ -118,17 +117,19 @@ def _quota_gate(creds, ctx):
 
     teams = len(ctx.teams)
     goldens = len({box["template"] for box in ctx.boxes})
+    # The transient engine-template build VM is counted too: the bake holds its
+    # 4 CPUs / 40 GB / ephemeral address while the engine and red01 stand.
     cpus = sum(box["cpu"] for box in ctx.boxes) * teams \
-        + (goldens + 2 + (1 if stages_red(ctx.comp_dir) else 0)) * 4
+        + (goldens + 3 + (1 if stages_red(ctx.comp_dir) else 0)) * 4
     disk_gb = sum(box.get("disk_gb") or 10 for box in ctx.boxes) * teams \
-        + sum(box.get("disk_gb") or 10 for box in ctx.boxes) + 40 * (goldens + 2)
+        + sum(box.get("disk_gb") or 10 for box in ctx.boxes) + 40 * (goldens + 3)
     machine_images = (2 * len(ctx.all_targets)          # tz-base + tz-ready per box
                       + goldens                          # golden build pre-plant marks
                       + 2)                               # seed slack
     checks = (
         (region_quota, "CPUS", cpus),
         (region_quota, "DISKS_TOTAL_GB", disk_gb),
-        (region_quota, "IN_USE_ADDRESSES", 2),          # engine + red01
+        (region_quota, "IN_USE_ADDRESSES", 3),          # engine + red01 + the build VM
         (global_quota, "NETWORKS", 1),                   # the per-run VPC
         (global_quota, "MACHINE_IMAGES", machine_images),
         (global_quota, "IMAGES", goldens + 2),           # goldens + engine template + slack

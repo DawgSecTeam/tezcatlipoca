@@ -4,7 +4,7 @@ Everything here takes the credentials dict from `client.load_credentials` via
 `session()`, so tests can swap the whole API surface at one seam.
 """
 
-from providers.gcp.client import gapi
+from providers.gcp.client import gapi, gapi_all
 
 
 def session():
@@ -53,20 +53,27 @@ def wait_op(creds, operation, timeout=900, poll=5.0):
             break
         import requests
         from providers.gcp.client import access_token
-        response = requests.get(target, headers={
-            "Authorization": f"Bearer {access_token(creds)}"}, timeout=60)
-        response.raise_for_status()
+        try:
+            response = requests.get(target, headers={
+                "Authorization": f"Bearer {access_token(creds)}"}, timeout=60)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            # A poll-side blip is not the operation failing; keep polling to the deadline.
+            if time.time() > deadline:
+                raise RuntimeError(f"GCP operation {operation.get('name', '?')} polling "
+                                   f"failed past the deadline: {e}") from e
+            continue
         operation = response.json()
     raise RuntimeError("GCP operation has no selfLink to poll")
 
 
 def instances(creds, label_filter=None, zone_name=None):
     """List instances (this zone). label_filter: [(key, value), ...] — label-filtered."""
-    params = {"maxResults": 500}
+    params = {}
     if label_filter:
         params["filter"] = " ".join(f"labels.{k}={v}" for k, v in label_filter)
     scoped = f"zones/{zone_name or zone()}/instances"
-    return gapi(creds, "GET", scoped, params=params).get("items") or []
+    return gapi_all(creds, scoped, params=params)
 
 
 def instance(creds, name, zone_name=None):
@@ -79,10 +86,10 @@ def instance(creds, name, zone_name=None):
 
 
 def images(creds, label_filter=None):
-    params = {"maxResults": 500}
+    params = {}
     if label_filter:
         params["filter"] = " ".join(f"labels.{k}={v}" for k, v in label_filter)
-    return gapi(creds, "GET", "global/images", params=params).get("items") or []
+    return gapi_all(creds, "global/images", params=params)
 
 
 def image(creds, name):
@@ -101,6 +108,20 @@ def newest_family_image(creds, image_project, family):
                 f"global/images/family/{family}")
 
 
+def default_service_account(creds):
+    # Cached per service account: every instance create reads it, and a swallowed
+    # failure here would silently boot the box WITHOUT the SA — the exact auth-dead
+    # guest environment this call exists to prevent — so errors propagate.
+    email = _DEFAULT_SAS.get(creds["client_email"])
+    if email is None:
+        email = gapi(creds, "GET", "").get("defaultServiceAccount") or ""
+        _DEFAULT_SAS[creds["client_email"]] = email
+    return email
+
+
+_DEFAULT_SAS = {}
+
+
 def machine_image(creds, name):
     # Machine images are a GLOBAL resource (the only live route is
     # projects/<id>/global/machineImages; a regions/<r>/machineImages path is a
@@ -114,10 +135,10 @@ def machine_image(creds, name):
 
 
 def machine_images(creds, label_filter=None):
-    params = {"maxResults": 500}
+    params = {}
     if label_filter:
         params["filter"] = " ".join(f"labels.{k}={v}" for k, v in label_filter)
-    return gapi(creds, "GET", "global/machineImages", params=params).get("items") or []
+    return gapi_all(creds, "global/machineImages", params=params)
 
 
 def network(creds, name):
@@ -139,7 +160,7 @@ def subnetwork(creds, name):
 
 
 def firewall_rules(creds, network_link, prefix_tag):
-    rules = gapi(creds, "GET", "global/firewalls", params={"maxResults": 500}).get("items") or []
+    rules = gapi_all(creds, "global/firewalls")
     return [r for r in rules if r.get("network") == network_link
             and (r.get("labels") or {}).get("tz-range") == "1"
             and (r.get("labels") or {}).get("tz-comp") == prefix_tag]

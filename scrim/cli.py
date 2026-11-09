@@ -42,6 +42,11 @@ def main():
     p.add_argument("--nodes", default=None,
                    help="path to this run's node list (the nodes.json schema); forwarded to the "
                         "deploy stage so the range lands on the listed hosts, not the profile's")
+    p.add_argument("--platform", dest="platform", default=None,
+                   choices=["proxmox", "gcp"],
+                   help="estate backend the range deploys onto (proxmox|gcp); default: the "
+                        "platform recorded in the competition's state document (proxmox when "
+                        "unrecorded) — passing it OVERRIDES the record")
     p.add_argument("--scoring-vmid", dest="scoring_vmid", type=int, default=None,
                    help="this run's scoring-engine VMID, forwarded to the deploy stage; give "
                         "each concurrent range on a shared node its own so the engines differ")

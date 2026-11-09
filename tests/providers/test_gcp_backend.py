@@ -54,7 +54,8 @@ class FakeGcp:
         if p == "":
             return {"quotas": [{"metric": "NETWORKS", "limit": 5, "usage": 1},
                                {"metric": "IMAGES", "limit": 100, "usage": 0},
-                               {"metric": "MACHINE_IMAGES", "limit": 100, "usage": 0}]}
+                               {"metric": "MACHINE_IMAGES", "limit": 100, "usage": 0}],
+                    "defaultServiceAccount": "sa@t-proj.iam.gserviceaccount.com"}
         if p == f"regions/{self.region}":
             return {"quotas": [{"metric": "CPUS", "limit": 200, "usage": 0},
                                {"metric": "DISKS_TOTAL_GB", "limit": 4096, "usage": 0},
@@ -130,6 +131,10 @@ class FakeGcp:
             return self._op()
         if p == "global/firewalls":
             self.firewalls[data["name"]] = {"name": data["name"], **data}
+            return self._op()
+        if p.startswith("global/firewalls/"):     # the converge PATCH per rule
+            name = p.rsplit("/", 1)[-1]
+            self.firewalls[name] = {"name": name, **data}
             return self._op()
         if p == "global/routes":
             self.routes[data["name"]] = {
@@ -252,8 +257,10 @@ class GcpBase(unittest.TestCase):
         self.fake.add_image("ubuntu-2404-noble-amd64-v20261105", "", None)
         self.fake.images["ubuntu-2404-noble-amd64-v20261105"]["family"] = \
             "ubuntu-2404-lts-amd64"
-        # every module that binds gapi calls the fake through ITS own binding
-        for module in (compute, image_ops, instance_ops, network_ops, preflight):
+        # every module that binds gapi calls the fake through ITS own binding; gapi_all
+        # lives in client and resolves gapi there, so the client binding is patched too
+        from providers.gcp import client as gcp_client
+        for module in (compute, image_ops, instance_ops, network_ops, preflight, gcp_client):
             patcher = patch.object(module, "gapi", self.fake)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -535,7 +542,9 @@ class DestroyEstateTest(GcpBase):
         self.fake.add_instance("tz-c1-0e6474eb-team1-web01", comp, run, unit=1010)
         doc = self._document_with_range(comp, run)
         summary = pipeline.destroy_estate(doc.document, full=False, log=lambda *_: None)
-        self.assertEqual([r["kind"] for r in summary["skipped"]], ["engine_template"])
+        # kept, with a reason — teardown's step reports this list verbatim
+        self.assertEqual([r["kind"] for r in summary["kept"]], ["engine_template"])
+        self.assertEqual(summary["skipped"], [])
         self.assertIn("tz-c1-0e6474eb-engine-img", self.fake.images)
 
 
@@ -555,7 +564,7 @@ class PreflightTest(GcpBase):
             placement=None, previous_state={"run_id": ""},
             all_targets=[{"box": b} for b in boxes])
 
-    def test_matrix_refuses_windows_inpath_and_unmanaged(self):
+    def test_matrix_refuses_inpath_and_unmanaged_admits_windows(self):
         boxes = [
             {"name": "w1", "template": "Windows-Server", "cpu": 2, "memory_mb": 2048},
             {"name": "f1", "template": "pfsense", "cpu": 1, "memory_mb": 512,
@@ -568,10 +577,24 @@ class PreflightTest(GcpBase):
             preflight.run_capacity_preflight(self._ctx(boxes, {"team1": {"identifier": 101}}),
                                              Path(self.tmp.name), from_phase=1)
         text = str(caught.exception)
-        self.assertIn("w1", text)
+        # Windows rides the startup-script boot channel — a windows box alone is not
+        # a matrix refusal (only the appliance tiers are).
+        self.assertNotIn("w1", text)
         self.assertIn("f1", text)
         self.assertIn("u1", text)
         self.assertNotIn("'ok'", text)
+
+    def test_a_windows_only_lineup_passes_the_gates(self):
+        boxes = [{"name": "win01", "template": "Windows-Server", "cpu": 2,
+                  "memory_mb": 2048}]
+        self.fake.add_image("windows-2022-v20261105", "", None)
+        self.fake.images["windows-2022-v20261105"]["family"] = "windows-2022"
+        self.config.activate({"gcp.image_map": {
+            **self.config.get("gcp.image_map"),
+            "Windows-Server": {"project": "windows-cloud", "image": "windows-2022"}}})
+        (Path(self.tmp.name) / "Compfile").write_text("name c1\nremote_access 0\n")
+        preflight.run_capacity_preflight(self._ctx(boxes, {"team1": {"identifier": 101}}),
+                                         Path(self.tmp.name), from_phase=1)
 
     def test_leftover_range_of_this_comp_refuses(self):
         boxes = [{"name": "web01", "template": "base-ubuntu24.04-fix", "cpu": 1,
@@ -751,3 +774,156 @@ class TeamAddressTest(unittest.TestCase):
                       red01_ops.dnat_destinations(["101"]))
         self.assertIn("192.168.101.2",
                       red01_ops.dnat_destinations(["101"], platform="gcp"))
+
+
+class WindowsBootChannelTest(unittest.TestCase):
+    def test_startup_script_carries_the_proxmox_bootstrap_contract(self):
+        script = pipeline.windows_startup_script(("Web-Scripting-Tools",), "S3cretPW")
+        self.assertIn('net user Administrator "S3cretPW"', script)
+        # defender: the uninstall AND the realtime scanners (they quarantine red's
+        # payloads on sight even while the uninstall pends a restart)
+        self.assertIn("Uninstall-WindowsFeature -Name Windows-Defender", script)
+        self.assertIn("DisableRealtimeMonitoring", script)
+        self.assertIn("sc.exe config WinDefend start= disabled", script)
+        # RDP: the scored 3389 dial and every blue admin's mstsc
+        self.assertIn("fDenyTSConnections -Value 0", script)
+        self.assertIn("RemoteDesktop-UserMode-In-TCP", script)
+        # firewall profiles on BEFORE the sshd rule lands
+        self.assertLess(script.index("Set-NetFirewallProfile"),
+                        script.index("New-NetFirewallRule"))
+        # the marker is written before, and only when nothing pends a restart
+        self.assertLess(script.index("New-Item $marker"), script.rindex("Restart-Computer"))
+        # the feature block retries the transient sharing violation and reads RestartNeeded
+        self.assertIn("0x80070020", script)
+        self.assertIn("RestartNeeded", script)
+
+    def test_startup_script_without_features_never_installs_or_reboots(self):
+        script = pipeline.windows_startup_script((), "pw")
+        self.assertNotIn("Install-WindowsFeature", script)
+        self.assertNotIn("Restart-Computer", script)
+        # the old empty-features shape emitted `if () {} else {}` — a PowerShell PARSE
+        # error that left the whole script (password, sshd, marker) unrun
+        self.assertNotIn("if ()", script)
+        self.assertIn("if (Test-Path $marker)", script)
+
+    def test_bootstrap_waits_for_the_marker_through_the_gateway(self):
+        # The wait rides the engine gateway: team boxes carry no external IP on gcp and
+        # no firewall rule admits the operator to a team tag — the old direct-socket
+        # probe could never leave the driver host.
+        import subprocess
+        import types
+        calls = []
+
+        def fake_probe(ctx, ip, cmd, timeout=60, user="ubuntu"):
+            calls.append((ip, cmd, user))
+            r = subprocess.CompletedProcess([], 0)
+            r.returncode = 0
+            return r
+
+        ctx = types.SimpleNamespace(
+            tf_ctx={"scoring_engine_ip": "34.1.1.1", "ssh_key_path": "k",
+                    "vm_username": "op", "box_username": "boxuser"})
+        with patch("time.sleep", lambda *_: None), \
+             patch("common.ssh_ops.ssh_via_gateway", fake_probe), \
+             patch.object(pipeline, "BOOTSTRAP_STABLE_S", 0):
+            result = pipeline.windows_bootstrap(
+                ctx, {"ip": "192.168.101.50", "vmid": 1010}, timeout=60)
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls[0][0], "192.168.101.50")
+        self.assertIn("bootstrap.done", calls[0][1])
+        self.assertEqual(calls[0][2], "boxuser")
+
+    def test_bootstrap_raises_when_the_marker_never_lands(self):
+        import subprocess
+        import types
+
+        def fake_probe(ctx, ip, cmd, timeout=60, user="ubuntu"):
+            r = subprocess.CompletedProcess([], 1)
+            r.returncode = 1
+            return r
+
+        ctx = types.SimpleNamespace(tf_ctx={"scoring_engine_ip": "34.1.1.1",
+                                            "ssh_key_path": "k", "vm_username": "op",
+                                            "box_username": "boxuser"})
+        with patch("time.sleep", lambda *_: None), \
+             patch("common.ssh_ops.ssh_via_gateway", fake_probe):
+            with self.assertRaises(RuntimeError) as caught:
+                pipeline.windows_bootstrap(
+                    ctx, {"ip": "192.168.101.50", "vmid": 1010}, timeout=0)
+        self.assertIn("bootstrap", str(caught.exception))
+
+
+class ConvergeRuleTest(GcpBase):
+    def _ensure(self):
+        document = _Document()
+        return network_ops.ensure_network(document, comp_name="c1", run_id="run-0e6474eb",
+                                          team_identifiers=["101"], red=True,
+                                          record=lambda *_: None)
+
+    def test_the_api_url_shape_of_the_network_is_not_drift(self):
+        self._ensure()
+        # The API returns firewall.network as the FULL url where the profile carries
+        # the short project path; equality against it PATCHed every rule on every
+        # ensure_network pass (two per deploy).
+        for fw in self.fake.firewalls.values():
+            fw["network"] = (f"https://www.googleapis.com/compute/v1/"
+                             f"projects/{self.fake.project}/{fw['network']}")
+        before = len(self.fake.calls)
+        self._ensure()
+        # the router's NAT PATCH is the adopt path on every pass; only FIREWALL
+        # patches would mean the url shape read as drift
+        self.assertEqual(
+            [c for c in self.fake.calls[before:]
+             if c[0] == "PATCH" and "firewalls" in c[1]], [])
+
+    def test_a_real_drift_is_patched_into_line(self):
+        self._ensure()
+        self.fake.firewalls["tz-c1-0e6474eb-fw-t101"]["sourceRanges"] = ["10.9.9.9/32"]
+        before = len(self.fake.calls)
+        self._ensure()
+        patches = [c for c in self.fake.calls[before:]
+                   if c[0] == "PATCH" and "firewalls" in c[1]]
+        self.assertEqual([c[1] for c in patches],
+                         ["global/firewalls/tz-c1-0e6474eb-fw-t101"])
+        self.assertEqual(patches[0][2]["sourceRanges"], ["192.168.101.0/24"])
+
+
+class ServiceAccountTest(GcpBase):
+    def test_create_injects_the_projects_default_service_account(self):
+        creds = {"client_email": "sa@t-proj.iam.gserviceaccount.com", "project_id": "t-proj"}
+        instance_ops.create(creds, "i1", image="projects/x/global/images/y",
+                            machine="e2-custom-1-1024", nics=[], labels={}, meta={})
+        post = next(c for c in self.fake.calls
+                    if c[0] == "POST" and c[1] == "zones/us-central1-a/instances")
+        self.assertEqual(post[2]["serviceAccounts"],
+                         [{"email": "sa@t-proj.iam.gserviceaccount.com",
+                           "scopes": ["https://www.googleapis.com/auth/cloud-platform"]}])
+
+
+class UnbootedGoldenTest(GcpBase):
+    def test_a_dc_golden_is_cut_straight_from_the_base(self):
+        # domain_roles.json marks the box dc: the golden stays UNBOOTED (no instance,
+        # no plant) — the base image cut directly, so each team's clone specializes
+        # its own SID and the pre-domain stage promotes per team.
+        import hashlib
+        import types
+        comp = Path(self.tmp.name)
+        (comp / "golden-config.json").write_text(json.dumps({"machines": []}))
+        digest = hashlib.sha256(b"dc").hexdigest()
+        ctx = types.SimpleNamespace(
+            comp_name="c1", run_id="run-0e6474eb", comp_dir=comp,
+            teams={"team1": {"identifier": 101}}, engine_vmid=1000,
+            boxes=[{"name": "ad01", "template": "base-ubuntu24.04-fix", "cpu": 2,
+                    "memory_mb": 2048}],
+            placement=None, unbooted={"ad01"},
+            golden_config_path=comp / "golden-config.json",
+            golden_hashes={"ad01": digest}, golden_inputs={}, tf_ctx={})
+        golden_ids, _by_slot = pipeline.build_golden_sets(ctx, {}, lambda *a: None)
+        image = "tz-c1-0e6474eb-golden-ad01-img"
+        self.assertIn(image, self.fake.images)
+        self.assertEqual(list(golden_ids), ["ad01"])
+        self.assertFalse(self.fake.instances, "an unbooted dc builds no instance")
+        post = next(c for c in self.fake.calls if c[0] == "POST" and c[1] == "global/images")
+        self.assertTrue(post[2]["sourceImage"].startswith("projects/ubuntu-os-cloud/"))
+        self.assertEqual(self.fake.images[image]["labels"][image_ops.HASH_LABEL],
+                         image_ops.hash_value(digest))

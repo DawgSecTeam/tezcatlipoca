@@ -183,17 +183,14 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
 
     def _probe(t):
         ip = t["ip"]
-        # Each box may live on its own host in a multi-node range: the guest-agent channel is
-        # node-scoped, so ask the box's node, never the engine's.
+        # One channel for every platform: sshd via the engine gateway. Windows boxes
+        # reach the same contract because their boot channel provisions sshd (gcp:
+        # the startup-script; proxmox: bootstrap_windows_box via the QEMU agent).
+        # The diagnosis channel is still node-scoped: the guest agent answers per host.
         node = t.get("node") or default_node
-        windows = is_windows_template(t["box"]["template"])
         while time.time() < deadline:
             try:
-                if windows:
-                    ok = wait_for_guest_agent(node, t["vmid"], timeout=20)
-                else:
-                    ok = ssh_via_gateway(ctx, ip, "true", timeout=20,
-                                         user=ctx.get("box_username", "ubuntu")).returncode == 0
+                ok = ssh_via_gateway(ctx, ip, "true", timeout=20, user=ctx.get("box_username", "ubuntu")).returncode == 0
                 if ok:
                     with PRINT_LOCK:
                         print(f"    {ip} reachable")

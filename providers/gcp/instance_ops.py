@@ -36,13 +36,16 @@ def nic(subnet_name, ip, external=None):
             "networkIP": ip, "accessConfigs": [access]}
 
 
-def metadata(ssh_user=None, ssh_public_key="", cloud_config=""):
+def metadata(ssh_user=None, ssh_public_key="", cloud_config="", windows_startup_ps1=""):
     items = []
     if ssh_user and ssh_public_key:
         items.append({"key": "ssh-keys",
                       "value": f"{ssh_user}:{ssh_public_key.strip()}"})
     if cloud_config:
         items.append({"key": "user-data", "value": cloud_config})
+    if windows_startup_ps1:
+        items.append({"key": "windows-startup-script-ps1",
+                      "value": windows_startup_ps1})
     return {"items": items} if items else {}
 
 
@@ -59,6 +62,17 @@ def create(creds, name, *, image, machine, nics, labels, disk_gb=0,
         "labels": labels,
         "metadata": meta or {"items": []},
     }
+    # The project's default compute SA on EVERY instance: without it the guest
+    # environment boots auth-dead (serial console: GCE metadata
+    # "instance/service-accounts/default/token" not defined) and never runs
+    # windows-startup-script-ps1, so a Windows box never gets sshd and the whole
+    # bake times out at wait_for_boxes_ssh.
+    sa = compute.default_service_account(creds)
+    if sa:
+        body["serviceAccounts"] = [{
+            "email": sa,
+            "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+        }]
     if can_ip_forward:
         # The engine is the range's router: the VPC default route's next hop must be
         # allowed to forward, or GCP drops every forwarded packet.

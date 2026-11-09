@@ -91,6 +91,20 @@ def create_from_instance(creds, name, instance_info, labels, family=None, log=pr
     return compute.image(creds, name)
 
 
+def create_from_image(creds, name, source_image, labels, log=print):
+    """An image cut from another image without booting anything — the unbooted (dc)
+    golden: the sysprepped base verbatim, so every clone specializes its own SID."""
+    labels = dict(labels)
+    if HASH_LABEL in labels:
+        labels[HASH_LABEL] = hash_value(labels[HASH_LABEL])
+    if len(name) > 63:
+        raise SystemExit(f"  ERROR: image name {name!r} exceeds GCP's 63-char limit")
+    log(f"  image     : creating {name} (from image)")
+    compute.wait_op(creds, gapi(creds, "POST", "global/images", data={
+        "name": name, "sourceImage": source_image, "labels": labels}), timeout=3600)
+    return compute.image(creds, name)
+
+
 def delete_image(creds, name):
     try:
         operation = gapi(creds, "DELETE", f"global/images/{name}")
