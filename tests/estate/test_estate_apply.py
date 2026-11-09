@@ -37,6 +37,10 @@ class FakePVE:
             if method == "POST":
                 self.networks.append({"iface": data["iface"], "type": data["type"]})
             return {"data": None}
+        if method == "PUT" and "/network/" in path:
+            iface = path.rsplit("/", 1)[1]
+            next(n for n in self.networks if n["iface"] == iface).update(data or {})
+            return {"data": None}
         if path.endswith("/storage"):
             return {"data": []}
         if re.search(r"/qemu$", path):
@@ -120,6 +124,26 @@ class Bridges(Base):
         self.assertIn(("PUT", f"/nodes/{NODE}/network", None), self.fake.calls)
         recorded = self.state.resources(kind="bridge")
         self.assertEqual([r["name"] for r in recorded], ["vmbr120"])
+
+    def test_adopts_a_bridge_its_own_competition_made_under_an_earlier_run(self):
+        # The retry after a failed deploy meets this competition's bridge from the run that
+        # died; refusing it made destroy-everything the only way forward.
+        self.fake.networks.append({"iface": "vmbr120", "type": "bridge",
+                                   "comments": "tezcatlipoca comp-scrim-one run-older"})
+        created = estate_apply.create_bridge(self.state, NODE, "vmbr120",
+                                             comp_name="scrim-one", run_id="run-abc123")
+        self.assertFalse(created)
+        put = [c for c in self.fake.calls if c[0] == "PUT" and "/network/" in c[1]]
+        self.assertEqual(put[0][2]["comments"], "tezcatlipoca comp-scrim-one run-abc123")
+        self.assertEqual([r["name"] for r in self.state.resources(kind="bridge")], ["vmbr120"])
+
+    def test_refuses_another_competitions_bridge(self):
+        self.fake.networks.append({"iface": "vmbr120", "type": "bridge",
+                                   "comments": "tezcatlipoca comp-somebody-else run-abc123"})
+        with self.assertRaises(Exception) as ctx:
+            estate_apply.create_bridge(self.state, NODE, "vmbr120",
+                                       comp_name="scrim-one", run_id="run-abc123")
+        self.assertIn("not this run's", str(ctx.exception))
 
 
 

@@ -10,8 +10,9 @@ from common.utils import box_dns_primary
 from common.windows_ops import is_windows_template
 from infra.client import node_bridges, proxmox_api, wait_for_proxmox_task
 from infra.lifecycle import start_vm
-from infra.ownership import (MARKER, OWNED, Refusal, bridge_owned_by, clone_marker,
-                             destroy_vm_if_exists, gc_orphan_volumes, ownership_verdict)
+from infra.ownership import (MARKER, OWNED, Refusal, bridge_comment, bridge_owned_by,
+                             clone_marker, destroy_vm_if_exists, gc_orphan_volumes,
+                             ownership_verdict)
 
 ENGINE_CORES = 4
 ENGINE_MEMORY_MB = 4096
@@ -137,12 +138,20 @@ def create_bridge(state, node, name, comment="", comp_name="", run_id=""):
         # Staged or applied by an earlier attempt: only ours if its comment proves it, and it
         # must be recorded or a resume's teardown walks past it.
         if comp_name and not bridge_owned_by(nets[name], comp_name, run_id):
-            raise Refusal(
-                saw=f"bridge {name} on {node} already exists",
-                expected="a free bridge name, or one this run created",
-                remedy=f"pick another team identifier block, or free {name} by hand",
-                detail=f"bridge {name} on {node} exists and is not this run's "
-                       f"(comment: {nets[name]!r})")
+            # A bridge this competition made under an EARLIER run id is what a retry after a
+            # failed deploy meets; the probe already treats it as reclaimable, so adopt it and
+            # re-stamp the comment with this run rather than refusing the retry.
+            if not _bridge_of_this_competition(nets[name], comp_name):
+                raise Refusal(
+                    saw=f"bridge {name} on {node} already exists",
+                    expected="a free bridge name, or one this run created",
+                    remedy=f"pick another team identifier block, or free {name} by hand",
+                    detail=f"bridge {name} on {node} exists and is not this run's "
+                           f"(comment: {nets[name]!r})")
+            print(f"    bridge {name}: adopting this competition's earlier-run bridge")
+            if run_id:
+                proxmox_api("PUT", f"/nodes/{node}/network/{name}",
+                            data={"comments": bridge_comment(comp_name, run_id)})
         state.record("bridge", node, name, bridge=name)
         state.save()
         return False
@@ -236,3 +245,10 @@ def create_team_boxes(state, ownership, targets, *, sources, box_username, box_p
                         box_username=box_username, box_password=box_password,
                         ssh_public_key=ssh_public_key)
     return [target["vmid"] for target in targets]
+
+
+def _bridge_of_this_competition(comment, comp_name):
+    # Whole tokens: `comp-cde` must not match a `comp-cde-2026` bridge. No run id required —
+    # that is exactly the case a retry after a failed deploy meets.
+    from common.constants import comp_tag
+    return bool(comp_name) and comp_tag(comp_name) in set(str(comment or "").split())

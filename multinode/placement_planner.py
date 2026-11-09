@@ -79,14 +79,25 @@ def probe_node(record, need_templates, engine_vmid, team_identifiers, comp_name=
                                 + ("..." if len(probe["collisions"]) > 6 else ""))
     try:
         nets = proxmox_api_for(ep, token, "GET", f"/nodes/{record.node}/network")["data"]
-        bridges = {n.get("iface") for n in nets}
-        bad_bridges = [f"vmbr{i}" for i in team_identifiers if f"vmbr{i}" in bridges]
+        # A bridge carries its ownership in its comment (it has no tags). One this competition
+        # already created — typically the deploy that just failed — is reclaimable, not a
+        # collision: counting it here left destroy-everything as the only way to retry.
+        bridges = {(n.get("iface") or ""): (n.get("comments") or "") for n in nets}
+        bad_bridges = [f"vmbr{i}" for i in team_identifiers
+                       if f"vmbr{i}" in bridges
+                       and not _bridge_is_ours(bridges[f"vmbr{i}"], comp_name)]
         if bad_bridges:
             probe["ok"] = False
             probe["reasons"].append(f"bridge collisions: {bad_bridges}")
     except Exception:
         pass
     return probe
+
+
+def _bridge_is_ours(comment, comp_name):
+    """Bridge comments name `<comp tag> <run id>`; the competition is what makes it reclaimable
+    (a retry runs under a NEW run id, so requiring that would defeat the point)."""
+    return bool(comp_name) and comp_tag(comp_name) in set(str(comment or "").split())
 
 
 

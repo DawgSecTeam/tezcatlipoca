@@ -350,6 +350,36 @@ class PacketAccounts(unittest.TestCase):
         result, _ = _run(v_packet.check_packet_accounts, CTX, PACKET_PROFILE, windows_only)
         self.assertIs(result.status, v_model.Status.SKIP_UNAVAILABLE)
 
+    def test_every_team_gets_probed_not_just_the_first(self):
+        # A second team whose decoy accounts were never planted used to pass on team1's probe.
+        two_teams = [{"name": "web01-team104", "ip": "192.168.104.5", "os": "ubuntu"},
+                     {"name": "web01-team105", "ip": "192.168.105.5", "os": "ubuntu"}]
+        seen = []
+
+        def fake(ctx, ip, cmd, timeout=60):
+            seen.append(ip)
+            return _proc(0, "scorebot=1\nblackteam=0\n" if ip.endswith(".105.5")
+                         else "scorebot=1\nblackteam=1\n")
+        with patch.object(v_context, "ssh_via_gateway", side_effect=fake):
+            result, out = _run(v_packet.check_packet_accounts, CTX, PACKET_PROFILE, two_teams)
+        self.assertEqual(sorted(seen), ["192.168.104.5", "192.168.105.5"])
+        self.assertIs(result.status, v_model.Status.FAIL)
+        self.assertIn("web01-team105", out)
+        self.assertIn("blackteam", out)
+
+    def test_one_unprobed_team_is_a_skip_not_a_pass(self):
+        two_teams = [{"name": "web01-team104", "ip": "192.168.104.5", "os": "ubuntu"},
+                     {"name": "web01-team105", "ip": "192.168.105.5", "os": "ubuntu"}]
+
+        def fake(ctx, ip, cmd, timeout=60):
+            if ip.endswith(".105.5"):
+                raise v_model.CheckError("ssh: connect refused")
+            return _proc(0, "scorebot=1\nblackteam=1\n")
+        with patch.object(v_context, "ssh_via_gateway", side_effect=fake):
+            result, out = _run(v_packet.check_packet_accounts, CTX, PACKET_PROFILE, two_teams)
+        self.assertIs(result.status, v_model.Status.SKIP_UNAVAILABLE)
+        self.assertIn("web01-team105", out)
+
 
 
 SURVIVAL_BOXES = [
