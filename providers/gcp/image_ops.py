@@ -135,5 +135,6 @@ def list_marks(creds, labels):
 
 
 def delete_machine_image(creds, name):
-    return compute.delete_op(
-        creds, f"projects/{creds['project_id']}/global/machineImages/{name}")
+    # gapi prepends the project root: a projects/-prefixed path doubled it, the 404
+    # read as "already gone" through delete_op's tolerance, and nothing was deleted.
+    return compute.delete_op(creds, f"global/machineImages/{name}")
