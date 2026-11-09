@@ -478,6 +478,7 @@ try {{
 }} catch {{
   Write-Output "ssh-key sync failed: $($_.Exception.Message)"
 }}
+if (Test-Path $marker) {{ exit 0 }}
 net user {WINDOWS_ADMIN_USER} "{admin_password}" /y /active:yes
 if ($LASTEXITCODE -ne 0) {{ throw "net user failed rc=$LASTEXITCODE" }}
 try {{ Uninstall-WindowsFeature -Name Windows-Defender -ErrorAction SilentlyContinue | Out-Null }} catch {{}}
