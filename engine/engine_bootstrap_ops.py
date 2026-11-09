@@ -104,7 +104,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
                          "\\nAcquire::https::Timeout \"30\";\\n' | "
                          "sudo tee /etc/apt/apt.conf.d/99flaky-uplink >/dev/null",
                     timeout=30, step="apt retry policy")
-    _run_engine_cmd(ctx, (
+    _retry_over_flaky_uplink(ctx, (
         # unattended-upgrades holds the dpkg/archives locks past Lock::Timeout and re-fires
         # mid-upgrade; stopping the units alone let apt-daily-upgrade spawn apt-get between
         # the stop and our upgrade. So mask the units, kill their cgroups, poll until every
@@ -147,7 +147,7 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     print("  Installing Docker Compose v2 plugin...")
     # The key fetch must own its exit status: piped into tee, a reset mid-download still
     # "succeeded" and the deploy died later as an unsigned-repo GPG error (live: run-8d6ea600).
-    _run_engine_cmd(ctx, (
+    _retry_over_flaky_uplink(ctx, (
         "set -e; "
         # An engine derived from a template already carries the plugin; re-fetching its key
         # is how a CDN reset killed a deploy whose engine needed nothing (live: run-dbb5c3dc).
