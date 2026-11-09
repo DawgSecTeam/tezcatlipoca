@@ -1,6 +1,7 @@
 """The competition's secrets: carried on a resume, minted on a fresh deploy."""
 
 import json
+import sys
 from pathlib import Path
 
 from config.config_ops import collect_teams, random_password
@@ -113,6 +114,13 @@ def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None)
                 )
             ctx.number_of_teams = num_teams
         else:
+            if not sys.stdin.isatty():
+                # Driven by a runner with no stdin (the dashboard): prompt-and-read died with
+                # EOFError, hiding the one thing the operator can fix.
+                raise SystemExit(
+                    "  ERROR: no team count recorded for this workspace and no --teams given — "
+                    "a resume or deploy replay needs it (nothing can be asked here: stdin is "
+                    "not a terminal).")
             while True:
                 raw = input("How many teams? ").strip()
                 try:
