@@ -63,6 +63,27 @@ _BUILD_ATTEMPTS = 4
 _BUILD_RETRY_DELAY = 20
 
 
+def _retry_over_flaky_uplink(ctx, cmd, *, step, timeout, first_flags="", attempts=None):
+    """Run a network-bound step until it survives a flap.
+
+    The lab's WAN drops for tens of seconds at a time; a build or clone that needs a few
+    continuous minutes of egress otherwise dies on a blip and costs the whole deploy
+    (run-2ef1679d: "go mod download" timed out, and the same request answered 200 later).
+    The retries drop first_flags so work the failed attempt finished is reused.
+    """
+    attempts = attempts or _BUILD_ATTEMPTS
+    for attempt in range(1, attempts + 1):
+        try:
+            return _run_engine_cmd(ctx, cmd + (first_flags if attempt == 1 else ""),
+                                   timeout=timeout, step=step)
+        except RuntimeError:
+            if attempt == attempts:
+                raise
+            print(f"  {step} failed (attempt {attempt}/{attempts}) — the uplink is flaky; "
+                  f"retrying in {_BUILD_RETRY_DELAY}s")
+            time.sleep(_BUILD_RETRY_DELAY)
+
+
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
     # Grow the root to the disk we sized before the packages/Docker/Quotient build.
     from guests.root_disk_ops import grow_root_command
@@ -160,8 +181,8 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     # 120s was tight enough to fail a deploy while GitHub crawled (live: run-5286db18 timed
     # out mid-clone); a shallow clone with submodules is still fast on a healthy link, so the
     # budget only costs a slow uplink's patience, never a false success.
-    _run_engine_cmd(ctx, _clone_quotient_cmd(quotient_ref), timeout=600,
-                    step="clone Quotient")
+    _retry_over_flaky_uplink(ctx, _clone_quotient_cmd(quotient_ref), timeout=600,
+                             step="clone Quotient")
 
     _run_engine_cmd(ctx, _patch_quotient_injects_cmd(), timeout=30,
                     step="patch Quotient inject page")
@@ -178,19 +199,8 @@ def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_re
     # proxy.golang.org timing out; sampled minutes later the same request returned 200).
     # Retry, and let the retries reuse the layers the failed attempt did finish — only the
     # first attempt forces --no-cache.
-    for attempt in range(1, _BUILD_ATTEMPTS + 1):
-        flags = " --no-cache" if attempt == 1 else ""
-        try:
-            _run_engine_cmd(ctx, f"cd /opt/quotient && sudo docker compose build{flags}",
-                            timeout=1800, step="compose build")
-            break
-        except RuntimeError:
-            if attempt == _BUILD_ATTEMPTS:
-                raise
-            print(f"  compose build failed (attempt {attempt}/{_BUILD_ATTEMPTS}) — the "
-                  f"uplink is flaky; retrying in {_BUILD_RETRY_DELAY}s with the layers "
-                  f"already built")
-            time.sleep(_BUILD_RETRY_DELAY)
+    _retry_over_flaky_uplink(ctx, "cd /opt/quotient && sudo docker compose build",
+                             step="compose build", timeout=1800, first_flags=" --no-cache")
 
     print("  Starting Quotient Docker containers...")
     start_quotient(ctx)
