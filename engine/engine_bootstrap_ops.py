@@ -58,9 +58,12 @@ def _patch_quotient_injects_cmd():
             f"/opt/quotient/static/templates/pages/injects.html")
 
 
-_BUILD_ATTEMPTS = 4
-# Long enough for a flap to pass, short enough not to burn the deploy's budget.
-_BUILD_RETRY_DELAY = 20
+_BUILD_ATTEMPTS = 8
+# The lab's uplink delivers ~15s of connectivity then drops for tens of seconds, repeatedly
+# (sampled 2026-11-08: 6/10 short calls succeed, in runs). A build needs to outlast several
+# outages, and each retry keeps the layers/images the failed attempt already pulled, so the
+# delays grow instead of repeating: ~20s,30s,45s,60s,90s,120s,120s.
+_BUILD_RETRY_DELAYS = (20, 30, 45, 60, 90, 120, 120)
 
 
 def _retry_over_flaky_uplink(ctx, cmd, *, step, timeout, first_flags="", attempts=None):
@@ -79,9 +82,10 @@ def _retry_over_flaky_uplink(ctx, cmd, *, step, timeout, first_flags="", attempt
         except RuntimeError:
             if attempt == attempts:
                 raise
+            delay = _BUILD_RETRY_DELAYS[min(attempt - 1, len(_BUILD_RETRY_DELAYS) - 1)]
             print(f"  {step} failed (attempt {attempt}/{attempts}) — the uplink is flaky; "
-                  f"retrying in {_BUILD_RETRY_DELAY}s")
-            time.sleep(_BUILD_RETRY_DELAY)
+                  f"retrying in {delay}s")
+            time.sleep(delay)
 
 
 def bootstrap_scoring_engine(ctx, postgres_password, redis_password, quotient_ref=None):
