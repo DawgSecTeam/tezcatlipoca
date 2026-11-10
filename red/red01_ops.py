@@ -213,7 +213,19 @@ def _apt_prelude():
     # cloud-init was already waited for above, but unattended-upgrades can still hold apt's
     # lists lock; DPkg::Lock::Timeout covers the dpkg lock, not the lists lock `update` takes
     # (live: run-00488d45's cde deploy died at its last step on exactly that).
+    # Timeout-waiting alone is NOT enough either: a fresh red01's unattended-upgrades held
+    # the frontend lock >600s and the 2nd update attempt died rc=100 "Unable to acquire
+    # /var/lib/dpkg/lock-frontend" (live: run-f199029d phase 7, twice). Use the golden-side
+    # prologue — mask, kill (exact names, never -f: the pattern matches this script itself),
+    # drop stale locks, fix dpkg state — then the retry loop is a belt, not the mechanism.
     return ("export DEBIAN_FRONTEND=noninteractive; "
+            "systemctl mask --now apt-daily.timer apt-daily-upgrade.timer "
+            "unattended-upgrades.service apt-daily.service apt-daily-upgrade.service 2>/dev/null; "
+            "pkill -9 -x unattended-upgrade 2>/dev/null; "
+            "pkill -9 -x unattended-upgr 2>/dev/null; sleep 2; "
+            "rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock "
+            "/var/lib/dpkg/lock /var/lib/dpkg/lock-frontend 2>/dev/null; "
+            "dpkg --configure -a >/dev/null 2>&1; "
             "for i in $(seq 1 12); do "
             "apt-get -o DPkg::Lock::Timeout=600 update -qq && break; sleep 10; "
             "done; "
