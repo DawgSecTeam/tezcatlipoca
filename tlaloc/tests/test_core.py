@@ -189,6 +189,12 @@ def test_world_refuses_another_schema(tmp_path):
         World(tmp_path, comp="comp-a")
 
 
+def test_blue_events_can_be_filtered_by_service(tmp_path):
+    world = World(tmp_path, comp="comp-a")
+    world.add_blue_event("team1", "splunk01-splunk", ip="192.168.1.10")
+    assert len(world.blue_events_for(service="splunk")) == 1
+
+
 def test_artifact_key_is_per_instance(tmp_path):
     ctx = make_ctx(tmp_path)
     ctx.world.add_artifact("192.168.1.10", "persist-systemd_unit",

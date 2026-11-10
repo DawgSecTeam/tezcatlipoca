@@ -21,6 +21,13 @@ def artifact_key(artifact):
     return f"{artifact.get('ip')}|{artifact.get('kind')}|{m.group(1) if m else ''}"
 
 
+def _service_matches(a, b):
+    """Blue's scoreboard label (web01-http) never equals red's unit name (nginx): substring
+    either way, the same rule policy._service_matches uses."""
+    a, b = str(a or "").lower(), str(b or "").lower()
+    return bool(a and b) and (a in b or b in a)
+
+
 def _blank(comp):
     return {"schema": SCHEMA, "comp": comp or "", "meta": {}, "targets": {},
             "creds": [], "footholds": [], "artifacts": [], "impacts": [],
@@ -255,8 +262,13 @@ class World:
         self.meta["dead_artifacts"] = sorted(set(keys))
         self.save()
 
-    def add_impact(self, ip, service, mode, detail=None, team=None, port=None):
+    def add_impact(self, ip, service, mode, detail=None, team=None, port=None,
+                   target_service=None):
         rec = {"ip": ip, "service": service, "mode": mode, "at": now_iso()}
+        if target_service:
+            # The effect may resolve the unit (splunk -> lighttpd); this keeps the name
+            # red aimed at so restore detection can match the scoreboard label.
+            rec["target_service"] = target_service
         if port:
             rec["port"] = port
         if team:

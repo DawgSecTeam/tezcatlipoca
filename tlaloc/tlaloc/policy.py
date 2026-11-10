@@ -1,12 +1,14 @@
 """Policy: the ROE as data, the candidate list, and the question bundle."""
 
 import random
-import re
 import time
 
 from .effects.base import can_root
 from .effects.persist import families as persist_families
 from .errors import PolicyError
+# Scored services are named `<box>-<short>` by the engine, intel carries package
+# names; without one shared key a service taken DOWN reads as up and is re-taken forever.
+from .service_names import scored_key as _scored_key, service_key as _service_key
 from .state import digest as digest_mod
 from .state.world import parse_ts
 
@@ -70,24 +72,6 @@ def make_candidate(effect, params, score, reason, cost="low", tag=None,
                      reason=reason, cost=cost, tag=tag or cid,
                      high_stakes=bool(high_stakes))
     return cand
-
-
-# Scored services are named `<box>-<short>` by the engine, intel carries package
-# names; without one shared key a service taken DOWN reads as up and is re-taken forever.
-_SERVICE_ALIASES = {"ldap": "adds", "http": "nginx", "https": "nginx",
-                    "apache": "nginx", "httpd": "nginx",   # cde-2026's web01 intel
-                    "smtp": "postfix", "imap": "dovecot", "sql": "mysql",
-                    "mariadb": "mysql", "mysqld": "mysql",
-                    "ftp": "iisftp", "winrm": "enablewinrm"}
-
-
-def _service_key(name):
-    key = re.sub(r"[^a-z0-9]", "", str(name).lower().removesuffix(".service"))
-    return _SERVICE_ALIASES.get(key, key)
-
-
-def _scored_key(name):
-    return _service_key(str(name).rsplit("-", 1)[-1])
 
 
 class Policy:
@@ -287,7 +271,8 @@ class Policy:
     def _kill_restore(self, ip, service):
         """Blue restores match at box level: scoreboard names never equal the stopped service's name."""
         kills = [parse_ts(i["at"]) for i in self.world.impacts()
-                 if i.get("ip") == ip and self._service_matches(i.get("service"), service)]
+                 if i.get("ip") == ip
+                 and self._service_matches(i.get("target_service") or i.get("service"), service)]
         restores = [parse_ts(e["at"]) for e in self.world.blue_events_for(ip=ip)]
         return (max(kills) if kills else None), (max(restores) if restores else None)
 
@@ -295,12 +280,24 @@ class Policy:
         now = now or time.time()
         kill, restore = self._kill_restore(ip, service)
         rotate_min = float((self.red.get("caps") or {}).get("rotate_min", 20))
-        if kill is not None and (restore is None or restore < kill):
+        # The caller only offers services the LIVE scoreboard says are up
+        # (_pressure_targets filters `down` before building candidates), so history must
+        # not veto it. A kill with no matching restore row is the common case: red polls
+        # once per cycle while most blue restores take 1-2 minutes, so the DOWN->UP edge
+        # can fall entirely between two polls (live run-c5c6b144: blue restored 9, red
+        # recorded 3, and every re-hit on those "still down" services was skipped).
+        if kill is not None and down:
             return 0.0, "already down since our own takedown — no new damage to score", True
-        if kill is not None and restore >= kill:
-            return 30.0, (f"blue touched this box {int((now - restore) / 60)}min ago — "
-                          "re-hit to test whether they fixed it or just restarted it"), False
-        if down and kill is None:
+        if kill is not None:
+            # A restore is the interaction the gate exists to measure: rank the re-hit
+            # above fresh work (takedown 55 + 40 = 95 > reestablish 90), not merely above
+            # persist.
+            if restore is not None and restore >= kill:
+                return 40.0, (f"blue touched this box {int((now - restore) / 60)}min ago — "
+                              "re-hit to test whether they fixed it or just restarted it"), False
+            return 40.0, ("the scoreboard says it is back up — blue restored it between "
+                          "polls; re-hit to test the fix"), False
+        if down:
             return 0.0, "the scoreboard already has it down — no new damage to score", True
         recent = [parse_ts(i["at"]) for i in self.world.impacts()
                   if i.get("ip") == ip and now - parse_ts(i["at"]) <= rotate_min * 60]

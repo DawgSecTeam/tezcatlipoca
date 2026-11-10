@@ -3,6 +3,8 @@
 import time
 
 from .errors import TlalocError
+from .service_names import scored_key, service_key
+from .state.schema import parse_ts
 
 # Quotient polls every ~70s; values older than this are reported stale, not silently used.
 STALE_AFTER_SEC = 300
@@ -123,14 +125,48 @@ class Sensors:
             return self.last_map, self.counts(), []
         restores = diff_restores(self.last_map, mapping)
         for event in restores:
+            event["target"] = self._ip_for(event["team"], event["service"])
             if self.world is not None:
-                self.world.add_blue_event(event["team"], event["service"],
-                                          self._ip_for(event["team"], event["service"]))
+                self.world.add_blue_event(event["team"], event["service"], event["target"])
+        # A restore can complete entirely between two polls: no DOWN was ever observed, so
+        # the edge above cannot see it. The live scoreboard plus red's own kill record is
+        # enough (and is the truth the rotation logic needs).
+        missed = self._missed_restores(mapping)
+        for event in missed:
+            if self.world is not None:
+                self.world.add_blue_event(event["team"], event["service"], event["target"])
+        restores += missed
         if self.log is not None and restores:
             self.log.emit("blue_restores", restores=restores, cycle_poll=self.polls)
         self.last_map = mapping
         self.last_poll_at = self.now()
         return mapping, self.counts(), restores
+
+    def _missed_restores(self, mapping):
+        """A service red took down that the scoreboard now scores UP was restored, whether
+        or not red watched the DOWN state. Match on the name red aimed at, never the unit
+        the effect resolved (splunk is stopped as lighttpd)."""
+        out = []
+        impacts = self.world.impacts() if self.world is not None else []
+        for team, services in (mapping or {}).items():
+            for scored, is_up in services.items():
+                if not is_up:
+                    continue
+                ip = self._ip_for(team, scored)
+                if not ip:
+                    continue
+                key = scored_key(scored)
+                kills = [parse_ts(i["at"]) for i in impacts
+                         if i.get("ip") == ip and i.get("target_service")
+                         and service_key(i["target_service"]) == key]
+                if not kills:
+                    continue
+                restores = [parse_ts(e["at"]) for e in self.world.blue_events_for(ip=ip)
+                            if scored_key(e.get("service")) == key]
+                if restores and max(restores) >= max(kills):
+                    continue
+                out.append({"team": team, "service": scored, "target": ip})
+        return out
 
     def _ip_for(self, team, service):
         """Scoreboard names are `<box>-<label>` (web01-http), and a restore is only attributable

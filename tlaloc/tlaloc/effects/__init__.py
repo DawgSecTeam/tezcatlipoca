@@ -61,7 +61,8 @@ def execute(effect_id, params, ctx, *, source="deterministic", cycle=None):
                                  result.impact.get("mode", effect_id),
                                  result.impact.get("detail"),
                                  team=ctx.intel.team_of(impact_ip),
-                                 port=result.impact.get("port"))
+                                 port=result.impact.get("port"),
+                                 target_service=params.get("service"))
         for artifact in result.artifacts:
             ctx.world.add_artifact(**artifact)
         if result.restore is not None and (result.ok or result.installed):

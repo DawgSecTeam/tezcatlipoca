@@ -18,11 +18,19 @@ class _Intel:
 
 
 class _World:
-    def __init__(self):
+    def __init__(self, impacts=()):
         self.events = []
+        self._impacts = list(impacts)
 
     def add_blue_event(self, team, service, ip=None):
-        self.events.append({"team": team, "service": service, "ip": ip})
+        self.events.append({"team": team, "service": service, "ip": ip,
+                            "at": "2026-11-10T00:01:00"})
+
+    def impacts(self):
+        return list(self._impacts)
+
+    def blue_events_for(self, ip=None):
+        return [e for e in self.events if ip is None or e["ip"] == ip]
 
 
 class _Client:
@@ -45,8 +53,28 @@ def test_a_restore_is_attributed_to_its_box():
                                {"team1": {"web01-http": True}}])
     sensors.observe()
     sensors.observe()
-    assert world.events == [{"team": "team1", "service": "web01-http",
-                             "ip": "192.168.1.10"}]
+    assert [(e["team"], e["service"], e["ip"]) for e in world.events] == [
+        ("team1", "web01-http", "192.168.1.10")]
+
+
+_KILL = {"ip": "192.168.1.10", "service": "nginx", "target_service": "nginx",
+         "mode": "stop", "at": "2026-11-10T00:00:00"}
+
+
+def test_a_restore_between_polls_is_inferred_from_the_live_up_score():
+    world = _World([_KILL])
+    sensors = _sensors(world, [{"team1": {"web01-http": True}}])
+    sensors.observe()
+    sensors.observe()
+    assert [(e["service"], e["ip"]) for e in world.events] == [
+        ("web01-http", "192.168.1.10")]
+
+
+def test_a_service_the_scoreboard_still_scores_down_is_not_a_restore():
+    world = _World([_KILL])
+    sensors = _sensors(world, [{"team1": {"web01-http": False}}])
+    sensors.observe()
+    assert world.events == []
 
 
 def test_an_unknown_box_name_is_left_unattributed():

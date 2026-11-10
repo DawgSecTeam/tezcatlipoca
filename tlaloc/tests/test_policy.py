@@ -317,6 +317,24 @@ def test_rotation_skips_a_service_that_is_still_down_and_verifies_a_restored_one
     assert skip is False and bonus >= 30 and "blue touched this box" in why
 
 
+def test_rotation_re_hits_a_kill_the_live_scoreboard_says_is_back_up(tmp_path):
+    """The kill is real, no restore row exists (it happened between polls), but the live
+    scoreboard scores the service UP: history must not veto the re-hit."""
+    ctx, policy = policy_for(tmp_path)
+    ip = "192.168.1.10"
+    ctx.world.add_impact(ip, "nginx", "stop")
+    bonus, why, skip = policy.pressure_rotation(ip, "nginx", False)
+    assert skip is False and bonus >= 40 and "back up" in why
+
+
+def test_rotation_matches_the_service_red_aimed_at_not_the_resolved_unit(tmp_path):
+    ctx, policy = policy_for(tmp_path)
+    ip = "192.168.1.10"
+    ctx.world.add_impact(ip, "lighttpd", "stop", target_service="splunk")
+    _, why, skip = policy.pressure_rotation(ip, "splunk", True)
+    assert skip is True and "already down" in why
+
+
 def test_rotation_prefers_an_unhit_service_on_an_unhit_box(tmp_path):
     ctx, policy = policy_for(tmp_path)
     hot, cold = "192.168.1.10", "192.168.1.11"
