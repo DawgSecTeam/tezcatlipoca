@@ -52,7 +52,7 @@ def test_the_cli_follows_the_folder_the_deploy_renamed(tmp_path, monkeypatch):
     """The rename happens inside stage_deploy; cli.main's LOCAL run_dir must follow it or
     the first post-deploy manifest write lands in the renamed-away directory (live twice)."""
     import sys
-    from scrim import cli, staging, fire_test, blue_agent, red_stage, inject_sync, event_run
+    from scrim import cli, staging, fire_test, blue_agent, red_link, red_stage, inject_sync, event_run
 
     comp = tmp_path / "comp"
     comp.mkdir()
@@ -74,6 +74,7 @@ def test_the_cli_follows_the_folder_the_deploy_renamed(tmp_path, monkeypatch):
     monkeypatch.setattr(fire_test, "stage_verify", lambda *a: None)
     monkeypatch.setattr(blue_agent, "stage_blues", lambda *a: None)
     monkeypatch.setattr(red_stage, "stage_red", lambda *a: None)
+    monkeypatch.setattr(red_link, "start_red_director", lambda *a: None)
     monkeypatch.setattr(inject_sync, "reanchor_injects", lambda *a: None)
     monkeypatch.setattr(event_run, "run_event_and_finish", lambda *a: None)
     monkeypatch.setattr(sys, "argv", ["run-agent-scrim.py", "--competition", "c1",

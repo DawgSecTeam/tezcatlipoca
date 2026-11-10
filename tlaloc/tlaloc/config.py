@@ -50,7 +50,10 @@ DEFAULTS = {
         },
         # max_down 0 means NO LIMIT on concurrent takedowns per team (owner
         # directive 2026-10-18: red must be free to split blue's attention).
-        "caps": {"max_down": 0, "min_standing": 1, "grace_min": 10},
+        "caps": {"max_down": 0, "min_standing": 1, "grace_min": 2},
+        # The observe tier is a recon pass, not a ten-minute no-op: after this
+        # long the first stop is legal even while the ladder still says observe.
+        "opening_takedown_min": 2,
         "windows": {"endgame_teardown": 15, "lockout": 3},  # minutes before end
         "budget": {"extra_pressure_max": 2, "improvise_rounds": 2,
                    "improvise_commands": 6},
@@ -60,6 +63,7 @@ DEFAULTS = {
         "base_url": "http://203.0.113.30:8080",
         "path": "/v1/systemone",
         "model": "clef-flash",
+        "api_key_env": "",
         "timeout_sec": 5,
         # Batch ceiling in tokens; the truncation cascade in state/digest.py is sized
         # against it as a guard for a smaller endpoint.
@@ -79,24 +83,26 @@ DEFAULTS = {
         "api_key_env": "TLALOC_LLM_API_KEY",
     },
     "c2": {
-        "enabled": False,          # Mythic (installed/configured by Gaia)
+        "engine": "sliver",        # sliver (default) | mythic (legacy Gaia path)
+        "enabled": False,          # installed/configured by the deploy's C2 step
         "base_url": "",
+        # Sliver operator profile (mTLS certs + token); the deploy writes it 0600
+        # on red01 and the config carries the path, never the secret.
+        "operator_config": "/etc/tlaloc/sliver.cfg",
+        "dns_domain": "c2.sliver.range",
+        # Per-transport gateway/server port overrides, e.g.
+        # {mtls: {gateway: 8888, server: 8888}}. Empty uses the deploy defaults.
+        "transports": {},
         "username": "tlaloc",
         "password_env": "TLALOC_MYTHIC_PASSWORD",
         "operation": "",
         "verify_tls": False,
-        "callback_wait_sec": 120,
+        "callback_wait_sec": 240,
         "callback_max_age_sec": 120,
-        # "draw" (default): a plant registers one launcher + 1-2 redundant surfaces,
-        # chosen per box, which is what a real operator does. "full": register EVERY
-        # surface on every box — for the coverage/QA runs that have to prove each
-        # implant path works rather than whichever ones chance picked.
+        # "draw" (default): one implant per box, chosen per box. "full": EVERY
+        # transport on every box — for coverage/QA runs that prove each path.
         "implant_spread": "draw",
-        # The callback address a built payload dials, as the team boxes see it —
-        # the engine's DNAT gateway for the C2 port. Without it the payload
-        # inherits the Mythic profile instance's own default (Mythic installs
-        # with a loopback callback_host), and the channel can never check in.
-        # "" / 0 = leave the profile instance's value alone.
+        # Mythic only: the callback address a built payload dials.
         "callback_host": "",
         "callback_port": 0,
         # implant_channel waits this long for a fresh callback after a plant;
@@ -158,6 +164,9 @@ ENV_MAP = {
     "TLALOC_LLM_URL": "llm.base_url",
     "TLALOC_LLM_MODEL": "llm.model",
     "TLALOC_MYTHIC_URL": "c2.base_url",
+    "TLALOC_SLIVER_URL": "c2.base_url",
+    "TLALOC_SLIVER_CONFIG": "c2.operator_config",
+    "TLALOC_C2_ENGINE": "c2.engine",
     "TLALOC_EVENT_MIN": "red.duration_min",
     "TLALOC_QUOTIENT_URL": "sensors.quotient_url",
 }
@@ -335,4 +344,8 @@ def validate_config(cfg):
         raise ConfigError("clef.theta must be in (0, 1]")
     if clef.get("max_request_tokens", 512) < 128:
         raise ConfigError("clef.max_request_tokens below 128 cannot carry a bundle")
+
+    engine = str((cfg.get("c2") or {}).get("engine") or "sliver").lower()
+    if engine not in ("sliver", "mythic"):
+        raise ConfigError(f"c2.engine must be sliver|mythic, got {engine!r}")
     return cfg

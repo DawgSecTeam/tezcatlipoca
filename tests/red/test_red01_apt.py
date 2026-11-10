@@ -15,5 +15,8 @@ from red import red01_ops
 def test_the_prelude_waits_for_cloud_init_and_retries_the_update():
     script = red01_ops._apt_prelude()
     assert "for i in $(seq 1 12)" in script
-    assert "apt-get -o DPkg::Lock::Timeout=600 update" in script
+    assert "apt-get -o DPkg::Lock::Timeout=900 update" in script
+    # the install gets its own retry loop (the Sliver-era lock storms)
+    assert "for i in $(seq 1 3)" in script
+    assert "apt-get -o DPkg::Lock::Timeout=900 install" in script
     assert red01_ops.DEPS in script

@@ -44,11 +44,12 @@ class TaskChannel(Effect):
         if not record:
             return False
         max_age = float(ctx.cfg["c2"].get("callback_max_age_sec", 120))
+        if hasattr(ctx.c2, "record_fresh"):
+            return bool(ctx.c2.record_fresh(record, max_age))
         seen = record.get("seen_at")
         if not seen:
             return False
-        age = ctx.now() - float(seen)
-        return age <= max_age
+        return (ctx.now() - float(seen)) <= max_age
 
     def run(self, ctx, params):
         from .implant_channel import box_id_for

@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 
 PUBLIC = "public"
 OPERATOR = "operator"
+# An operator-side gateway (LiteLLM, a relay in front of many models) can require a key too.
+OPERATOR_KEY_ENV = "TEZ_SCRIM_API_KEY"
 
 # An operator-side gateway (LiteLLM, a relay in front of many models) can require a key too.
 # One env var covers every unknown base_url; unset keeps the llama.cpp literal-"local" path.

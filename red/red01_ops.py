@@ -18,8 +18,10 @@ RED_USER = "sysadmin"
 NAME = "tlaloc-red01"
 DEFAULT_TEMPLATE = "base-ubuntu24.04-fix"
 # python3-paramiko is tlaloc's SSH transport; without it every box action fails
-# and the day-0 seed plants nothing while exiting 0.
-DEPS = "python3-yaml python3-paramiko cloud-guest-utils lvm2 nmap"
+# and the day-0 seed plants nothing while exiting 0. grpcio/protobuf are the
+# Sliver operator client (the generated stubs are sent with the package).
+DEPS = "python3-yaml python3-paramiko python3-grpcio python3-protobuf " \
+       "cloud-guest-utils lvm2 nmap"
 ROUTE_NOTE = "192.168.0.0/16"
 
 
@@ -227,9 +229,11 @@ def _apt_prelude():
             "/var/lib/dpkg/lock /var/lib/dpkg/lock-frontend 2>/dev/null; "
             "dpkg --configure -a >/dev/null 2>&1; "
             "for i in $(seq 1 12); do "
-            "apt-get -o DPkg::Lock::Timeout=600 update -qq && break; sleep 10; "
+            "apt-get -o DPkg::Lock::Timeout=900 update -qq && break; sleep 10; "
             "done; "
-            "apt-get -o DPkg::Lock::Timeout=600 install -y -qq " + DEPS)
+            "for i in $(seq 1 3); do "
+            "apt-get -o DPkg::Lock::Timeout=900 install -y -qq " + DEPS +
+            " && break; sleep 10; done")
 
 
 def _exec(node, vmid, script, timeout=300):
@@ -325,8 +329,10 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     _write(node, vmid, "/etc/netplan/51-tlaloc.yaml", netplan, "600")
     _write(node, vmid, "/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg",
            "network: {config: disabled}\n", "644")
-    _exec(node, vmid, "rm -f /etc/netplan/50-cloud-init.yaml && netplan apply && "
-                      f"ip -4 -brief addr show | grep -qF '{ip}'", 90)
+    _exec(node, vmid, "rm -f /etc/netplan/50-cloud-init.yaml; "
+          "for i in $(seq 1 15); do netplan apply >/dev/null 2>&1; "
+          f"ip -4 -brief addr show | grep -qF '{ip}' && exit 0; sleep 2; done; exit 1",
+          120)
 
     # Mythic's own deps are installed by Gaia, not here.
     _exec(node, vmid, _apt_prelude(), 1800)
@@ -374,8 +380,27 @@ DNAT_CHAIN = "RANGE-RED-DNAT"
 SNAT_CHAIN = "RANGE-RED-SNAT"
 
 
-def firewall_script(*, team_identifiers, callback_port, callback_host="",
-                    red_ip=RED_SEGMENT_IP, red_subnet=RED_SEGMENT_SUBNET, platform="proxmox"):
+def _callback_ports(callback_port, callback_ports):
+    """Normalize one port (Mythic) or the Sliver transport map into DNAT specs."""
+    if callback_ports:
+        specs = []
+        for name, value in (callback_ports or {}).items():
+            if not isinstance(value, dict):
+                continue
+            specs.append({"name": name,
+                          "gateway": int(value.get("gateway") or value.get("port")),
+                          "server": int(value.get("server") or value.get("gateway")
+                                        or value.get("port"))})
+        return specs
+    if callback_port:
+        return [{"name": "c2", "gateway": int(callback_port),
+                 "server": int(callback_port)}]
+    return []
+
+
+def firewall_script(*, team_identifiers, callback_port=None, callback_host="",
+                    callback_ports=None, red_ip=RED_SEGMENT_IP,
+                    red_subnet=RED_SEGMENT_SUBNET, platform="proxmox"):
     """Red-segment rules, rebuilt idempotently inside three of our own chains.
 
     A timer re-runs this every 30 s, so "is the rule already there?" must be answerable
@@ -402,27 +427,28 @@ def firewall_script(*, team_identifiers, callback_port, callback_host="",
         f"iptables -A {FORWARD_CHAIN} -d {red_subnet} -m conntrack "
         f"--ctstate RELATED,ESTABLISHED -j ACCEPT",
     ]
-    if callback_port:
-        port = int(callback_port)
+    specs = _callback_ports(callback_port, callback_ports)
+    for spec in specs:
         for dst in dnat_destinations(team_identifiers, callback_host, platform):
             for proto in ("tcp", "udp"):
                 lines.append(f"iptables -A {FORWARD_CHAIN} -p {proto} -d {red_ip} "
-                             f"--dport {port} -j ACCEPT")
+                             f"--dport {spec['server']} -j ACCEPT")
     # The DROP goes last inside our chain: every ACCEPT above must match first.
     lines.append(f"iptables -A {FORWARD_CHAIN} -d {red_subnet} -j DROP")
-    if callback_port:
-        port = int(callback_port)
+    if specs:
         lines += hook_chain("nat", "PREROUTING", DNAT_CHAIN)
         lines += hook_chain("nat", "POSTROUTING", SNAT_CHAIN)
+    for spec in specs:
         for dst in dnat_destinations(team_identifiers, callback_host, platform):
             for proto in ("tcp", "udp"):
                 # A callback to the team gateway lands here and must reach red01, not Quotient.
                 lines.append(f"iptables -t nat -A {DNAT_CHAIN} -p {proto} -d {dst} "
-                             f"--dport {port} -j DNAT --to-destination {red_ip}:{port}")
+                             f"--dport {spec['gateway']} -j DNAT "
+                             f"--to-destination {red_ip}:{spec['server']}")
                 # Exempt the callback from the range's team SNAT, so blue sees red's address
                 # (and not the check-in sourced from its own gateway).
                 lines.append(f"iptables -t nat -A {SNAT_CHAIN} -s 192.168.0.0/16 -d {red_ip} "
-                             f"-p {proto} --dport {port} -j ACCEPT")
+                             f"-p {proto} --dport {spec['server']} -j ACCEPT")
     return "\n".join(lines) + "\n"
 
 
@@ -433,11 +459,11 @@ _RED_TIMER = ("[Unit]\nDescription=Re-assert the red segment rules\n\n"
 
 
 def install_engine_rules(engine_ip, ssh_key, *, engine_user, team_identifiers,
-                         callback_port, callback_host="", platform="proxmox",
-                         runner=None, timeout=180):
+                         callback_port=None, callback_host="", callback_ports=None,
+                         platform="proxmox", runner=None, timeout=180):
     script = firewall_script(team_identifiers=team_identifiers,
                              callback_port=callback_port, callback_host=callback_host,
-                             platform=platform)
+                             callback_ports=callback_ports, platform=platform)
     units = {
         "/usr/local/sbin/range-red-firewall.sh": (script, "755"),
         "/etc/systemd/system/range-red-firewall.service": (_RED_SERVICE, "644"),

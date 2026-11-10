@@ -38,6 +38,14 @@ def test_ladder_tiers_follow_event_progress(tmp_path):
     assert seen[0.9] == "brutal"
 
 
+def test_observe_tier_unlocks_a_first_stop_after_two_minutes(tmp_path):
+    ctx, policy = policy_for(tmp_path)
+    assert policy.impact_started() is False
+    ctx.world.meta["event_start"] = policy._now() - 3 * 60
+    assert policy.impact_started() is True
+    assert "stop" in policy.allowed_impact_modes()
+
+
 def test_ladder_pause_after_restore_holds_the_clock(tmp_path):
     ctx, policy = policy_for(tmp_path)
     duration = ctx.cfg["red"]["duration_min"]
@@ -222,16 +230,17 @@ def test_question_bundle_is_bounded_and_typed(tmp_path):
     candidates = policy.candidates(ctx)
     digest = policy.frame(ctx, candidates)
     questions, meta = policy.question_bundle(digest, candidates, ctx,
-                                             include_blue_check=True)
-    assert questions["next_effect"]["type"] == "choice"
-    assert len(questions["next_effect"]["criteria"]) <= 9        # 8 options + hold
+                                             include_blue_check=True,
+                                             action_noul=True)
+    assert questions["A"]["type"] == "noul"
+    assert len(questions) <= 12                                  # 8 actions + hold + extras
     assert questions["pressure_count"]["type"] == "score"
     assert questions["escalate_now"]["type"] == "noul"
     assert questions["blue_hunting"]["type"] == "noul"
     assert set(meta["options"]) >= {"hold"}
     # every criterion key is a real candidate id (nothing invented)
-    for key in questions["next_effect"]["criteria"]:
-        assert key == "hold" or key in meta["options"]
+    for key, cid in meta["option_keys"].items():
+        assert cid in meta["options"]
     # Every question at once must fit the endpoint's batch on its own: that
     # batch is 16k, so the full bundle is the normal path and the
     # decider's compaction cascade is the fallback, not the default.
@@ -239,7 +248,7 @@ def test_question_bundle_is_bounded_and_typed(tmp_path):
     assert tokens_needed(digest, questions) <= ctx.cfg["clef"]["max_request_tokens"]
     decider = Decider(ctx.cfg, ctx.world, ctx.log, clef=StubClef(), policy=policy)
     sized_digest, sized, _ = decider.compose(ctx, candidates, recent=["x"], cycle=1)
-    assert "next_effect" in sized
+    assert "A" in sized and "HOLD" in sized
     assert tokens_needed(sized_digest, sized) <= ctx.cfg["clef"]["max_request_tokens"]
 
 

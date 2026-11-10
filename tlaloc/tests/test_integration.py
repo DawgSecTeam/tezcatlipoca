@@ -57,8 +57,15 @@ def test_loop_runs_cycles_through_the_gate_and_writes_reports(tmp_path):
     candidates = policy.candidates(ctx)
     takedown = next(c for c in candidates if c["effect"] == "takedown")
     decider.clef = StubClef(answers={
-        "next_effect": {"type": "choice", "choice": takedown["id"],
-                        "probabilities": {takedown["id"]: 0.95, "hold": 0.05}},
+        "A": {"type": "noul", "noul": 0.1},
+        "B": {"type": "noul", "noul": 0.1},
+        "C": {"type": "noul", "noul": 0.1},
+        "D": {"type": "noul", "noul": 0.1},
+        "E": {"type": "noul", "noul": 0.1},
+        "F": {"type": "noul", "noul": 0.95},
+        "G": {"type": "noul", "noul": 0.1},
+        "H": {"type": "noul", "noul": 0.1},
+        "HOLD": {"type": "noul", "noul": 0.05},
         "pressure_count": {"type": "score", "score": 0.0,
                            "probabilities": {"0": 0.9, "1": 0.1}},
         "escalate_now": {"type": "noul", "noul": 0.05}})
@@ -72,6 +79,10 @@ def test_loop_runs_cycles_through_the_gate_and_writes_reports(tmp_path):
     assert impacts and impacts[0]["service"] == "nginx"
     kinds = [e["kind"] for e in ctx.log.read()]
     assert "run_start" in kinds and "run_end" in kinds and "decision" in kinds
+    decisions = [e for e in ctx.log.read()
+                 if e["kind"] == "decision" and e.get("question") == "next_effect"]
+    assert decisions and decisions[0]["meta"]["shape"] == "action_noul_v1"
+    assert decisions[0]["meta"]["p_yes"] and decisions[0]["top_prob"] >= 0.6
     reports = outcome["reports"]
     assert Path(reports["report"]).exists()
     assert Path(reports["restore_table"]).exists()

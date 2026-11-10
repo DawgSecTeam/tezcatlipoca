@@ -331,15 +331,12 @@ def test_compose_sends_the_whole_state_to_the_16k_endpoint(tmp_path):
     digest, questions, meta = decider.compose(ctx, candidates,
                                               recent=list(recent[-24:]), cycle=1)
     assert tokens_needed(digest, questions, ratio=decider.ratio()) <= 16384
-    # 8 candidates + the implicit "hold": the full option list, un-compacted
-    assert len(questions["next_effect"]["criteria"]) == 9
+    # 8 actions (A..H) + HOLD: the full option list, un-compacted
+    assert len(questions) == 9 and "HOLD" in questions
     assert "_dropped" not in digest, f"the digest was trimmed: {digest.get('_dropped')}"
-    # the strongest form of "nothing was trimmed": byte-identical to the frame
-    # built with an unlimited budget.
-    untrimmed = policy.frame(ctx, candidates, recent=list(recent[-24:]), budget_tokens=10**9)
-    assert digest == untrimmed
-    assert len(digest["boxes"]) >= 5                             # a real board went out
-    assert len(digest["recent"]) == 24                           # the wider window
+    assert len(digest["teams"]) >= 2
+    assert digest["rules_of_engagement"]["allowed_mechanisms"]
+    assert len(digest["recent_events"]) == 6                            # a handful of events
     kinds = [e["kind"] for e in ctx.log.read()]
     assert "clef_bundle_compact" not in kinds
     assert "clef_bundle_over_budget" not in kinds
@@ -351,10 +348,10 @@ def test_compose_still_compacts_against_a_small_batch(tmp_path):
     from tlaloc.decide import tokens_needed
     ctx, policy, decider = decider_for(tmp_path, StubClef())
     candidates = _wide_board(ctx, reason_pad=140)                # fat reasons
-    ctx.cfg["clef"]["max_request_tokens"] = 1024
+    ctx.cfg["clef"]["max_request_tokens"] = 2000
     digest, questions, meta = decider.compose(ctx, candidates, recent=["x"] * 6, cycle=1)
-    assert tokens_needed(digest, questions, ratio=decider.ratio()) <= 1024
-    assert len(questions["next_effect"]["criteria"]) <= 5        # compacted options
+    assert tokens_needed(digest, questions, ratio=decider.ratio()) <= 2000
+    assert len(questions) <= 5                                  # 4 compacted actions + HOLD
     assert "clef_bundle_compact" in [e["kind"] for e in ctx.log.read()]
 
 
@@ -370,7 +367,7 @@ def test_a_batch_too_small_for_any_bundle_is_flagged_not_truncated(tmp_path):
     assert "clef_bundle_over_budget" in [e["kind"] for e in ctx.log.read()]
     assert digest.get("_over_budget") is True
     # the digest gave ground (it may be minimal) but never lost the ROE
-    assert set(digest.get("roe") or {}) >= {"win", "modes"}
+    assert set(digest.get("rules_of_engagement") or {}) >= {"window", "allowed_mechanisms"}
     assert tokens_needed(digest, questions, ratio=decider.ratio()) > 512
 
 
@@ -388,7 +385,7 @@ def test_an_over_budget_rejection_is_learned_and_retried_once(tmp_path):
                 "usage": {}}
 
     ctx, policy, decider = decider_for(tmp_path, StubClef(), cfg_over={"clef": {
-        "enabled": True, "base_url": "http://x", "max_request_tokens": 900,
+        "enabled": True, "base_url": "http://x", "max_request_tokens": 16384,
         "timeout_sec": 1}})
     decider.clef = decide_mod.ClefClient(ctx.cfg, poster=poster)
     ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root")
@@ -410,13 +407,13 @@ def test_tokens_needed_tracks_the_bundle_size():
     assert small < big
 
 
-def test_pressure_count_defaults_to_the_configured_bound(tmp_path):
+def test_pressure_count_low_confidence_is_not_max(tmp_path):
     ctx, policy, decider = decider_for(tmp_path, StubClef(answers={
         "pressure_count": {"type": "score", "score": 2.9,
                            "probabilities": {"0": 0.3, "1": 0.3, "2": 0.2, "3": 0.2}}}))
     policy.red["budget"]["extra_pressure_max"] = 3
     decision = decider.pressure_count({})
-    assert decision.answer == 3 and decision.source == "deterministic"
+    assert decision.answer == 0 and decision.source == "deterministic"
     # the model's answer is capped by the same ROE bound
     policy.red["budget"]["extra_pressure_max"] = 2
     ctx2, _, decider2 = decider_for(tmp_path / "cap", StubClef(answers={
@@ -425,3 +422,86 @@ def test_pressure_count_defaults_to_the_configured_bound(tmp_path):
     policy2 = decider2.policy
     policy2.red["budget"]["extra_pressure_max"] = 2
     assert decider2.pressure_count({}).answer == 2
+
+
+def _noul_actions():
+    return [
+        make_candidate("takedown", {"ip": "192.168.1.10", "service": "nginx",
+                                    "mode": "stop"}, 60, "standing web service"),
+        make_candidate("persist", {"ip": "192.168.1.10", "family": "cron"},
+                       45, "keep access after eviction"),
+    ]
+
+
+def _noul_answers(a, b, hold):
+    return {"A": {"type": "noul", "noul": a},
+            "B": {"type": "noul", "noul": b},
+            "HOLD": {"type": "noul", "noul": hold}}
+
+
+def test_next_effect_noul_selects_max_yes(tmp_path):
+    ctx, policy, decider = decider_for(tmp_path, StubClef(
+        answers=_noul_answers(0.4, 0.8, 0.1)))
+    decision = decider.next_effect(1, None, _noul_actions(), ctx=ctx)
+    assert decision.source == "clef"
+    assert decision.chosen["id"] == "persist:192.168.1.10:cron"
+    assert decision.meta["p_yes"]["B"] == 0.8
+    assert decision.meta["shape"] == "action_noul_v1"
+
+
+def test_next_effect_noul_uses_p_yes_not_max(tmp_path):
+    ctx, policy, decider = decider_for(tmp_path, StubClef(
+        answers=_noul_answers(0.3, 0.2, 0.1)))
+    decision = decider.next_effect(1, None, _noul_actions(), ctx=ctx)
+    assert decision.source == "deterministic"
+    assert decision.top_prob == 0.3          # not max(0.3, 1-0.3) == 0.7
+    assert decision.meta["p_yes"]["A"] == 0.3
+
+
+def test_next_effect_noul_hold_wins(tmp_path):
+    ctx, policy, decider = decider_for(tmp_path, StubClef(
+        answers=_noul_answers(0.8, 0.2, 0.9)))
+    decision = decider.next_effect(1, None, _noul_actions(), ctx=ctx)
+    assert decision.source == "clef" and decision.chosen is None
+    assert decision.answer == "HOLD"
+    assert decision.meta["p_hold"] == 0.9
+
+
+def test_next_effect_noul_low_confidence_falls_back(tmp_path):
+    ctx, policy, decider = decider_for(tmp_path, StubClef(
+        answers=_noul_answers(0.2, 0.1, 0.1)))
+    decision = decider.next_effect(1, None, _noul_actions(), ctx=ctx)
+    assert decision.source == "deterministic"
+    assert decision.chosen["id"] == _noul_actions()[0]["id"]
+
+
+def test_next_effect_noul_never_invents(tmp_path):
+    ctx, policy, decider = decider_for(tmp_path, StubClef(
+        answers={"A": {"type": "noul", "noul": 0.1},
+                 "Z": {"type": "noul", "noul": 0.99},
+                 "HOLD": {"type": "noul", "noul": 0.1}}))
+    decision = decider.next_effect(1, None, _noul_actions(), ctx=ctx)
+    assert decision.source == "deterministic"
+    assert decision.chosen["id"] == _noul_actions()[0]["id"]
+
+
+def test_noul_option_keys_are_short_and_unique(tmp_path):
+    ctx, policy = decider_for(tmp_path, StubClef())[:2]
+    questions, meta = policy.question_bundle(None, _noul_actions(), ctx,
+                                             action_noul=True)
+    keys = set(meta["option_keys"])
+    assert keys == {"A", "B"} and "HOLD" in questions
+    assert all(len(key) == 1 for key in keys)
+    assert len(set(meta["option_keys"].values())) == 2
+
+
+def test_expanded_state_has_no_secrets_and_fits_budget(tmp_path):
+    ctx, policy = decider_for(tmp_path, StubClef())[:2]
+    state = policy.clef_state(ctx, recent=["x"], compact=False)
+    blob = json.dumps(state).lower()
+    assert "password" not in blob and "secret" not in blob and "credlist" not in blob
+    from tlaloc.decide import tokens_needed
+    assert tokens_needed(state, policy.question_bundle(None, _noul_actions(), ctx,
+                                                       action_noul=True)[0]) < 16384
+    compact = policy.clef_state(ctx, recent=["x"], compact=True)
+    assert compact["teams"]

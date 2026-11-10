@@ -118,10 +118,10 @@ def red_pacing_caps(comp_dir=None):
 
 
 def red_llm_config(args, base_url=None):
-    """A local endpoint is slow (reasoning tokens), so it gets the longer read timeout."""
+    """The decision model is clef; the free-form LLM must not arbitrate sliver's red loop."""
     base = base_url or args.llm_base_url
     local = core.is_local_endpoint(base)
-    return {"enabled": True, "base_url": base, "model": args.red_model,
+    return {"enabled": False, "base_url": base, "model": args.red_model,
             "timeout_sec": 300 if local else 240,
             "api_key_env": "TLALOC_LLM_API_KEY"}
 
@@ -253,7 +253,7 @@ def stage_red(args, comp, creds, run_dir):
     except Exception as e:                                   # noqa: BLE001 - never fatal
         log(f"WARNING: trail wipe failed ({type(e).__name__}: {e}) — blue may be able "
             f"to read the deploy out of the box logs")
-    red_link.start_red_director(args)
+
 
 
 def verify_tlaloc_seeded(args, comp):

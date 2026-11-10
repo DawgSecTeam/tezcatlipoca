@@ -9,7 +9,7 @@ from pathlib import Path
 from . import decide as decide_mod
 from . import report as report_mod
 from . import seed as seed_mod
-from .c2 import FakeMythic, MythicClient
+from .c2 import FakeMythic, FakeSliver, MythicClient, SliverClient
 from .ctx import Ctx
 from .effects import execute, get as get_effect, reload_registry
 from .errors import (EffectParamError, GuardrailError, PolicyError,
@@ -17,6 +17,7 @@ from .errors import (EffectParamError, GuardrailError, PolicyError,
 from .events import EventLog
 from .exec.gate import Gate
 from .exec.ssh import SSH
+from .state.schema import now_iso
 from .intel import load_intel
 from .llm import LLM
 from .policy import Policy
@@ -179,6 +180,7 @@ class Loop:
                 if landed >= wanted:
                     break
 
+        self._update_world(executed, decision, digest)
         self.decider.record(self.cycle, executed=[e for e in executed if e])
         # the report's decision-log section reads records; an empty one silently drops it
         self.records.append({
@@ -188,9 +190,66 @@ class Loop:
             "chosen": (decision.chosen or {}).get("id"),
             "top_prob": round(decision.top_prob, 3),
             "executed": [e["id"] for e in executed if e],
+            "outcomes": [{"id": e["id"], "ok": e.get("ok"),
+                          "detail": (e.get("detail") or "")[:240]}
+                         for e in executed if e],
         })
         return {"cycle": self.cycle, "decision": decision, "executed": executed,
                 "digest": digest, "candidates": len(candidates)}
+
+    def _update_world(self, executed, decision, digest):
+        """Persist what the last cycle actually proved about access."""
+        for entry in executed:
+            if not entry:
+                continue
+            params = entry.get("params") or {}
+            ip = params.get("ip")
+            if not ip:
+                continue
+            detail = str(entry.get("detail") or "")
+            access = entry.get("access")
+            if ("TransportError" in detail or "Bad authentication" in detail
+                    or "authentication" in detail.lower()):
+                access, ok = "ssh", False
+            else:
+                ok = bool(entry.get("ok"))
+            if access:
+                self.ctx.world.note_access(ip, access, ok, detail)
+        if self.ctx.c2 is not None:
+            try:
+                fresh = self.ctx.c2.fresh_callbacks()
+            except AttributeError:
+                fresh = self.ctx.c2.callbacks()
+            for fh in self.ctx.world.footholds():
+                box = self.ctx.intel.box_by_ip(fh["ip"]) or {}
+                box_id = f"{box.get('box')}-{box.get('identifier')}"
+                if box_id in fresh:
+                    self.ctx.world.note_access(fh["ip"], "c2", True,
+                                               "fresh C2 callback")
+        self.ctx.world.meta["last_cycle"] = {
+            "cycle": self.cycle, "at": now_iso(),
+            "results": [{"id": e.get("id"), "ok": e.get("ok"),
+                         "access": e.get("access"),
+                         "detail": (e.get("detail") or "")[:300]}
+                        for e in executed if e],
+        }
+        self.ctx.world.save()
+        # A transport failure is an access decision, not another identical takedown.
+        for entry in executed:
+            if not entry:
+                continue
+            params = entry.get("params") or {}
+            ip = params.get("ip")
+            if not ip:
+                continue
+            text = str(entry.get("detail") or "")
+            if ("TransportError" in text or "Bad authentication" in text):
+                methods = self.ctx.policy.access_methods(ip)
+                if "c2" in methods:
+                    chosen = self.ctx.decider.access_method(
+                        digest, ip, methods, default="c2", cycle=self.cycle)
+                    if chosen.answer in methods:
+                        self.ctx.world.set_preferred_access(ip, chosen.answer)
 
     def _run_candidate(self, decision, source):
         candidate = decision.chosen
@@ -212,10 +271,15 @@ class Loop:
                           candidate=candidate.get("id"), error=str(exc))
             self.recent.append(f"{candidate['effect']} unavailable")
             return {"id": candidate["id"], "effect": candidate["effect"],
-                    "ok": False, "detail": f"unavailable: {exc}"}
+                    "params": candidate["params"], "ok": False,
+                    "access": candidate["params"].get("access"),
+                    "detail": f"unavailable: {exc}"}
         self.recent.append(_short(candidate["effect"], candidate["params"], result))
         return {"id": candidate["id"], "effect": candidate["effect"],
-                "ok": result.ok, "detail": result.detail}
+                "params": candidate["params"], "ok": result.ok,
+                "access": (result.data or {}).get("access")
+                          or candidate["params"].get("access"),
+                "detail": result.detail}
 
     def _stronger_impact(self, decision, candidates, source):
         strongest = self.policy.strongest_impact_mode()
@@ -288,6 +352,26 @@ class Loop:
             out.append(holder)
         return out
 
+    def c2_probe(self):
+        """One benign C2 task per foothold: proves the channel beyond its callback and
+        gives the event an immediate successful action instead of a T+0 stall."""
+        if self.ctx.c2 is None or self.ctx.dry_run:
+            return
+        for fh in self.world.footholds():
+            ip = fh["ip"]
+            try:
+                result = execute("task_channel",
+                                 {"ip": ip,
+                                  "command": "whoami" if self.ctx.is_windows(ip) else "id",
+                                  "goal": "C2 channel check"},
+                                 self.ctx, source="seed")
+            except Exception as exc:
+                self.log.emit("c2_probe_error", ip=ip,
+                              error=f"{type(exc).__name__}: {exc}")
+                continue
+            self.log.emit("c2_probe", ip=ip, ok=result.ok,
+                          detail=(result.detail or "")[:200])
+
     def run(self, *, max_cycles=None):
         self.guard_host()
         started = time.time()
@@ -303,6 +387,7 @@ class Loop:
                           boxes=len(seeded.get("boxes") or {}),
                           steps=seeded.get("steps"))
 
+        self.c2_probe()
         while True:
             if max_cycles is not None and self.cycle >= max_cycles:
                 break
@@ -340,7 +425,8 @@ class Loop:
         paths = report_mod.write_artifacts(
             self.reports_dir or self.ctx.cfg["run"]["state_dir"], self.world,
             policy=self.policy, sensors=self.sensors, decisions=self.records,
-            out_dir=self.reports_dir)
+            out_dir=self.reports_dir, c2=self.ctx.c2,
+            comp_dir=self.ctx.cfg["run"].get("comp_dir"))
         self.log.emit("run_end", cycle=self.cycle,
                       duration_s=round(time.time() - started, 1), reports=paths)
         return {"cycles": self.cycle, "reports": paths,
@@ -397,9 +483,13 @@ def build_context(cfg, *, comp_dir=None, dry_run=None, clef=None, llm=None, c2=N
 
     c2_client = c2
     if c2_client is None and cfg["c2"].get("enabled"):
-        c2_client = (MythicClient(cfg, log=log) if not (dry_run if dry_run is not None
-                                                        else cfg["run"]["dry_run"])
-                     else FakeMythic())
+        dry = dry_run if dry_run is not None else cfg["run"]["dry_run"]
+        engine = str(cfg["c2"].get("engine") or "sliver").lower()
+        if dry:
+            c2_client = FakeSliver() if engine == "sliver" else FakeMythic()
+        else:
+            c2_client = (SliverClient(cfg, log=log) if engine == "sliver"
+                         else MythicClient(cfg, log=log))
     sensors_client = sensors
     if sensors_client is None:
         sensors_client = Sensors(cfg, intel, world=world, log=log)
