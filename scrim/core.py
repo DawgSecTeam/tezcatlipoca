@@ -47,9 +47,11 @@ def shutil_copy(src, dst):
 
 
 def shutil_copytree(src, dst):
-    """Copy a directory tree whole (a kit's scripts must arrive with their exec bits)."""
+    """Copy a directory tree whole (a kit's scripts must arrive with their exec bits).
+    dirs_exist_ok: re-staging into a reused --run-dir must not crash (live b2d: a stale
+    blue-kit FileExistsError aborted staging after every gate had already passed)."""
     import shutil
-    return shutil.copytree(src, dst)
+    return shutil.copytree(src, dst, dirs_exist_ok=True)
 
 
 def now_iso(ts=None):
