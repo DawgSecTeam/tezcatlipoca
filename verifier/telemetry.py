@@ -82,6 +82,16 @@ def check_telemetry(ctx, comp_dir, teams, boxes):
     if not expected:
         return gate_skip("telemetry", "no telemetry.json — the comp declares no ingest "
                          "expectations", gating=False)
+    # `boxes` arrives as the GENERATED machine list (names like splunk01-team134 with a
+    # concrete `ip`), not boxes.json — the old octet-only path never resolved on a live
+    # run (b2d: telemetry FAIL 6/0 box/identifier unresolved on a fully-wired range).
+    # Map (box, team-ident) → machine ip; {name, last_octet} fixtures fall back to octets.
+    ip_by_boxteam = {}
+    for b in boxes:
+        name, ip = b.get("name", ""), b.get("ip", "")
+        if "-team" in name and ip:
+            base, _, tid = name.rpartition("-team")
+            ip_by_boxteam[(base, tid)] = ip
     octet_by_box = {b["name"]: b.get("last_octet") for b in boxes}
     failures, probes = [], 0
     for team_key, tdata in teams.items():
@@ -89,11 +99,13 @@ def check_telemetry(ctx, comp_dir, teams, boxes):
         for e in expected:
             octet = octet_by_box.get(e["box"])
             label = f"{team_key}:{e.get('label', e['box'])}"
-            if not ident or octet is None:
-                failures.append(f"{label} (box/identifier unresolved)")
-                continue
+            ip = ip_by_boxteam.get((e["box"], str(ident))) if ident else None
+            if ip is None:
+                if not ident or octet is None:
+                    failures.append(f"{label} (box/identifier unresolved)")
+                    continue
+                ip = f"192.168.{ident}.{octet}"
             probes += 1
-            ip = f"192.168.{ident}.{octet}"
             for attempt in range(RETRIES + 1):
                 ok, note = _probe_once(ctx, ip, e)
                 if ok:

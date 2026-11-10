@@ -160,3 +160,43 @@ class ScrimAbortsOnGatingFail(unittest.TestCase):
     def test_informational_fail_never_aborts(self):
         self._verify_run(self._both_red_pass(
             "  firewall_in_path  : FAIL  nope [informational]\n"))
+
+
+def test_machine_list_shape_resolves_ips_from_generated_names(tmp_path, monkeypatch):
+    """Live runs pass the nakon MACHINE list (splunk01-team134 + ip), not boxes.json —
+    b2d-1706 failed the gate 6/0 'box/identifier unresolved' on a fully-wired range."""
+    import json as _json
+    from verifier import telemetry
+
+    (tmp_path / "telemetry.json").write_text(_json.dumps({"expected": [
+        {"box": "splunk01", "label": "head internal", "url": "https://localhost:8089/x",
+         "params": {}, "count_field": "n", "min_count": 1},
+    ]}))
+    monkeypatch.setattr(telemetry, "_probe_once",
+                        lambda ctx, ip, e: (ip == "192.168.134.2", f"probed {ip}"))
+    teams = {"team1": {"identifier": "134"}}
+    machines = [{"name": "splunk01-team134", "ip": "192.168.134.2"},
+                {"name": "web01-team135", "ip": "192.168.135.4"}]
+    res = telemetry.check_telemetry({}, tmp_path, teams, machines)
+    assert res.passed, res.detail
+    assert "1 declared feed" in res.detail
+
+
+def test_machine_shape_miss_still_fails_by_ip(tmp_path, monkeypatch):
+    import json as _json
+    from verifier import telemetry
+    (tmp_path / "telemetry.json").write_text(_json.dumps({"expected": [
+        {"box": "splunk01", "label": "head internal", "url": "https://localhost:8089/x",
+         "params": {}, "count_field": "n", "min_count": 1},
+    ]}))
+    seen = []
+    def miss(ctx, ip, e):
+        seen.append(ip)
+        return False, "count=0"
+    monkeypatch.setattr(telemetry, "_probe_once", miss)
+    monkeypatch.setattr(telemetry, "RETRY_WAIT_S", 0)
+    teams = {"team1": {"identifier": "134"}}
+    machines = [{"name": "splunk01-team134", "ip": "192.168.134.2"}]
+    res = telemetry.check_telemetry({}, tmp_path, teams, machines)
+    assert not res.passed
+    assert seen == ["192.168.134.2"] * 2      # grace-retry on the same resolved ip
