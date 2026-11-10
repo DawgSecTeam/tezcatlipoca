@@ -681,8 +681,17 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
             print(f"  sliver      : reusing {payload_manifest['payloads']} frozen "
                   f"payload(s) already on red01")
         else:
-            prep = _ssh_run(ssh_key, red_ip, comp_prep_remote_command("all"),
-                            runner=runner, timeout=7200)
+            # The matrix is compiled per box × transport; 'all' on a 12-box range blew
+            # past the old 7200s cap (b2d 4-team live: timeout, then the rm -rf restart
+            # looped forever). Comps can narrow transports (red.c2_prep_transports) and
+            # the cap is now hours, not minutes (red.c2_prep_timeout, default 6h).
+            transports = str(compfile_value(comp_dir, "red.c2_prep_transports") or "all")
+            try:
+                prep_timeout = int(compfile_value(comp_dir, "red.c2_prep_timeout") or 21600)
+            except ValueError:
+                prep_timeout = 21600
+            prep = _ssh_run(ssh_key, red_ip, comp_prep_remote_command(transports),
+                            runner=runner, timeout=prep_timeout)
             if getattr(prep, "returncode", 1) != 0:
                 raise RuntimeError(f"Sliver c2-prep (payload matrix) failed on red01: "
                                    f"{_tail(prep, 1500)}")
