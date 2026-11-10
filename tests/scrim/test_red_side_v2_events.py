@@ -6,6 +6,7 @@ Reading only v1's tactic/target/blue_restore spelling reported a fully working
 red team as "takedowns 0, distinct tactics 1, targets none" on a live scrim.
 """
 
+import time
 import unittest
 
 from scrim_report.red_side import red_metrics
@@ -54,6 +55,26 @@ class V2SchemaTest(unittest.TestCase):
         m = red_metrics(events, T0, world={"footholds": {}})
         self.assertEqual(m["blue_restore_events"], 1)
         self.assertEqual(m["blue_restore_list"][0][1], "team1")
+
+    def test_a_reaction_counts_against_an_inferred_restore_with_a_target(self):
+        def ts(minute):
+            return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(T0 + minute * 60))
+
+        events = [
+            {"ts": ts(17), "kind": "action", "effect": "takedown",
+             "params": {"ip": "192.168.1.10", "service": "nginx", "mode": "stop"},
+             "ok": True, "detail": ""},
+            {"ts": ts(19), "kind": "blue_restores",
+             "restores": [{"team": "team1", "service": "web01-http",
+                           "target": "192.168.1.10"}]},
+            {"ts": ts(20), "kind": "action", "effect": "takedown",
+             "params": {"ip": "192.168.1.10", "service": "nginx", "mode": "stop"},
+             "ok": True, "detail": ""},
+        ]
+        m = red_metrics(events, T0, world={"footholds": {}},
+                        labels={"10": "web01"})
+        self.assertEqual(m["takedowns"], 2)
+        self.assertEqual(m["restore_reactions"], 1)
 
 
 if __name__ == "__main__":
