@@ -155,7 +155,8 @@ def build_report(run_dir):
     L.append(f"- initial access: **{len(rm['initial_access'])}** technique(s) "
              f"({', '.join(rm['initial_access']) or 'none'})")
     L.append(f"- targets touched: {', '.join(rm['targets']) or 'none'}")
-    L.append(f"- restore-reactions (re-kill after >=15 min): **{rm['restore_reactions']}**"
+    L.append(f"- restore-reactions (re-kill after a blue restore, or >=15 min after the "
+             f"prior kill): **{rm['restore_reactions']}**"
              + (f"; explicit blue_restore events: {rm['blue_restore_events']}"
                 if rm["blue_restore_events"] else ""))
     L.append(f"- Windows footholds: **{rm['windows_footholds']}**")
