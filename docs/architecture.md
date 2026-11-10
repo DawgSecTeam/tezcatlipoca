@@ -172,7 +172,9 @@ Each rebooting step is its own single-machine nakon pass. A missing `domain_role
 
 Red is a range component owned by this tree; there is no sibling checkout and no second engine
 ([internals.md](internals.md#red-and-tlaloc)). `red/red01_ops.py` provisions red01: a linked clone of
-the fixed `base-ubuntu24.04-fix` template on the run's reserved vmid/IP, with `net0` on the
+the node's configured Ubuntu base template (`proxmox.template_vm_id`, resolved by name at
+deploy; the name differs per node — `base-ubuntu24.04` on hdd-150, `base-ubuntu24.04-fix` on the
+field node) on the run's reserved vmid/IP, with `net0` on the
 management bridge, `net1` on the run's **private per-run bridge** `vmbrR<run hex>`
 (`red_bridge_name(run_id)`), cloud-init user/key, `onboot`, and the run's ownership tags. Netplan
 pins the network (`cloud-init` networking is disabled): the management address on the first NIC,

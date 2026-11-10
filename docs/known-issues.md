@@ -13,6 +13,17 @@ still exists (a failure with no VMs recorded, a cancelled run, a refused reclaim
 clear (the team boxes, engine and bridges go; templates stay, and the next deploy re-adopts them
 by their hash stamps). Not changed unilaterally: it alters a directive, not a defect.
 
+### Box templates are per-node names; the competitions seed is drifted
+
+The queue's competitions checkout carries 41 uncommitted changes (2026-10-27) that drop the
+`-fix` suffix from every box `template` (`base-ubuntu24.04-fix` -> `base-ubuntu24.04`, same for
+`base-debian13-lite`). On hdd-150 the `-fix` templates do not exist, and run-c5c6b144 seeded
+the un-suffixed names successfully; the field node (zfs-193, currently unreachable) is
+documented as shipping `-fix`. Reverting the checkout breaks the live node; committing it
+breaks the field node. Fix at the root: resolve each box's template per node (the way `red01`
+resolves `proxmox.template_vm_id` by vmid), or give both nodes the same template names. Do
+not blanket-revert or blanket-commit the drift.
+
 ### gcp provider: the v1 matrix gaps (the Linux range is the cut)
 
 The gcp backend deploys the Linux stack end to end (engine, goldens, boxes, red01, teardown).

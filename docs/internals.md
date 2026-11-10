@@ -325,8 +325,10 @@ the deploy contract is `tlaloc/docs/deploy.md`.
   `infra/red01.py` preflight-gates the slot: an occupied vmid is a refusal
   naming the owner (another run of this competition vs. a foreign VM), unreadable tags are refused
   too, and an address a running guest answers is refused.
-- **The VM** is a linked clone (`full=0`) of the fixed `base-ubuntu24.04-fix` template (a
-  qemu-guest-agent + cloud-init Ubuntu; there is no per-comp template knob), named `tlaloc-red01`.
+- **The VM** is a linked clone (`full=0`) of the node's configured Ubuntu base template
+  (`proxmox.template_vm_id`, resolved by vmid and name at deploy — `base-ubuntu24.04` on
+  hdd-150, `base-ubuntu24.04-fix` on the field node; a qemu-guest-agent + cloud-init Ubuntu;
+  there is no per-comp template knob), named `tlaloc-red01`.
   The clone POST carries the competition's clone marker, then the config PUT lands the run's full
   tag set, `onboot`, the guest agent, cloud-init user (`sysadmin`) + the deploy's public key,
   `net0` on the placement's management bridge and `net1` on `red_bridge_name(run_id)`
