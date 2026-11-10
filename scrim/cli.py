@@ -210,6 +210,11 @@ def main():
     # marker BEFORE stage_red: red01 deploys take tens of minutes; a death in there must leave a resume marker
     run_manifest.record_phase(run_dir, args, "red")
     red_stage.stage_red(args, comp, creds, run_dir)
+    # T0 is the event clock: starting red before this point lets its opening cycle
+    # take scored services down before blue's first turn.
+    # (lost in the sliver-c2 squash 69c7fa1; every scrim since ran with a held red
+    # that never fired — b2d runs 7-10 caught it live.)
+    red_link.start_red_director(args)
     t0 = time.time()
     write_state(run_dir / "T0.txt", {"t0": t0, "duration_min": args.duration_min})
     run_manifest.record_phase(run_dir, args, "event", t0=t0)
