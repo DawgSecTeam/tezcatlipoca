@@ -43,8 +43,12 @@ def _resolve_engine_mgmt_ip(ctx, override):
         return engine_mgmt_ip_from_env("")
     from multinode.placement_record import engine_record
     record = engine_record(ctx.placement) if ctx.placement else None
+    # The state document is the record for a single-node range: placement has no engine
+    # record there, and a resume that fell through to DEFAULT_ENGINE_MGMT_IP retargeted the
+    # engine at .250 while the VM was built at the operator's .243 (live 2026-11-11).
     recorded = ((record.engine_mgmt_ip if record else "")
-                or ((ctx.placement or {}).get("engine_mgmt_ip") or ""))
+                or ((ctx.placement or {}).get("engine_mgmt_ip") or "")
+                or ((ctx.previous_state or {}).get("engine_mgmt_ip") or ""))
     ip = override or recorded
     # Auto-select only on a fresh deploy where nobody chose an address. An incomplete
     # agent scan makes every candidate a guess, so the default is kept and the preflight

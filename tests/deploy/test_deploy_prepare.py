@@ -233,6 +233,23 @@ class EngineMgmtIpAutoSelection(unittest.TestCase):
         self.assertEqual(ip, "10.0.0.5")
         select.assert_not_called()
 
+    def test_a_resume_uses_the_prior_states_engine_ip_not_the_default(self):
+        # A single-node range has no placement engine record; the state document is the
+        # only record. Resuming on the default retargeted the engine at .250 (the VM was
+        # built at .243) and every phase-3 SSH died against a host that does not exist.
+        from deploy_lib.prepare import _resolve_engine_mgmt_ip
+        with tempfile.TemporaryDirectory() as d:
+            ctx = _ctx(comp_dir=Path(d), engine_vmid=1234,
+                       placement=self._placement(), resuming=True,
+                       previous_state={"engine_mgmt_ip": "10.0.0.243"})
+            config.reset()
+            self.addCleanup(config.reset)
+            with patch.dict(os.environ, self.ENV, clear=True), \
+                    patch("infra.collisions.select_engine_ip") as select:
+                ip = _resolve_engine_mgmt_ip(ctx, None)
+        self.assertEqual(ip, "10.0.0.243")
+        select.assert_not_called()
+
 
 class GoldenGatePosition(unittest.TestCase):
 # The frozen gate must fire after the hashes, before any Proxmox mutation.
