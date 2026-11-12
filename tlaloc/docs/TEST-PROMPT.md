@@ -99,15 +99,18 @@ where it does not. Grep-level evidence is fine, but the claim must be specific.
 ## Step 4 — the decision chain against the live model (5 min)
 
 ```bash
-curl -s -m 60 http://<clef-host>:8080/v1/systemone -H 'Content-Type: application/json' \
-  --data-binary '{"state":{"v":2,"t":"10/150","phase":"opening"},
+curl -s -m 60 https://litellm.dawgsec.com/v1/systemone \
+  -H "Authorization: Bearer $TEZ_LITELLM_API_KEY" -H 'Content-Type: application/json' \
+  --data-binary '{"model":"clef-flash","state":{"v":2,"t":"10/150","phase":"opening"},
    "questions":{"next_effect":{"type":"choice","instructions":"Best next action?",
    "criteria":{"hold":"do nothing","takedown":"stop nginx on web01"}}}}'
 ```
 
 Expect HTTP 200 with per-question `probabilities` (no text generation — chat
-completions 500 by design). The endpoint's batch is 16384 tokens; it names that
-number in its own rejection message when a request is too big.
+completions 500 by design). `model` is the gateway's routing field (llama.cpp
+ignores it). The client's budget defaults to 16384, but the server's physical
+batch is 4096: it names the real count in its own "input (N tokens) is too
+large" rejection.
 
 Then the loop itself, offline, one dry run:
 

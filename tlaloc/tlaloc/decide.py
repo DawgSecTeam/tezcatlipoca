@@ -74,7 +74,8 @@ class ClefClient:
         if not self.available():
             raise ClefError("clef unavailable (disabled, unconfigured, or cooling "
                             f"down until {self.disabled_until:.0f})")
-        body = {"state": state, "questions": questions}
+        # `model` is what the club gateway routes on; llama.cpp ignores the field.
+        body = {"model": self.model, "state": state, "questions": questions}
         ratio = max(self.tokens_per_char, self.learned_ratio or 0.0)
         estimate = tokens_needed(state, questions, ratio=ratio)
         if estimate > self.max_request_tokens:

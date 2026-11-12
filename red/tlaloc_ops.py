@@ -178,7 +178,10 @@ def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
         cfg.setdefault("clef", {}).update({
             "base_url": clef_url,
             "api_key_env": "TLALOC_LLM_API_KEY",
-            "model": str(block.get("clef_model") or "clef-flash")})
+            "model": str(block.get("clef_model") or "clef-flash"),
+            # A gateway hop turns the endpoint's own over-budget rejection into a ~5 s
+            # round trip; the 5 s default would time out before that answer arrives.
+            "timeout_sec": 15})
     if c2_url:
         cfg.setdefault("c2", {}).update({"enabled": True, "base_url": c2_url,
                                          "operation": c2_operation or cfg["run"]["comp"]})
@@ -700,6 +703,9 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
             print(f"  sliver      : {payload_manifest['payloads']} frozen payload(s) "
                   f"across {len(callback_ports)} transport port(s)")
         c2_summary["payloads"] = payload_manifest["payloads"]
+    # The keyed gateway (the default clef endpoint) needs its bearer on red01; a scrim passes
+    # it explicitly, a create-competition deploy reads the same service env the scrim does.
+    llm_key = llm_key or (os.environ.get("TEZ_LITELLM_API_KEY") or "").strip()
     if llm_key:
         push_llm_env(ssh_key, red_ip, llm_key, runner=runner)
     install_unit(ssh_key, red_ip, runner=runner)

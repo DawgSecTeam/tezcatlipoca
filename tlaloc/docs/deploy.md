@@ -96,7 +96,7 @@ Every failure here aborts the deploy: a range with no red team is not a range.
 ```
 /opt/tlaloc/            the staged package (+ systemd/ + config.example.yaml)
 /etc/tlaloc/config.yaml 0600, pushed by the deploy
-/etc/tlaloc/env         optional 0600 KEY=VALUE (TLALOC_LLM_API_KEY)
+/etc/tlaloc/env         optional 0600 KEY=VALUE (TLALOC_LLM_API_KEY — the gateway bearer clef uses)
 /etc/tlaloc/sliver.cfg  0600 Sliver operator mTLS profile + token (the config names this path)
 /etc/tlaloc/c2.env      legacy Mythic password for the agent (TLALOC_MYTHIC_PASSWORD)
 /var/lib/tlaloc/        state + audit + reports (per competition: fresh dir)

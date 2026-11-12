@@ -365,13 +365,20 @@ class PlantTests(unittest.TestCase):
                 to.plant_assume_breach(self.ctx, ssh_key="/k", runner=self.runner)
         self.assertIn("callback port", str(cm.exception))
 
-    def test_the_llm_env_is_pushed_only_when_a_key_is_given(self):
+    def test_the_llm_env_is_pushed_when_a_key_or_the_gateway_key_is_present(self):
         self._patch()
         to.plant_assume_breach(self.ctx, ssh_key="/k", runner=self.runner)
         to.push_llm_env.assert_not_called()
         to.plant_assume_breach(self.ctx, ssh_key="/k", runner=self.runner,
                                llm={"enabled": True}, llm_key="sk-x")
         to.push_llm_env.assert_called_once()
+        # A create-competition deploy passes no llm_key, but a gateway-pinned clef still
+        # needs the bearer the service env carries.
+        to.push_llm_env.reset_mock()
+        with mock.patch.dict(os.environ, {"TEZ_LITELLM_API_KEY": "sk-gw"}):
+            to.plant_assume_breach(self.ctx, ssh_key="/k", runner=self.runner)
+        to.push_llm_env.assert_called_once()
+        self.assertEqual(to.push_llm_env.call_args.args[2], "sk-gw")
 
 
     def test_an_operator_can_extend_the_event_without_editing_the_comp(self):

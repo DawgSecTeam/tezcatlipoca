@@ -309,6 +309,23 @@ def test_clef_client_cools_down_after_repeated_failures():
     assert calls["n"] == 2
 
 
+def test_the_clef_body_names_the_model_for_a_routing_gateway():
+    """The club gateway routes on `model`; llama.cpp ignores the field."""
+    from tlaloc.decide import ClefClient
+    seen = {}
+
+    def poster(url, body, timeout):
+        seen.update(body)
+        return {"answers": {}}
+
+    cfg = {"clef": {"enabled": True, "base_url": "https://litellm.dawgsec.com",
+                    "max_request_tokens": 4096}}
+    client = ClefClient(cfg, poster=poster)
+    client.ask({"v": 1}, {"q": {"type": "noul", "instructions": "?"}})
+    assert seen["model"] == "clef-flash"
+    assert seen["questions"] == {"q": {"type": "noul", "instructions": "?"}}
+
+
 def _wide_board(ctx, n=6, reason_pad=0):
     # 12 boxes with footholds + one eviction candidate per box
     for team_octet in (1, 2):
