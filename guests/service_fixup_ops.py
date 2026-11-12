@@ -82,7 +82,7 @@ def _dovecot_fixup(creds):
     lines = [
         "# Dovecot: enable plaintext auth, create mail dirs",
         "sudo sed -i 's/^#*disable_plaintext_auth.*/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true",
-        "dovecot --version 2>/dev/null | grep -qE '^(2\\.[4-9]|[3-9]\\.)' && "
+        "sudo dovecot --version 2>/dev/null | grep -qE '^(2\\.[4-9]|[3-9]\\.)' && "
         "sudo bash -c \"echo 'auth_allow_cleartext = yes' > "
         "/etc/dovecot/conf.d/99-allow-plaintext.conf\" || true",
     ]

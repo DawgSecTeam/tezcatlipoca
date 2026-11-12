@@ -195,14 +195,19 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
 
     def _probe(t):
         ip = t["ip"]
-        # One channel for every platform: sshd via the engine gateway. Windows boxes
-        # reach the same contract because their boot channel provisions sshd (gcp:
-        # the startup-script; proxmox: bootstrap_windows_box via the QEMU agent).
-        # The diagnosis channel is still node-scoped: the guest agent answers per host.
+        # The guest agent is the channel a Windows box's readiness can be probed on: its
+        # sshd does not accept the deploy key, so an SSH probe records a degradation for a
+        # box that is up and plantable (live 2026-11-12, sliver-practice-4box: both Windows
+        # boxes "not reachable" while their agent, RDP/FTP pins and red channels were fine).
         node = t.get("node") or default_node
+        windows = (is_windows_template(t["box"]["template"])
+                   and (ctx or {}).get("platform") != "gcp")
         while time.time() < deadline:
             try:
-                ok = ssh_via_gateway(ctx, ip, "true", timeout=20, user=ctx.get("box_username", "ubuntu")).returncode == 0
+                if windows:
+                    ok = wait_for_guest_agent(node, t["vmid"], timeout=20)
+                else:
+                    ok = ssh_via_gateway(ctx, ip, "true", timeout=20, user=ctx.get("box_username", "ubuntu")).returncode == 0
                 if ok:
                     with PRINT_LOCK:
                         print(f"    {ip} reachable")
