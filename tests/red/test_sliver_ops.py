@@ -27,6 +27,9 @@ def test_the_install_pins_the_release_and_runs_the_daemon_on_red01():
     assert "sliver-server_linux-amd64" in script
     assert "--lhost 10.0.0.198 --lport 31337" in script
     assert "systemctl restart sliver.service" in script
+    # the Go/garble assets must exist before the first Generate, or a fresh
+    # daemon rejects windows/amd64 as an "invalid compiler target"
+    assert "unpack --force" in script
 
 
 def test_the_transport_map_is_every_v1_7_transport_and_keeps_dns_separate():

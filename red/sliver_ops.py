@@ -157,6 +157,7 @@ def install_script(box_ip, specs=()):
         ports.append(spec["port"])
         extras += (f"mkdir -p {spec['home']}\n"
                    f"chmod 700 {spec['home']}\n"
+                   f"HOME={spec['home']} {SERVER_BIN} unpack --force >/dev/null\n"
                    f"cat > /etc/systemd/system/{spec['unit']} <<'EOF'\n"
                    f"{_build_unit(box_ip, spec)}EOF\n")
     wait = "".join(
@@ -173,6 +174,10 @@ if [ ! -x {SERVER_BIN} ]; then
   chmod 755 {SERVER_BIN}.tmp
   mv {SERVER_BIN}.tmp {SERVER_BIN}
 fi
+# Unpack the Go/garble assets before the first Generate: a fresh daemon that
+# answers the port but has not unpacked yet rejects windows/amd64 as an
+# "invalid compiler target" (live 2026-11-12, parallel prep).
+{SERVER_BIN} unpack --force >/dev/null
 cat > /etc/systemd/system/sliver.service <<'EOF'
 [Unit]
 Description=Sliver C2 server
@@ -205,6 +210,7 @@ def build_servers_script(box_ip, specs):
     ports = [spec["port"] for spec in specs]
     writes = "".join(
         f"mkdir -p {spec['home']}\nchmod 700 {spec['home']}\n"
+        f"HOME={spec['home']} {SERVER_BIN} unpack --force >/dev/null\n"
         f"cat > /etc/systemd/system/{spec['unit']} <<'EOF'\n"
         f"{_build_unit(box_ip, spec)}EOF\n" for spec in specs)
     wait = "".join(
