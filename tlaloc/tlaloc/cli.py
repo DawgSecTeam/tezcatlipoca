@@ -266,7 +266,7 @@ def cmd_c2_prep(args):
     engine = str(cfg["c2"].get("engine") or "sliver").lower()
     out_dir = comp_dir / "red" / "payloads"
     out_dir.mkdir(parents=True, exist_ok=True)
-    transports = _transports_arg(args.transports)
+    transports = _transports_arg(args.transports, engine)
     manifest = {"comp": cfg["run"].get("comp"),
                 "operation": cfg["c2"].get("operation") or "sliver",
                 "engine": engine, "dns_domain": cfg["c2"].get("dns_domain"),
@@ -292,15 +292,20 @@ def cmd_c2_prep(args):
     return 0
 
 
-def _transports_arg(raw):
+def _transports_arg(raw, engine="sliver"):
+    # The two engines' transport vocabularies differ (Mythic has webhook, Sliver has
+    # mtls/dns/wg/...); validating a Mythic prep against Sliver's list rejected the
+    # engine's own default "http,webhook" before it could build anything.
     from .c2 import TRANSPORTS
+    from .c2.mythic import DEFAULT_TRANSPORTS as MYTHIC_TRANSPORTS
+    allowed = MYTHIC_TRANSPORTS if engine == "mythic" else TRANSPORTS
     names = [name.strip() for name in str(raw or "all").split(",") if name.strip()]
     if not names or names == ["all"]:
-        return list(TRANSPORTS)
-    unknown = [name for name in names if name not in TRANSPORTS]
+        return list(allowed)
+    unknown = [name for name in names if name not in allowed]
     if unknown:
-        raise ConfigError(f"unknown Sliver transport(s) {unknown}; "
-                          f"choose from {list(TRANSPORTS)}")
+        raise ConfigError(f"unknown {engine} transport(s) {unknown}; "
+                          f"choose from {list(allowed)}")
     return names
 
 

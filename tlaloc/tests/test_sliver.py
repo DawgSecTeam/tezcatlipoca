@@ -159,3 +159,15 @@ def test_the_payload_matrix_covers_every_transport_and_builds_beacons(tmp_path):
         assert (Path(tmp_path) / entry["file"]).exists()
         assert "data" not in entry
     json.dumps(manifest)
+
+
+def test_mythic_transports_are_validated_against_mythics_list():
+    """The Mythic prep command defaults to `http,webhook`; validating that against
+    Sliver's TRANSPORTS rejected the engine's own default before it could build."""
+    import pytest
+    from tlaloc import cli
+    from tlaloc.errors import ConfigError
+    assert cli._transports_arg("http,webhook", "mythic") == ["http", "webhook"]
+    assert cli._transports_arg("all", "mythic") == ["http", "webhook"]
+    with pytest.raises(ConfigError):
+        cli._transports_arg("http,webhook", "sliver")
