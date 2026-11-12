@@ -34,6 +34,10 @@ permanent checklist item.
   on thin pools. Only ZFS, LVM-thin, Ceph, qcow2-on-file snapshot.
 - **Tear bridges down with `ifdown`, never `ip link del`.** If API network changes fail on a
   missing `vmbrNNN/brif/`, clear `/run/network/ifstatenew` and `ifreload -a`.
+- **`sshpass` on the host that runs the driver**: blue's `mybox` dials Windows boxes with
+  `sshpass -p "$BOX_PW" ssh …`, and teardown's trail wipe uses it too. Missing, every Windows-box
+  action fails `exec: sshpass: not found` inside a cycle that still exits 0 — blue looks present
+  while it cannot touch half the range. `apt install sshpass` (verify with `sshpass -V`).
 - **Commit deploy-path code before `--freeze`**: it refuses uncommitted deploy-path source
   (extensions per `engine/template_freeze.py`; run state like the state document or `.env` backups
   is ignored). `--unfreeze --confirm-unfreeze` is the only way back, so freeze last.
