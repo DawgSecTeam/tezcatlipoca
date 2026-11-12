@@ -155,6 +155,14 @@ class ConfigAndCommandTests(unittest.TestCase):
             cfg = to.tlaloc_config(comp)
         self.assertEqual(cfg["run"]["comp"], "demo")
 
+    def test_the_rendered_config_carries_the_selected_c2_engine(self):
+        # Without this key tlaloc defaults to sliver, so a Mythic comp's c2-prep validates
+        # its http,webhook list against Sliver's transports (and red01 builds the wrong client).
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = compfile(tmp, "red.c2_engine mythic\n")
+            cfg = to.tlaloc_config(comp, c2_engine="mythic")
+        self.assertEqual(cfg["c2"]["engine"], "mythic")
+
     def test_the_seed_and_run_are_given_the_intel_comp_dir(self):
         seed, run, report = (to.seed_command(), to.plant_command(), to.report_command())
         for cmd in (seed, run, report):

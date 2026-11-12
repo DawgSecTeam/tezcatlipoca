@@ -154,7 +154,7 @@ def validate_red_block(block):
 
 def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
                   red_ip=None, quotient_url=None, clef_url=None, c2_url=None,
-                  c2_operation=None, c2=None, llm=None):
+                  c2_operation=None, c2=None, c2_engine=None, llm=None):
     """The body of /etc/tlaloc/config.yaml — a diff against tlaloc's DEFAULTS."""
     block = block if block is not None else red_block(comp_dir)
     comp_dir = Path(comp_dir).resolve()
@@ -187,6 +187,11 @@ def tlaloc_config(comp_dir, block=None, *, comp_id=None, engine_ip=None,
                                          "operation": c2_operation or cfg["run"]["comp"]})
     if c2:
         cfg.setdefault("c2", {}).update(c2)
+    # The comp's red.c2_engine never reached the rendered config, so tlaloc fell back to
+    # its sliver default: a Mythic comp's c2-prep then validated http,webhook against
+    # Sliver's transports, and red01 would have built a Sliver client for a Mythic range.
+    if c2_engine:
+        cfg.setdefault("c2", {})["engine"] = c2_engine
     # red.c2_implant_spread full: every implant surface on every box, not the per-plant draw.
     spread = str(block.get("c2_implant_spread") or "").strip()
     if spread:
@@ -582,6 +587,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                  clef_url=clef_url,
                  c2_url=block.get("c2_url") if use_mythic else None,
                  c2_operation=block.get("c2_operation"),
+                 c2_engine=engine,
                  llm=llm)
     print("  red01      : provisioning (clone + network + engine rules)...")
     import providers
