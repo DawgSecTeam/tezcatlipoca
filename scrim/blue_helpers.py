@@ -5,7 +5,9 @@ from scrim import core
 def mybox_script(comp):
     boxes = core.read_comp_json(comp, "boxes.json")
     proxy = f'"ProxyCommand=ssh -i $KEY_PATH {core.SSH_OPTS} -W %h:%p $VM_USER@$ENGINE_IP"'
-    lines = ["#!/usr/bin/env bash", "set -euo pipefail", 'cd "$(dirname "$0")"',
+    lines = ["#!/usr/bin/env bash", "set -euo pipefail",
+             'export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"',
+             'cd "$(dirname "$0")"',
              f'BOX=${{1:?box: {"|".join(b["name"] for b in boxes)}}}; shift',
              "source ./scrim.env", 'case "$BOX" in']
     for b in boxes:
@@ -180,7 +182,9 @@ def scorch_script(comp):
                 ssh_specs.append(f"{box}|{ip}|{port}")
             else:
                 port_specs.append(f"{box}|{ip}|{port}")
-    lines = ["#!/usr/bin/env bash", "set -uo pipefail", 'cd "$(dirname "$0")"',
+    lines = ["#!/usr/bin/env bash", "set -uo pipefail",
+             'export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"',
+             'cd "$(dirname "$0")"',
              "source ./scrim.env",
              'ENGINE_RUN="ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no '
              '-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 "$VM_USER@$ENGINE_IP""',
