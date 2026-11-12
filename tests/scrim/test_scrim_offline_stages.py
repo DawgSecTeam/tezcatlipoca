@@ -245,6 +245,7 @@ class StageManifest(Base):
                 mock.patch.object(staging, "stage_deploy", noop), \
                 mock.patch.object(staging, "creds_from_files", return_value=dict(CREDS)), \
                 mock.patch.object(fire_test, "stage_verify", noop), \
+                mock.patch.object(blue_agent, "preflight_blue_models", noop), \
                 mock.patch.object(blue_agent, "stage_blues", noop), \
                 mock.patch.object(red_stage, "stage_red", on_red or noop), \
                 mock.patch.object(red_link, "start_red_director", noop), \

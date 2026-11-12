@@ -59,6 +59,42 @@ def credlist_literal(box_creds):
     return "(" + " ".join(shlex.quote(f"{u}:{pw}") for u, pw in box_creds.items()) + ")"
 
 
+def assert_model_served(base_url, model):
+    """Refuse a model id the endpoint does not advertise.
+
+    A backend name sent to the gateway (`k2-horizon-7b` vs the group `k2`) staged fine and
+    then every blue cycle died rc=1 `Invalid model name` — an empty room discovered after T0.
+    A transient read failure only warns: the cycles will surface it.
+    """
+    import json
+    import urllib.request
+    request = urllib.request.Request(f"{base_url.rstrip('/')}/models",
+                                     headers={"User-Agent": "tezcatlipoca-scrim/1.0"})
+    key = endpoints.api_key(base_url)   # raises when a PUBLIC entry's key is missing
+    if key and key != "local":
+        request.add_header("Authorization", f"Bearer {key}")
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            ids = {m.get("id") for m in (json.load(response).get("data") or [])}
+    except (OSError, ValueError) as exc:
+        log(f"WARNING: could not read {base_url}/models ({exc}) — model id unchecked")
+        return
+    if ids and model not in ids:
+        raise SystemExit(
+            f"blue model {model!r} is not served by {base_url} (served: {', '.join(sorted(ids))}) "
+            "— pass the endpoint's own model id (a gateway groups models under its own names)")
+
+
+def preflight_blue_models(args):
+    """Refuse a model id the endpoint does not serve, before any blue workdir exists."""
+    seen = set()
+    for n in range(1, args.teams + 1):
+        base_url, blue_model = endpoints.blue_ep(args, n)
+        if base_url not in seen:
+            assert_model_served(base_url, blue_model)
+            seen.add(base_url)
+
+
 def stage_blues(args, comp, run_dir, creds, t0):
     log(f"blue endpoint: {llm_endpoints.describe(args.blue_base_url)}")
     endpoints.api_key(args.blue_base_url)     # public entries raise when their key is missing

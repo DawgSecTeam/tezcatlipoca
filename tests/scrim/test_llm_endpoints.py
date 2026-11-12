@@ -8,6 +8,7 @@ required exactly HTTP 200 from an unauthenticated probe (401 on a keyed API) so 
 pre-T0. These tests pin the table's classification instead.
 """
 
+import json
 import os
 import tempfile
 import unittest
@@ -16,7 +17,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from net import jump_rules
-from scrim import blue_helpers, core, endpoints, llm_endpoints, red_link, red_stage, red_tunnel
+from scrim import blue_agent, blue_helpers, core, endpoints, llm_endpoints, red_link, red_stage, red_tunnel
 
 DEEPSEEK = "https://api.deepseek.com/v1"
 LLAMA = "http://203.0.113.30:8080/v1"
@@ -190,6 +191,39 @@ class BlueNarrative(unittest.TestCase):
             args = SimpleNamespace(run_dir=str(run_dir), teams=1, test_dir=str(run_dir))
             blue_agent.finalize_blue_narratives(args)
             self.assertEqual((wd / "REPORT.md").read_text(), real)
+
+
+class BlueModelPreflight(unittest.TestCase):
+    """The gateway's own ids are not the backends' names: a mismatch is an empty room at T0."""
+
+    class _Response:
+        def __init__(self, ids):
+            self._body = json.dumps({"data": [{"id": i} for i in ids]}).encode()
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def test_a_served_model_passes(self):
+        with mock.patch.dict(os.environ, {"TEZ_TEST_OFFLINE": "",
+                                          "TEZ_LITELLM_API_KEY": "sk-gw"}):
+            with mock.patch("urllib.request.urlopen",
+                            return_value=self._Response(["k2", "clef-flash"])):
+                blue_agent.assert_model_served(LITELLM, "k2")
+
+    def test_a_backend_name_is_refused_before_the_event(self):
+        with mock.patch.dict(os.environ, {"TEZ_TEST_OFFLINE": "",
+                                          "TEZ_LITELLM_API_KEY": "sk-gw"}):
+            with mock.patch("urllib.request.urlopen", return_value=self._Response(["k2"])):
+                with self.assertRaises(SystemExit) as ctx:
+                    blue_agent.assert_model_served(LITELLM, "k2-horizon-7b")
+        self.assertIn("k2-horizon-7b", str(ctx.exception))
+        self.assertIn("k2", str(ctx.exception))
 
 
 if __name__ == "__main__":

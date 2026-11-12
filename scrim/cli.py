@@ -204,6 +204,7 @@ def main():
     run_manifest.record_phase(run_dir, args, "verify")
     fire_test.stage_verify(args, comp, creds)
     run_manifest.record_phase(run_dir, args, "blues")
+    blue_agent.preflight_blue_models(args)
     blue_agent.stage_blues(args, comp, run_dir, creds, time.time())
 
     red_setup_started = time.time()

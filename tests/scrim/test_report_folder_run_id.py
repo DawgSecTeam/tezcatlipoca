@@ -72,6 +72,7 @@ def test_the_cli_follows_the_folder_the_deploy_renamed(tmp_path, monkeypatch):
                                    "VM_USER": "u"})
     monkeypatch.setattr(staging, "warn_co_tenancy", lambda *a: None)
     monkeypatch.setattr(fire_test, "stage_verify", lambda *a: None)
+    monkeypatch.setattr(blue_agent, "preflight_blue_models", lambda *a: None)
     monkeypatch.setattr(blue_agent, "stage_blues", lambda *a: None)
     monkeypatch.setattr(red_stage, "stage_red", lambda *a: None)
     monkeypatch.setattr(red_link, "start_red_director", lambda *a: None)
