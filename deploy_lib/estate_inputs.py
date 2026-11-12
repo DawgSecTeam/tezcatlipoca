@@ -48,7 +48,7 @@ def build_estate_inputs(ctx, comp_dir):
     else:
         endpoint, node, datastore = (cfg.proxmox.endpoint.rstrip("/"),
                                       cfg.proxmox.node, cfg.proxmox.datastore)
-    document.section("identity").update({
+    identity = {
         "comp_name": ctx.comp_name,
         "name": ctx.name,
         "run_id": ctx.run_id,
@@ -58,6 +58,12 @@ def build_estate_inputs(ctx, comp_dir):
         "endpoint": endpoint,
         "node": node,
         "datastore": datastore,
-    })
+    }
+    document.section("identity").update(identity)
+    # persist_state() absorbs ctx.state with replace=True: a key absent here is DELETED
+    # from the identity on the next phase save. The minted ctx.state predates this
+    # function, so without this sync the engine address (and host) vanished from the
+    # document mid-deploy and a later resume fell back to the default address.
+    ctx.state.update(identity)
     document.section("roster")["boxes"] = ctx.boxes
     document.save()

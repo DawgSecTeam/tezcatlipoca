@@ -250,6 +250,27 @@ class EngineMgmtIpAutoSelection(unittest.TestCase):
         self.assertEqual(ip, "10.0.0.243")
         select.assert_not_called()
 
+    def test_the_engine_identity_survives_a_later_phase_save(self):
+        # persist_state absorbs ctx.state with replace=True. build_estate_inputs wrote the
+        # document but not ctx.state, so the next phase save deleted engine_mgmt_ip (and
+        # endpoint/node/datastore) from the identity — the 2026-11-12 run's state had only
+        # comp_name/run_id/scoring_vm_id/platform left.
+        from deploy_lib.context import persist_state
+        with tempfile.TemporaryDirectory() as d:
+            comp_dir = Path(d)
+            ctx = _ctx(comp_dir=comp_dir, engine_vmid=1234,
+                       placement=self._placement())
+            config.reset()
+            self.addCleanup(config.reset)
+            ctx.engine_mgmt_ip = "10.0.0.243"
+            with patch.dict(os.environ, self.ENV, clear=True):
+                dl_estate_inputs.build_estate_inputs(ctx, comp_dir)
+                persist_state(ctx)
+                flat = estate_state.load_flat(comp_dir)
+        self.assertEqual(flat["engine_mgmt_ip"], "10.0.0.243")
+        self.assertTrue(flat["endpoint"].startswith("https://new"))
+        self.assertEqual(flat["node"], "pve")
+
 
 class GoldenGatePosition(unittest.TestCase):
 # The frozen gate must fire after the hashes, before any Proxmox mutation.
