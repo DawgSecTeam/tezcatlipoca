@@ -161,6 +161,25 @@ def test_the_payload_matrix_covers_every_transport_and_builds_beacons(tmp_path):
     json.dumps(manifest)
 
 
+def test_parallel_prep_splits_jobs_across_build_servers(tmp_path):
+    from tlaloc import cli
+    boxes = [
+        {"box": "web01", "identifier": "150", "ip": "192.168.150.4",
+         "windows": False},
+        {"box": "win02", "identifier": "150", "ip": "192.168.150.3",
+         "windows": True},
+    ]
+    main, extra = FakePrepClient(), FakePrepClient()
+    ctx = SimpleNamespace(intel=SimpleNamespace(boxes=lambda: boxes),
+                          c2_builders=[main, extra])
+    manifest = {"boxes": {}}
+    cli._prep_sliver(ctx, main, Path(tmp_path), manifest, ["mtls"])
+    # 2 boxes x (session + beacon), split round-robin across the two servers
+    assert len(manifest["boxes"]) == 4
+    assert main.builds and extra.builds
+    assert all(build[1] == "mtls" for build in main.builds + extra.builds)
+
+
 def test_mythic_transports_are_validated_against_mythics_list():
     """The Mythic prep command defaults to `http,webhook`; validating that against
     Sliver's TRANSPORTS rejected the engine's own default before it could build."""

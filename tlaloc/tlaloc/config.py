@@ -93,6 +93,9 @@ DEFAULTS = {
         # Per-transport gateway/server port overrides, e.g.
         # {mtls: {gateway: 8888, server: 8888}}. Empty uses the deploy defaults.
         "transports": {},
+        # Build-only Sliver servers for parallel c2-prep ({port, operator_config,
+        # base_url}); the main server keeps the listeners and the seed.
+        "build_servers": [],
         "username": "tlaloc",
         "password_env": "TLALOC_MYTHIC_PASSWORD",
         "operation": "",

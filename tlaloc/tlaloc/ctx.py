@@ -21,6 +21,7 @@ class Ctx:
     gate: Any                    # exec.gate.Gate
     ssh: Any                     # exec.ssh.SSH
     c2: Any = None               # c2.mythic.Mythic | None
+    c2_builders: Any = None      # extra Sliver build-only clients (parallel c2-prep)
     sensors: Any = None          # sensors.Sensors | None
     policy: Any = None           # policy.Policy | None (ROE bounds this cycle)
     decider: Any = None          # decide.Decider | None (classification helpers)

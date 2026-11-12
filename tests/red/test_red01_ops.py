@@ -217,7 +217,7 @@ class Deploy(unittest.TestCase):
                 return ""
 
             with mock.patch.object(r, "_live", return_value={"vmid": 1777}), \
-                    mock.patch.object(r, "_config"), \
+                    mock.patch.object(r, "_config") as config_put, \
                     mock.patch.object(r, "start_vm"), \
                     mock.patch.object(r, "wait_for_guest_agent", return_value=True) as wait, \
                     mock.patch.object(r, "_exec", side_effect=fake_exec), \
@@ -228,6 +228,11 @@ class Deploy(unittest.TestCase):
         self.assertEqual(identity["vmid"], 1777)
         self.assertEqual(len(waits), 2)
         self.assertEqual(wait.call_count, 2)
+        # red01 is raised on THIS clone; the shared base template is not touched.
+        pushed = config_put.call_args.args[2]
+        self.assertEqual(pushed["cores"], r.RED01_CORES)
+        self.assertEqual(pushed["memory"], r.RED01_MEMORY_MB)
+        self.assertEqual(pushed["balloon"], 0)
 
 
 class Destroy(unittest.TestCase):

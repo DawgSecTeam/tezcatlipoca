@@ -63,6 +63,31 @@ def test_the_c2_block_carries_ports_and_the_profile_path_never_a_secret():
     assert "password" not in repr(block) and "token" not in repr(block)
 
 
+def test_build_servers_are_separate_ports_homes_and_profiles():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = comp(tmp, "red.c2_build_servers 2\n")
+        assert s.build_server_count(path) == 2
+        specs = s.build_server_specs(path)
+    assert [spec["port"] for spec in specs] == [31338, 31339]
+    assert len({spec["home"] for spec in specs}) == 2
+    assert len({spec["operator_config"] for spec in specs}) == 2
+    block = s.sliver_c2_block("/tmp", server="10.0.0.198", operation="demo",
+                              domain="c2.demo.range", ports=s.transport_ports(),
+                              build_servers=s.build_servers_block("10.0.0.198", specs))
+    assert [b["port"] for b in block["build_servers"]] == [31338, 31339]
+    assert block["build_servers"][0]["base_url"] == "https://10.0.0.198:31338"
+
+
+def test_build_server_count_defaults_to_one_and_caps_at_the_limit():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = comp(tmp)
+        assert s.build_server_count(path) == s.DEFAULT_BUILD_SERVERS
+        (path / "Compfile").write_text("name demo\nred.c2_build_servers 99\n")
+        assert s.build_server_count(path) == s.MAX_BUILD_SERVERS
+        (path / "Compfile").write_text("name demo\nred.c2_build_servers 0\n")
+        assert s.build_server_count(path) == 0
+
+
 def test_prepare_runs_install_operator_and_returns_the_block():
     calls = []
 

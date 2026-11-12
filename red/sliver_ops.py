@@ -18,6 +18,12 @@ INSTALL_DIR = "/opt/sliver"
 SERVER_BIN = f"{INSTALL_DIR}/sliver-server"
 OPERATOR_CONFIG = "/etc/tlaloc/sliver.cfg"
 DAEMON_PORT = 31337
+# Sliver's Go importer is not re-entrant across concurrent Generate calls on one
+# server, so parallel payload compilation uses additional build-only servers,
+# each with its own HOME (separate .sliver data/source tree) and gRPC port.
+BUILD_DAEMON_PORT_BASE = 31338
+MAX_BUILD_SERVERS = 3
+DEFAULT_BUILD_SERVERS = 1
 # v1.7.8 has no QUIC transport; these are all of them.
 TRANSPORTS = ("mtls", "http", "https", "dns", "wg", "named-pipe", "tcp-pivot")
 # gateway port -> server port. DNS is the odd one: the implant resolver is
@@ -69,12 +75,63 @@ def c2_plan(comp_dir, *, red_ip=None, comp_id=None):
             "ports": ports, "daemon_port": DAEMON_PORT}
 
 
+def build_server_count(comp_dir):
+    """Extra build-only Sliver servers beside the main C2 server.
+
+    The main server owns the listeners and callbacks; these only run Generate, so
+    each gets its own HOME/port and never binds the transport ports."""
+    raw = compfile_value(Path(comp_dir) / "Compfile", "red.c2_build_servers", "")
+    try:
+        count = int(str(raw).strip()) if str(raw).strip() else DEFAULT_BUILD_SERVERS
+    except ValueError:
+        count = DEFAULT_BUILD_SERVERS
+    return max(0, min(MAX_BUILD_SERVERS, count))
+
+
+def build_server_specs(comp_dir, box_ip=None):
+    return [{"index": i,
+             "port": BUILD_DAEMON_PORT_BASE + i,
+             "home": f"/root/.sliver-build-{i + 1}",
+             "operator_config": f"/etc/tlaloc/sliver-build-{i + 1}.cfg",
+             "unit": f"sliver-build-{i + 1}.service"}
+            for i in range(build_server_count(comp_dir))]
+
+
+def build_servers_block(box_ip, specs):
+    return [{"port": spec["port"],
+             "operator_config": spec["operator_config"],
+             "base_url": f"https://{box_ip}:{spec['port']}"}
+            for spec in specs]
+
+
+def _build_unit(box_ip, spec):
+    return f"""[Unit]
+Description=Sliver C2 build server {spec['index'] + 1}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HOME={spec['home']}
+WorkingDirectory=/opt/sliver
+ExecStart=/opt/sliver/sliver-server daemon --lhost {box_ip} --lport {spec['port']}
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
 def sliver_c2_block(comp_dir, *, server, operation, domain, ports,
-                    spread=None, callback_wait=None):
+                    spread=None, callback_wait=None, build_servers=None):
     block = {"engine": "sliver", "enabled": True, "operation": operation,
              "base_url": f"https://{server}:{DAEMON_PORT}",
              "operator_config": OPERATOR_CONFIG, "dns_domain": domain,
              "transports": ports}
+    if build_servers:
+        block["build_servers"] = list(build_servers)
     if spread:
         block["implant_spread"] = spread
     if callback_wait:
@@ -91,8 +148,21 @@ def _run(ssh_key, box_ip, script, *, runner=None, timeout=SHORT_TIMEOUT):
     return runner(argv, timeout=timeout)
 
 
-def install_script(box_ip):
+def install_script(box_ip, specs=()):
     url = f"{SLIVER_REPO}/releases/download/{SLIVER_VERSION}/{SERVER_NAME}"
+    units, ports = ["sliver.service"], [DAEMON_PORT]
+    extras = ""
+    for spec in specs:
+        units.append(spec["unit"])
+        ports.append(spec["port"])
+        extras += (f"mkdir -p {spec['home']}\n"
+                   f"chmod 700 {spec['home']}\n"
+                   f"cat > /etc/systemd/system/{spec['unit']} <<'EOF'\n"
+                   f"{_build_unit(box_ip, spec)}EOF\n")
+    wait = "".join(
+        f"for _ in $(seq 1 300); do ss -ltn | grep -q ':{port} ' && break; sleep 2; done\n"
+        f"ss -ltn | grep -q ':{port} ' || {{ journalctl -u {unit} -n 30 --no-pager >&2 || true; exit 1; }}\n"
+        for unit, port in zip(units, ports))
     return f"""set -e
 mkdir -p {INSTALL_DIR} /etc/tlaloc
 # Build scratch from a killed c2-prep survives and makes the next Generate fail
@@ -120,25 +190,58 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl daemon-reload
-systemctl enable sliver.service
-systemctl restart sliver.service
-for _ in $(seq 1 300); do
-  if ss -ltn | grep -q ':{DAEMON_PORT} '; then exit 0; fi
-  sleep 2
-done
-journalctl -u sliver.service -n 30 --no-pager >&2 || true
-exit 1
+{extras}systemctl daemon-reload
+systemctl enable {" ".join(units)}
+systemctl restart {" ".join(units)}
+{wait}exit 0
 """
 
 
-def operator_script(box_ip):
+def build_servers_script(box_ip, specs):
+    """Start build-only servers beside an already-running main daemon."""
+    if not specs:
+        return "true"
+    units = [spec["unit"] for spec in specs]
+    ports = [spec["port"] for spec in specs]
+    writes = "".join(
+        f"mkdir -p {spec['home']}\nchmod 700 {spec['home']}\n"
+        f"cat > /etc/systemd/system/{spec['unit']} <<'EOF'\n"
+        f"{_build_unit(box_ip, spec)}EOF\n" for spec in specs)
+    wait = "".join(
+        f"for _ in $(seq 1 300); do ss -ltn | grep -q ':{port} ' && break; sleep 2; done\n"
+        f"ss -ltn | grep -q ':{port} ' || {{ journalctl -u {unit} -n 30 --no-pager >&2 || true; exit 1; }}\n"
+        for unit, port in zip(units, ports))
+    return (f"set -e\n{writes}systemctl daemon-reload\n"
+            f"systemctl enable --now {' '.join(units)}\n{wait}exit 0\n")
+
+
+def operator_script(box_ip, specs=()):
+    extra = ""
+    for spec in specs:
+        extra += (f"rm -f {spec['operator_config']}\n"
+                  f"HOME={spec['home']} {SERVER_BIN} operator "
+                  f"--name tlaloc-build-{spec['index'] + 1} --lhost {box_ip} "
+                  f"--lport {spec['port']} --permissions all "
+                  f"--save {spec['operator_config']} >/dev/null\n"
+                  f"chmod 600 {spec['operator_config']}\n"
+                  f"test -s {spec['operator_config']}\n")
     return f"""set -e
 rm -f {OPERATOR_CONFIG}
 {SERVER_BIN} operator --name tlaloc --lhost {box_ip} --lport {DAEMON_PORT} \
   --permissions all --save {OPERATOR_CONFIG} >/dev/null
 chmod 600 {OPERATOR_CONFIG}
 test -s {OPERATOR_CONFIG}
+{extra}"""
+
+
+def build_operator_script(box_ip, spec):
+    return f"""set -e
+rm -f {spec['operator_config']}
+HOME={spec['home']} {SERVER_BIN} operator --name tlaloc-build-{spec['index'] + 1} \
+  --lhost {box_ip} --lport {spec['port']} --permissions all \
+  --save {spec['operator_config']} >/dev/null
+chmod 600 {spec['operator_config']}
+test -s {spec['operator_config']}
 """
 
 
@@ -147,10 +250,12 @@ def prepare_sliver(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
     comp_dir = Path(comp_dir)
     runner = runner or _default_runner
     plan = plan or c2_plan(comp_dir, red_ip=box_ip)
+    specs = build_server_specs(comp_dir, box_ip)
     result = {"ok": False, "box": str(box_ip), "engine": "sliver",
               "version": SLIVER_VERSION, "reached": [], "degradations": [],
               "c2": None, "environment": {"sshd": True, "sliver": False},
               "server": SERVER_BIN, "operator_config": OPERATOR_CONFIG,
+              "build_servers": build_servers_block(box_ip, specs),
               "ports": plan["ports"], "domain": plan["domain"]}
     if not box_ip:
         result["degradations"].append("no C2 box: red.c2_ip unset and red01 unknown")
@@ -160,11 +265,21 @@ def prepare_sliver(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
         running = sliver_running(ssh_key, box_ip, runner=runner)
         if running:
             # A scrim's stage_red calls phase 7 again on a live range: restarting
-            # the daemon would kill every checked-in implant.
+            # the daemon would kill every checked-in implant. Build-only servers
+            # carry no implants, so they may be (re)started beside it.
             result["reached"].append("install (already running)")
             result["install_output"] = "skipped: daemon answers on 31337"
+            if specs:
+                proc = _run(ssh_key, box_ip, build_servers_script(box_ip, specs),
+                            runner=runner, timeout=INSTALL_TIMEOUT)
+                result["reached"].append("build servers")
+                result["build_servers_output"] = _tail(proc, 800)
+                if getattr(proc, "returncode", 1) != 0:
+                    result["degradations"].append(
+                        f"sliver build servers: {_tail(proc)}")
+                    return result
         else:
-            proc = _run(ssh_key, box_ip, install_script(box_ip), runner=runner,
+            proc = _run(ssh_key, box_ip, install_script(box_ip, specs), runner=runner,
                         timeout=INSTALL_TIMEOUT)
             result["reached"].append("install")
             result["install_output"] = _tail(proc, 1200)
@@ -172,12 +287,24 @@ def prepare_sliver(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
                 result["degradations"].append(f"sliver server install: {_tail(proc)}")
                 return result
 
-        if running and _remote_ok(ssh_key, box_ip, f"test -s {OPERATOR_CONFIG}",
-                                  runner=runner):
+        main_present = _remote_ok(ssh_key, box_ip, f"test -s {OPERATOR_CONFIG}",
+                                  runner=runner)
+        if running and main_present:
             result["reached"].append("operator (present)")
             result["operator_output"] = "skipped: operator profile exists"
+            for spec in specs:
+                if _remote_ok(ssh_key, box_ip,
+                              f"test -s {spec['operator_config']}", runner=runner):
+                    continue
+                proc = _run(ssh_key, box_ip, build_operator_script(box_ip, spec),
+                            runner=runner, timeout=SHORT_TIMEOUT)
+                result["reached"].append(f"build operator {spec['index'] + 1}")
+                if getattr(proc, "returncode", 1) != 0:
+                    result["degradations"].append(
+                        f"sliver build operator {spec['index'] + 1}: {_tail(proc)}")
+                    return result
         else:
-            proc = _run(ssh_key, box_ip, operator_script(box_ip), runner=runner,
+            proc = _run(ssh_key, box_ip, operator_script(box_ip, specs), runner=runner,
                         timeout=SHORT_TIMEOUT)
             result["reached"].append("operator")
             result["operator_output"] = _tail(proc, 600)
@@ -191,13 +318,15 @@ def prepare_sliver(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
                                    operation=plan["operation"],
                                    domain=plan["domain"], ports=plan["ports"],
                                    spread=str(spread).strip() or None,
-                                   callback_wait=str(wait).strip() or None)
+                                   callback_wait=str(wait).strip() or None,
+                                   build_servers=result["build_servers"])
     result["environment"] = {"sshd": True, "sliver": True}
     result["ok"] = not result["degradations"]
     if log:
         log(f"  sliver      : {'ok' if result['ok'] else 'DEGRADED'} on {box_ip} "
             f"— reached {', '.join(result['reached']) or 'nothing'}, "
-            f"transport ports {', '.join(str(p['gateway']) for p in plan['ports'].values())}")
+            f"transport ports {', '.join(str(p['gateway']) for p in plan['ports'].values())}, "
+            f"build servers {len(specs)}")
     return result
 
 

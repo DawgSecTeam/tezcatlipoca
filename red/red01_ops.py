@@ -17,6 +17,11 @@ from infra.ownership import clone_marker, destroy_vm_if_exists
 RED_USER = "sysadmin"
 NAME = "tlaloc-red01"
 DEFAULT_TEMPLATE = "base-ubuntu24.04-fix"
+# The C2 payload matrix compiles on red01. The base template is 2 vCPU / 4 GB and
+# is shared with other clones, so raise the resources on THIS clone only, after
+# the clone and before the guest starts (never on the template).
+RED01_CORES = 4
+RED01_MEMORY_MB = 8192
 # python3-paramiko is tlaloc's SSH transport; without it every box action fails
 # and the day-0 seed plants nothing while exiting 0. grpcio/protobuf are the
 # Sliver operator client (the generated stubs are sent with the package).
@@ -283,6 +288,7 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     else:
         print(f"  red01      : adopting vmid {vmid} (this run's) for reconfigure")
     data = {"name": NAME, "onboot": 1, "agent": 1,
+            "cores": RED01_CORES, "memory": RED01_MEMORY_MB, "balloon": 0,
             "net0": f"virtio,bridge={_mgmt_bridge(placement)}",
             "ipconfig0": f"ip={ip}/24,gw={gw}",
             "ciuser": RED_USER, "sshkeys": quote_sshkeys(pub_key),

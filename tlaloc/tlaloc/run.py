@@ -482,9 +482,9 @@ def build_context(cfg, *, comp_dir=None, dry_run=None, clef=None, llm=None, c2=N
     transport = ssh or SSH(cfg, state_dir)
 
     c2_client = c2
+    engine = str(cfg["c2"].get("engine") or "sliver").lower()
     if c2_client is None and cfg["c2"].get("enabled"):
         dry = dry_run if dry_run is not None else cfg["run"]["dry_run"]
-        engine = str(cfg["c2"].get("engine") or "sliver").lower()
         if dry:
             c2_client = FakeSliver() if engine == "sliver" else FakeMythic()
         else:
@@ -498,6 +498,17 @@ def build_context(cfg, *, comp_dir=None, dry_run=None, clef=None, llm=None, c2=N
               ssh=transport, c2=c2_client, sensors=sensors_client,
               dry_run=bool(cfg["run"]["dry_run"] if dry_run is None else dry_run),
               comp=cfg["run"].get("comp") or "", rng=rng or random.Random())
+    # Parallel c2-prep: the main client keeps the listeners/seed; each extra
+    # client talks to its own build-only Sliver server (separate HOME/port).
+    ctx.c2_builders = [c2_client] if c2_client is not None else []
+    if c2_client is not None and c2 is None and engine == "sliver":
+        for spec in cfg["c2"].get("build_servers") or []:
+            sub = dict(cfg)
+            sub["c2"] = dict(cfg["c2"])
+            sub["c2"]["operator_config"] = (spec.get("operator_config")
+                                            or sub["c2"]["operator_config"])
+            sub["c2"]["base_url"] = spec.get("base_url") or sub["c2"].get("base_url")
+            ctx.c2_builders.append(SliverClient(sub, log=log))
     policy = Policy(cfg, world, intel, sensors=sensors_client, rng=ctx.rng)
     ctx.policy = policy
     decider = decider or decide_mod.Decider(cfg, world, log, clef=clef,

@@ -16,6 +16,7 @@ from .errors import ConfigError, TlalocError
 # dead on the VM while local tests stay green. The engine and tests/test_config_contract.py key off this list.
 CONFIG_CONTRACT = (
     "c2.base_url",
+    "c2.build_servers",
     "c2.callback_host",
     "c2.callback_wait_sec",
     "c2.callback_max_age_sec",
@@ -329,8 +330,8 @@ def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
             if transport in beacons:
                 jobs.append({**jobs[-1], "beacon": True})
 
-    def _build(job):
-        entry = client.build_payload(
+    def _build(job, builder):
+        entry = builder.build_payload(
             job["box_id"], job["os"], transport=job["transport"],
             gateway=job["gateway"], pivot_host=job["pivot_host"],
             beacon=job["beacon"])
@@ -343,10 +344,20 @@ def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
                           and job["transport"] not in PIVOT_TRANSPORTS)
         return entry
 
-    # Sliver's Go importer is not re-entrant across concurrent Generate calls
-    # (two Windows builds collided on src/runc/cgroup), so the matrix is serial.
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        built = list(pool.map(_build, jobs))
+    def _run_builder(builder, jobs):
+        return [_build(job, builder) for job in jobs]
+
+    # One server cannot run concurrent Generate calls (Sliver's Go importer is
+    # not re-entrant), so each build-only server gets its own thread and the
+    # jobs are split across them; each thread stays serial for its server.
+    builders = [b for b in (getattr(ctx, "c2_builders", None) or [client])
+                if b is not None]
+    chunks = [[] for _ in builders]
+    for index, job in enumerate(jobs):
+        chunks[index % len(builders)].append(job)
+    with ThreadPoolExecutor(max_workers=len(builders)) as pool:
+        built = [entry for chunk in pool.map(_run_builder, builders, chunks)
+                 for entry in chunk]
     for entry in built:
         data = entry.pop("data")
         if write:
