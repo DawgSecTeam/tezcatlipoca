@@ -64,13 +64,13 @@ def main():
     # the 600 s knob cuts every cycle before it can log, restore or submit. Per-run override.
     p.add_argument("--cycle-timeout", dest="cycle_timeout", type=int, default=None,
                    help="seconds per blue cycle (default: knobs.cycle_timeout, 600)")
-    p.add_argument("--blue-model", default="openai/gpt-5.6-luna", help="cheap cloud model for blue agents")
-    p.add_argument("--red-model", default="openai/gpt-5.6-luna", help="cheap cloud model for red")
+    p.add_argument("--blue-model", default="k2", help="gateway model for blue agents")
+    p.add_argument("--red-model", default="k2", help="gateway model for red")
     p.add_argument("--reasoning-effort", default="",
                    help="reasoning effort sent to the LLM (GPT-5.x/o-series only — "
                         "the local qwen endpoints 500 on it); pass e.g. 'minimal' "
                         "for cloud reasoning models")
-    p.add_argument("--llm-base-url", default="https://openrouter.ai/api/v1")
+    p.add_argument("--llm-base-url", default="https://litellm.dawgsec.com/v1")
     p.add_argument("--blue-base-url", default=None,
                    help="LLM base URL for blues only (defaults to --llm-base-url); "
                         "e.g. the local qwen endpoint http://100.64.0.9:8080/v1")

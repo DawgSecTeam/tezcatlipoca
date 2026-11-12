@@ -21,6 +21,7 @@ from scrim import blue_helpers, core, endpoints, llm_endpoints, red_link, red_st
 DEEPSEEK = "https://api.deepseek.com/v1"
 LLAMA = "http://203.0.113.30:8080/v1"
 OPENROUTER = "https://openrouter.ai/api/v1"
+LITELLM = "https://litellm.dawgsec.com/v1"
 
 
 class Classification(unittest.TestCase):
@@ -29,6 +30,12 @@ class Classification(unittest.TestCase):
         self.assertTrue(llm_endpoints.is_public(DEEPSEEK))
         self.assertFalse(core.is_local_endpoint(DEEPSEEK))
 
+
+    def test_the_club_gateway_is_public_and_keyed(self):
+        self.assertTrue(llm_endpoints.is_public(LITELLM))
+        self.assertFalse(core.is_local_endpoint(LITELLM))
+        self.assertEqual(llm_endpoints.provider_name(LITELLM), "litellm")
+        self.assertEqual(llm_endpoints.key_env(LITELLM), "TEZ_LITELLM_API_KEY")
 
 
     def test_a_local_llama_url_stays_operator_side(self):
@@ -43,6 +50,14 @@ class ApiKey(unittest.TestCase):
     def test_public_endpoint_reads_its_own_env_var(self):
         with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-test"}, clear=False):
             self.assertEqual(endpoints.api_key(DEEPSEEK), "sk-test")
+
+    def test_the_gateway_reads_its_key_and_refuses_without_it(self):
+        with mock.patch.dict(os.environ, {"TEZ_LITELLM_API_KEY": "sk-gw"}, clear=True):
+            self.assertEqual(endpoints.api_key(LITELLM), "sk-gw")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                endpoints.api_key(LITELLM)
+        self.assertIn("TEZ_LITELLM_API_KEY", str(ctx.exception))
 
     def test_public_endpoint_without_a_key_raises_instead_of_inventing_one(self):
         env = {k: v for k, v in os.environ.items() if k != "DEEPSEEK_API_KEY"}

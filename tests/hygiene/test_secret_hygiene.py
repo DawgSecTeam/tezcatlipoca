@@ -45,6 +45,9 @@ INTERNAL_ENV = {
     # range over /api/ranges/retire.
     # Operator-side scrim LLM gateway key; blue's opencode needs it as its provider key.
     "TEZ_SCRIM_API_KEY": "scrim/endpoints.py operator-side LLM gateway key",
+    # The club gateway's own key (scrim/llm_endpoints.py names it on the litellm entry; the key
+    # itself is only ever in the service env, never in the tree).
+    "TEZ_LITELLM_API_KEY": "scrim/llm_endpoints.py litellm entry key",
     "TEZ_DASHBOARD_HOST": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire call",
     "TEZ_DASHBOARD_PORT": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire call",
     "TEZ_DASHBOARD_TOKENS": "tezcatlipoca-dashboard -> teardown/orphan_ops.py retire bearer",

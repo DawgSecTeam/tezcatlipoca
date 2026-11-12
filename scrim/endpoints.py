@@ -15,9 +15,9 @@ def api_key(base_url=None, local=None):
     """The API key for an endpoint — resolved from the table, never invented.
 
     A base_url naming a PUBLIC table entry MUST have its key in the environment: a missing
-    `DEEPSEEK_API_KEY` raises here instead of degrading to the literal "local" (which reached
-    blue as a 401 on every cycle, and red as a bogus bearer token — an "empty room" that looked
-    like a working defense).
+    `TEZ_LITELLM_API_KEY` (the club gateway) or `DEEPSEEK_API_KEY` raises here instead of
+    degrading to the literal "local" (which reached blue as a 401 on every cycle, and red as a
+    bogus bearer token — an "empty room" that looked like a working defense).
 
     No base_url, or a host that is not in the table (operator-side llama.cpp / a tailnet LLM
     host), uses `TEZ_SCRIM_API_KEY`, then `OPENROUTER_API_KEY`, then the literal "local" (a
