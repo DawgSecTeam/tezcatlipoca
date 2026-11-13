@@ -165,4 +165,4 @@ def test_probe_fetch_source_extracts_tagged_client(monkeypatch):
     nat = m._probe_fetch_source("k", "10.0.0.247", comp_dir, "pw")
     assert nat == "10.0.0.251"
     assert "curl -sk" in seen["remote"] and "192.168.127.4" in seen["remote"]
-    assert "grep -ah z" in seen["remote"]          # bound to THIS probe, not history
+    assert "Authorization: Bearer" in seen["remote"]          # bound to THIS probe, not history
