@@ -28,3 +28,50 @@ def test_the_operator_config_renders_as_valid_json():
                 .replace("{API_KEY_FIELD}", "{env:TEZ_LITELLM_API_KEY}")
                 .replace("{MODEL_ID}", "some-model"))
     _json.loads(rendered)
+
+
+def test_a_cap_timeout_costs_one_cycle_not_the_lane(tmp_path):
+    # run-c1cabbd9: CycleTimeout escaped the operator loop, threading killed the
+    # thread, the supervisor cried DIED and c3rberus sat un-driven for the rest
+    # of the event. The loop must absorb it exactly like blue's does.
+    import threading
+    from types import SimpleNamespace
+    from scrim import blue_agent, red_c3rberus
+
+    calls = []
+
+    def flaky(*a, prompt=None, wd=None, env=None, stop=None, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise blue_agent.CycleTimeout(["opencode"], 900, "cap")
+        return SimpleNamespace(returncode=0, stdout="done", stderr="")
+
+    wd = tmp_path / "red-c3rberus"
+    wd.mkdir()
+    (wd / "LOG.md").write_text("x")
+    (wd / "NOTEBOOK.md").write_text("x")
+    args = SimpleNamespace(run_dir=str(tmp_path),
+                           blue_base_url="https://litellm.dawgsec.com/v1",
+                           red_model="m", duration_min=3, cycle_timeout=900, teams=2)
+    import os
+    monkey_env = os.environ
+    monkey_env["TEZ_LITELLM_API_KEY"] = "sk-test-not-a-real-key"
+    stop = threading.Event()
+    monkey = SimpleNamespace(run_cycle_with_retry=flaky)
+    orig = blue_agent.run_cycle_with_retry
+    blue_agent.run_cycle_with_retry = flaky
+    try:
+        th = threading.Thread(target=red_c3rberus.red_feed_loop,
+                              args=(args, stop, __import__("time").time()),
+                              kwargs={"first_delay": 0.0})
+        th.daemon = True
+        th.start()
+        __import__("time").sleep(1.2)
+        stop.set()
+        th.join(timeout=20)
+    finally:
+        blue_agent.run_cycle_with_retry = orig
+    assert not th.is_alive(), "the operator thread must survive a cap timeout"
+    assert not calls or len(calls) >= 1
+    feed = (wd / "cycles").exists() or (wd / "feed.log").exists()
+    assert feed

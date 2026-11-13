@@ -9,6 +9,7 @@ red01 ONLY through the platform's HTTP API: the same surface a real operator has
 
 import json
 import re
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -185,13 +186,25 @@ def red_feed_loop(args, stop, t0, first_delay=240.0):
         cycles = wd / "cycles"
         cycles.mkdir(exist_ok=True)
         (cycles / f"cycle-T+{elapsed:03d}.prompt.txt").write_text(prompt)
-        r = blue_agent.run_cycle_with_retry(args, prompt, wd, env, lock, stop,
-                                            team="c3r", ep=(base_url, args.red_model))
-        out = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or ""))
-        (cycles / f"cycle-T+{elapsed:03d}.output.log").write_text(out[-8000:])
-        with (wd / "feed.log").open("a") as f:
-            f.write(f"\n===== cycle T+{elapsed} rc={r.returncode} =====\n{out[-2000:]}\n")
-        log(f"red-c3rberus cycle T+{elapsed} rc={r.returncode}")
+        try:
+            r = blue_agent.run_cycle_with_retry(args, prompt, wd, env, lock, stop,
+                                                team="c3r", ep=(base_url, args.red_model))
+            out = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or ""))
+            (cycles / f"cycle-T+{elapsed:03d}.output.log").write_text(out[-8000:])
+            with (wd / "feed.log").open("a") as f:
+                f.write(f"\n===== cycle T+{elapsed} rc={r.returncode} =====\n{out[-2000:]}\n")
+            log(f"red-c3rberus cycle T+{elapsed} rc={r.returncode}")
+        except subprocess.TimeoutExpired as exc:
+            # a cap timeout must cost one cycle, not the lane (run-c1cabbd9:
+            # CycleTimeout escaped here, thread 'red-operator' died at T+92 and
+            # the platform sat un-driven to the bell; blue learned this lesson
+            # the same way and hardened its loop — the fix never propagated)
+            blue_agent.write_cycle_timeout(wd, elapsed,
+                                           window=getattr(exc, "reason", "") == "window")
+            log(f"red-c3rberus cycle T+{elapsed} TIMED OUT"
+                f"{' at the event window' if getattr(exc, 'reason', '') == 'window' else ' at the cycle cap'}")
+        except Exception as e:                                   # noqa: BLE001
+            log(f"red-c3rberus feed error: {e}")                  # never fatal
         took = time.time() - started
         # slower than blue's 8-min heartbeat: the platform's own 5-min scheduler covers
         # dwell, and an operator cycle is a handful of API calls, not box-by-box triage
