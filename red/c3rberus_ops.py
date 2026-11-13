@@ -248,7 +248,10 @@ def _wait_task(ssh_key, red_ip, token, task_id, *, runner=None, timeout_s=2400):
     while time.time() < deadline:
         doc = _api(ssh_key, red_ip, token, "GET", f"/c2/tasks/{task_id}", runner=runner,
                    timeout=30)
-        if doc.get("status") in ("completed", "success", "failed", "cancelled", "error"):
+        # the platform's own vocabulary (task_tracker.py: pending -> running ->
+        # done/failed/cancelled) — "completed" was a guess that stalled a finished
+        # preflight for its whole 2400s budget (live run-54d28d56, 2026-11-13)
+        if doc.get("status") in ("done", "failed", "cancelled", "completed", "error"):
             return doc.get("status")
         time.sleep(15)
     return "timeout"
