@@ -87,3 +87,27 @@ def test_transport_map_extension_survives_the_firewall_normalizer():
         None, c3rberus_ops.extend_transport_map(tlaloc_map))
     assert [s["name"] for s in specs] == ["mtls", "c3rberus-mtls", "c3rberus-stage"]
     assert all(isinstance(s["server"], int) for s in specs)
+
+
+def test_provision_unix_scoring_sudos_the_root_only_commands(monkeypatch):
+    # the platform creator assumes root-password ssh; on goldens that refuse it its
+    # unsudo'd chpasswd no-ops with rc 0 — the engine helper must carry sudo AND
+    # force uid 0 on pre-existing accounts (run-1b76723f: "4 ok, 4 failed")
+    import red.c3rberus_ops as m
+    calls = []
+
+    def fake_ssh(key, ip, remote, **kw):
+        calls.append(remote)
+
+        class R:
+            stdout = "[+] blueteam:n0t_sus1  Linux - Shell access!"
+            stderr = ""
+        return R()
+    monkeypatch.setattr(m, "_ssh", fake_ssh)
+    inv = {"teams": [{"boxes": [
+        {"ip": "192.168.127.2", "os": "windows", "username": ".\\Administrator"},
+        {"ip": "192.168.127.4", "os": "linux", "username": "blueteam"}]}]}
+    m._provision_unix_scoring("k", "10.0.0.247", inv, "n0t_sus1", "SCORpw")
+    assert len(calls) == 1
+    assert "sudo -n bash -c" in calls[0] and "usermod -o -u 0" in calls[0]
+    assert "chpasswd" in calls[0] and "SCORpw" in calls[0]
