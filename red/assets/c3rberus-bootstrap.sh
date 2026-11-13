@@ -34,6 +34,11 @@ for i in 1 2 3; do apt-get update -q && break; sleep 20; done
 for i in 1 2 3; do apt-get install -y -q git openssl python3 python3-pip python3-venv \
   python3-yaml python3-bcrypt rust-openssl jq curl ca-certificates nmap ncat netcat-openbsd \
   mingw-w64 clang lld psmisc gcc make g++ pkg-config libssl-dev libffi-dev && break; sleep 20; done
+# loud, not cascading: a first-boot dpkg lock (cloud-init) once left python3-venv unpicked
+# up; every later step then "succeeded" into a pip-less venv and the backend died on
+# 203/EXEC (live run-c7f1dde4, 2026-11-13).
+command -v pip3 >/dev/null 2>&1 || { echo "ERROR: python3-pip did not install"; exit 1; }
+python3 -c "import ensurepip" >/dev/null 2>&1 || { echo "ERROR: python3-venv did not install"; exit 1; }
 
 echo "== netexec (pip wheel; the apt line in the repo's setup.sh is Kali-only)"
 if ! command -v nxc >/dev/null 2>&1; then
@@ -72,9 +77,12 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
   -keyout certs/key.pem -out certs/cert.pem -subj "/CN=red01.tez.internal" >/dev/null 2>&1
 
 echo "== venv + requirements (pypi via the flaky uplink, retried)"
-[ -d venv ] || python3 -m venv venv
+# test the tool, not the directory: a half-built venv from a run where python3-venv
+# hadn't landed yet holds no bin/pip, and a `[ -d venv ]` guard treats it as done —
+# uvicorn then never installs and systemd dies on 203/EXEC (run-c7f1dde4).
+if [ ! -x venv/bin/pip ]; then rm -rf venv; python3 -m venv venv || exit 1; fi
 retry 5 venv/bin/pip install -q -r requirements.txt \
-  || echo "WARNING: some python deps did not land — backend health will tell"
+  || { echo "ERROR: requirements did not install (uvicorn absent = no backend)"; exit 1; }
 
 echo "== c3rberus sliver daemon (own instance: 127.0.0.1:31338, own state dir —
 tlaloc's sliver.service owns :31337 and /opt/sliver beside us)"
@@ -125,5 +133,6 @@ User=root
 [Install]
 WantedBy=multi-user.target
 U
-systemctl daemon-reload && systemctl enable --now c3rberus-backend
+systemctl daemon-reload && systemctl reset-failed c3rberus-backend.service 2>/dev/null
+systemctl enable --now c3rberus-backend
 echo "== bootstrap done"
