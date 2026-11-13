@@ -10,7 +10,6 @@ API from red01 itself. Lifecycle + design notes: docs/internals.md § c3rberus.
 
 import json
 import secrets
-import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -147,6 +146,20 @@ def render_inventory(comp_dir, box_pw, *, red_ip):
         pass
     prefix = str(_compfile(comp_dir).get("domain_prefix", "team"))
     suffix = str(_compfile(comp_dir).get("domain_suffix", ".local"))
+    # The packet OWNS the scoring identity: box_baseline.json planted a red_scoring
+    # (out of scope, do not touch) with its own per-box password on EVERY box. The
+    # platform's Box model carries exactly this as scoring_password (checked before
+    # the .env fallback) — without it the creator verifies against a password nobody
+    # can set on Linux (root-parity login refused, root-password ssh refused) and
+    # every Linux deploy/check dies LOGON_FAILURE (runs 1b76723f/21514aa0, 2026-11-13).
+    pkt_pw = {}
+    try:
+        for b, pins in json.loads((Path(comp_dir) / "box_baseline.json").read_text()).items():
+            for pin in pins:
+                if pin.get("vars", {}).get("USERNAME") == "red_scoring":
+                    pkt_pw[b] = pin["vars"]["PASSWORD"]
+    except (OSError, ValueError, KeyError, AttributeError):
+        pass
     out = {"c2_settings": {"script_server_url": f"https://{red_ip}:4000",
                            "sliver_host": red_ip, "c2_ip": red_ip},
            "scoring_account": {"username": "red_scoring", "domain": "", "enabled": True},
@@ -163,6 +176,8 @@ def render_inventory(comp_dir, box_pw, *, red_ip):
             entry = {"name": f"{box['name']}-{tid}", "ip": f"192.168.{tid}.{box['last_octet']}",
                      "os": kind, "username": box_user if kind == "linux" else ".\\Administrator",
                      "password": box_pw, "port": 22 if kind == "linux" else 5985}
+            if box["name"] in pkt_pw:
+                entry["scoring_password"] = pkt_pw[box["name"]]
             if kind == "windows":
                 entry["connection"] = "winrm"
                 entry["domain"] = domain
@@ -258,30 +273,6 @@ def _wait_task(ssh_key, red_ip, token, task_id, *, runner=None, timeout_s=2400):
     return "timeout"
 
 
-def _provision_unix_scoring(ssh_key, red_ip, inv_doc, box_pw, scoring_pw, *, runner=None):
-    """The platform's create_red_scoring runs its useradd/chpasswd UNSUDO, assuming
-    root-password ssh (Kali estates); these goldens refuse root login, so the account
-    is stood up here as uid-0 (the platform's check scripts require root parity)
-    through blueteam's NOPASSWD sudo. The creator's id-check then short-circuits and
-    only its auth verify remains — which this satisfies (runs 1b76723f, 2026-11-13)."""
-    script = ("useradd -o -u 0 -g 0 -M -d /root -s /bin/bash red_scoring 2>/dev/null || "
-              "usermod -o -u 0 -g 0 -s /bin/bash red_scoring; "
-              "printf 'red_scoring:%s\\n' | chpasswd" % scoring_pw)
-    for team in inv_doc["teams"]:
-        for box in team["boxes"]:
-            if box["os"] != "linux":
-                continue
-            r = _ssh(ssh_key, red_ip,
-                     f"nxc ssh {box['ip']} -u {box['username']} "
-                     f"-p {shlex.quote(box_pw)} -x "
-                     f"{shlex.quote('sudo -n bash -c ' + shlex.quote(script))}",
-                     runner=runner, timeout=120, check=False)
-            out = (r.stdout or "") + (r.stderr or "")
-            if "[+]" not in out:
-                raise RuntimeError(f"scoring identity not stood up on {box['ip']}: "
-                                   f"{out.strip()[-200:]}")
-
-
 def cred_preflight(ssh_key, red_ip, token, team_nums, *, runner=None):
     """Platform-side gate on its own scoring identity: pass | auth-fail |
     insufficient-perms | unreachable | absent, per box — an auth-fail list is the
@@ -369,15 +360,6 @@ def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
         raise RuntimeError(f"c3rberus's inventory shows {sorted(missing)} missing — the "
                            "rendered inventory does not match the range")
     team_nums = list(range(1, len(_teams(comp_dir)) + 1))
-    # Linux first: the platform's create_red_scoring runs its root-only useradd/chpasswd
-    # UNSUDO over the box user (blueteam), so on these goldens — which refuse root
-    # password ssh — the Linux branch silently no-ops (nxc rc 0) and only its auth
-    # verify sees the stale account (run-1b76723f: "4 ok, 4 failed"). Stand the
-    # uid-0 identity up here so the creator's verify passes and its Windows path runs.
-    import yaml
-    _provision_unix_scoring(ssh_key, red_ip, yaml.safe_load(
-        render_inventory(comp_dir, box_pw, red_ip=red_ip)), box_pw, scoring_pw,
-        runner=runner)
     # The platform's own pre-competition provisioning step: create the red_scoring
     # account that EVERY IOC deploy authenticates with (the script and the deploy
     # side resolve the password identically: seeded value in .env). The engine

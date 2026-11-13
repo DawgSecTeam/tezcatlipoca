@@ -89,25 +89,20 @@ def test_transport_map_extension_survives_the_firewall_normalizer():
     assert all(isinstance(s["server"], int) for s in specs)
 
 
-def test_provision_unix_scoring_sudos_the_root_only_commands(monkeypatch):
-    # the platform creator assumes root-password ssh; on goldens that refuse it its
-    # unsudo'd chpasswd no-ops with rc 0 — the engine helper must carry sudo AND
-    # force uid 0 on pre-existing accounts (run-1b76723f: "4 ok, 4 failed")
-    import red.c3rberus_ops as m
-    calls = []
-
-    def fake_ssh(key, ip, remote, **kw):
-        calls.append(remote)
-
-        class R:
-            stdout = "[+] blueteam:n0t_sus1  Linux - Shell access!"
-            stderr = ""
-        return R()
-    monkeypatch.setattr(m, "_ssh", fake_ssh)
-    inv = {"teams": [{"boxes": [
-        {"ip": "192.168.127.2", "os": "windows", "username": ".\\Administrator"},
-        {"ip": "192.168.127.4", "os": "linux", "username": "blueteam"}]}]}
-    m._provision_unix_scoring("k", "10.0.0.247", inv, "n0t_sus1", "SCORpw")
-    assert len(calls) == 1
-    assert "sudo -n bash -c" in calls[0] and "usermod -o -u 0" in calls[0]
-    assert "chpasswd" in calls[0] and "SCORpw" in calls[0]
+def test_render_inventory_carries_packet_scoring_passwords(tmp_path):
+    # the packet owns red_scoring with its own per-box password (box_baseline.json,
+    # "out of scope, do not touch"); the platform checks scoring_password before its
+    # .env fallback — without the pin the creator verifies against a password that
+    # no channel can set on Linux (runs 1b76723f/21514aa0, 2026-11-13)
+    import yaml
+    c = comp(tmp_path, [125])
+    (c / "box_baseline.json").write_text(json.dumps({
+        "web01": [{"name": "local-user", "vars": {"USERNAME": "red_scoring",
+                                                  "PASSWORD": "pktW3b"}}],
+        "ad01": [{"name": "local-user-win", "vars": {"USERNAME": "red_scoring",
+                                                     "PASSWORD": "pktWad"}}]}))
+    doc = yaml.safe_load(c3rberus_ops.render_inventory(c, "SECRETpw", red_ip="10.0.0.247"))
+    by = {b["name"].rsplit("-", 1)[0]: b for b in doc["teams"][0]["boxes"]}
+    assert by["web01"]["scoring_password"] == "pktW3b"
+    assert by["ad01"]["scoring_password"] == "pktWad"
+    assert "scoring_password" not in by["db01"]        # unpinned box: env fallback
