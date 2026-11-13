@@ -217,12 +217,15 @@ def render_env(comp_dir, box_pw, *, red_ip, scoring_pw):
         # limit+20, so a bigger limit leaves free threads for release paths;
         # real exec concurrency stays capped by PER_BOX=10 x 8 boxes either way.
         "NXC_MAX_CONCURRENT=140",
+        # per-box 3 (template tail) makes box slots < putfile(1)+exec demand —
+        # stage-1 holders convoy behind slow execs; 12 > 1+10.
+        "NXC_MAX_CONCURRENT_PER_BOX=12",
         "SLIVER_CFG_PATH=./sliver_operator.cfg",
         "RED_SCORING_ENABLED=true", "RED_SCORING_USERNAME=red_scoring",
         "RED_SCORING_DOMAIN=", f"RED_SCORING_PASSWORD={scoring_pw}",
         "DEFAULT_WINDOWS_USERNAME=.\\Administrator", f"DEFAULT_WINDOWS_PASSWORD={box_pw}",
         "DEFAULT_LINUX_USERNAME=blueteam", f"DEFAULT_LINUX_PASSWORD={box_pw}",
-        "NXC_MAX_CONCURRENT=20", "NXC_MAX_CONCURRENT_PER_BOX=3", "NXC_TIMEOUT=180",
+        "NXC_TIMEOUT=180",
         "CRED_REVALIDATION_INTERVAL_MINUTES=30",
         # keep the event pristine until the harness flips the first two at T0: boot
         # loops otherwise touch every box the moment the backend comes up.
@@ -231,7 +234,14 @@ def render_env(comp_dir, box_pw, *, red_ip, scoring_pw):
         "DISPLAY_TIMEZONE=America/New_York", "LOG_LEVEL=INFO",
         "SLACK_ENABLED=false", "TEAMS_WEBHOOK_ENABLED=false",
     ]
-    return "\n".join(lines) + "\n"
+    # last-wins dedup: dotenv reads the LAST value of a duplicate key, so an
+    # override appended after the template's own line is silently shadowed
+    # (that is how NXC_MAX_CONCURRENT=140 became a dead knob under 8e22's
+    # convoy). Collapse by key, keeping our latest intent.
+    seen = {}
+    for ln in lines:
+        seen[ln.split("=", 1)[0]] = ln
+    return "\n".join(seen[k] for k in seen) + "\n"
 
 
 # ---------------------------------------------------------------- install + plant

@@ -76,6 +76,14 @@ def test_render_env(tmp_path):
     assert kv["NMAP_HEALTH_ENABLED"] == "false"
     assert kv["DEV_MODE"] == "False"
     assert kv["MTLS_LISTENER_PORT"] == "38888"      # offset from tlaloc's 8888
+    # dotenv reads the LAST value of a duplicate key, so the kv dict above hides
+    # dups — run-8e22's convoy proved a silent NXC_MAX_CONCURRENT=140-shadowed-
+    # by-20 can ship green. Assert the RAW file: every key exactly once, and the
+    # convoy math (pool = limit+20 threads; per-box must exceed putfile 1 + exec).
+    keys = [l.split("=", 1)[0] for l in env.strip().splitlines() if "=" in l]
+    assert len(keys) == len(set(keys)), [k for k in set(keys) if keys.count(k) > 1]
+    assert kv["NXC_MAX_CONCURRENT"] == "140"
+    assert int(kv["NXC_MAX_CONCURRENT_PER_BOX"]) >= 12
 
 
 def test_transport_map_extension_survives_the_firewall_normalizer():
