@@ -92,6 +92,15 @@ if [ ! -x venv/bin/pip ]; then rm -rf venv; python3 -m venv venv || exit 1; fi
 retry 5 venv/bin/pip install -q -r requirements.txt \
   || { echo "ERROR: requirements did not install (uvicorn absent = no backend)"; exit 1; }
 
+echo "== payload prerequisites (linux_self_inject IOCs cannot build without
+stage0_linux.bin — build_all only WARNINGs and marks its task failed, so the hole
+would sail through planting silently, run-702607be 2026-11-13)"
+if [ ! -f iocs/payloads/stage0_linux.bin ]; then
+  scripts/build/build_stage0_linux.sh >/dev/null 2>&1
+  [ -f iocs/payloads/stage0_linux.bin ] \
+    || { echo "ERROR: stage0_linux.bin not built (stage0 builder [SKIP]ped a missing tool?)"; exit 1; }
+fi
+
 echo "== c3rberus sliver daemon (own instance: 127.0.0.1:31338, own state dir —
 tlaloc's sliver.service owns :31337 and /opt/sliver beside us)"
 cat >/etc/systemd/system/c3rberus-sliver.service <<U
