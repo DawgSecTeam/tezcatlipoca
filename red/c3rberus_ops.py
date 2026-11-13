@@ -298,8 +298,10 @@ def _provision_linux_scoring(ssh_key, red_ip, inv_doc, box_pw, scoring_pw, *, ru
         "usermod -s /bin/bash red_scoring 2>/dev/null; "
         "printf 'red_scoring:%s\\n' | chpasswd; "
         "echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/99-tez-scoring.conf; "
-        "systemctl reload ssh 2>/dev/null || systemctl reload sshd; sleep 2; id -u red_scoring"
+        "systemctl reload ssh 2>/dev/null || systemctl reload sshd; sleep 2; "
+        "[ \"$(id -u red_scoring)\" = 0 ] && echo TEZPROVOK"
         % scoring_pw)
+    import re as _re
     for team in inv_doc["teams"]:
         for box in team["boxes"]:
             if box["os"] != "linux":
@@ -307,12 +309,16 @@ def _provision_linux_scoring(ssh_key, red_ip, inv_doc, box_pw, scoring_pw, *, ru
             r = _ssh(ssh_key, red_ip,
                      f"nxc ssh {box['ip']} -u {box['username']} "
                      f"-p {shlex.quote(box_pw)} -x "
-                     f"{shlex.quote('sudo -n bash -c ' + shlex.quote(script))} "
-                     "| tail -1", runner=runner, timeout=120, check=False)
+                     f"{shlex.quote('sudo -n bash -c ' + shlex.quote(script))}",
+                     runner=runner, timeout=120, check=False)
             out = (r.stdout or "") + (r.stderr or "")
-            if not out.strip().endswith("0"):
+            # success = the sentinel echoed only when uid==0 — nxc colorizes and
+            # prefixes lines, so parsing its formatted tail fooled endswith("0") on a
+            # PROVISIONED box (trailing ANSI reset, run-f206355b).
+            clean = _re.sub(r"\x1b\[[0-9;]*m", "", out)
+            if "TEZPROVOK" not in clean:
                 raise RuntimeError(f"linux scoring provisioning failed on {box['ip']}: "
-                                   f"{out.strip()[-160:]}")
+                                   f"{clean.strip()[-160:]}")
 
 
 def cred_preflight(ssh_key, red_ip, token, team_nums, *, runner=None):

@@ -116,7 +116,7 @@ def test_provision_linux_scoring_lands_root_and_rejects_failure(monkeypatch):
         calls.append(remote)
 
         class R:
-            stdout = "... 0"
+            stdout = "\x1b[0mSSH  ip 22 ip    TEZPROVOK\x1b[0m\r\n"
             stderr = ""
         return R()
     monkeypatch.setattr(m, "_ssh", fake_ssh)
@@ -127,10 +127,11 @@ def test_provision_linux_scoring_lands_root_and_rejects_failure(monkeypatch):
     assert len(calls) == 1
     assert "red_scoring:x:0:0::/root:/bin/bash" in calls[0]
     assert "PermitRootLogin yes" in calls[0] and "SCORpw" in calls[0]
+    assert "| tail" not in calls[0]                    # judge nxc's rc, not a pipe
 
     def bad_ssh(key, ip, remote, **kw):
         class R:
-            stdout = "usermod: used by process 1"
+            stdout = "usermod: used by process 1"  # no sentinel
             stderr = ""
         return R()
     monkeypatch.setattr(m, "_ssh", bad_ssh)
