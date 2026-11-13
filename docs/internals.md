@@ -463,6 +463,63 @@ the deploy contract is `tlaloc/docs/deploy.md`.
   (the originals are 0600 root), pulls `journalctl -u tlaloc`, and collects them into the run's
   evidence before the teardown's red step.
 
+## red/c3rberus.py — the CDE red platform beside tlaloc
+
+Compfile `c3rberus 1` runs the estate's real CDE scoring platform (repo
+`hnasher1/c3rberus`) on the same red01 tlaloc lives on. The model is one red team, two
+systems: tlaloc keeps the autonomous campaign (C2, takedowns, restore detection, its
+verdict), c3rberus adds the CDE-native layer — the IOC catalog planted as an additional
+day-0 presence, NetExec check/remediation scoring on its 5-minute scheduler, and its own
+scoreboard. `red.engine` stays decorative; this is an additive switch, and every hook is
+gated on `c3rberus_ops.selected()`.
+
+- **Install** (`red/assets/c3rberus-bootstrap.sh`, pushed + run by `install()`): the repo
+  ships `scripts/setup.sh`, which is Kali-shaped (apt `netexec`/`sliver` lines that do not
+  exist on noble, committed certs/operator cfg/env secrets). The bootstrap installs
+  NetExec from source, Sliver from the release tarball (with a `/usr/local/bin` install +
+  a hand-written `sliver.service` — the installer creates neither, but `sliver_manager`
+  expects both), deletes every committed secret and mints fresh certs, keys, and JWT
+  secrets. Idempotent by construction: re-stage adopts (git dir, venv, operator cfg each
+  guarded), so phase 7 → scrim `stage_red` re-runs cost seconds, not the half-hour install.
+- **Config is rendered, never copied**: `render_inventory()` writes the platform's
+  `config/inventory.yml` from teams.json/boxes.json/users.json/domain_roles.json — with
+  **explicit `os:` per box from the template**, because IOC applicability is exact string
+  equality against `ioc.os` and the platform's name heuristics misread this estate
+  (`mail01` → windows). In-path firewalls are excluded from the inventory entirely: here
+  they are infrastructure, not targets. `render_env()` writes the `.env`: fresh
+  `JWT_SECRET_KEY`/HMAC/encryption salt, `C2_IP` pinned to red01's LAN address (unset it
+  derives from the default route — wrong on a multihomed clone), the scoring account, and
+  the four box-touching loops (`SA_COLLECTION`, `NMAP_HEALTH`, `CRED_REVALIDATION`,
+  `PIVOT_KEEPALIVE`) OFF — boot otherwise sweeps every box the moment the backend starts.
+- **API**: bearer-JWT only (`POST /login` → `{"token",...}`, HS256, no expiry, no CSRF —
+  curl from red01 against itself; no browser on the range). The engine drives
+  `scoring-cred-preflight`, `build-all-iocs`/`deploy-all-iocs` (polling the returned
+  `/c2/tasks/{id}`), `PATCH /admin/settings`, `start_comp`/`stop_comp`. The published
+  `admin` seed password is rotated on first boot; the rotation and the scoring password
+  live only in `<comp>/red/c3rberus-seed.json` (0600 workspace file, never the repo).
+- **Lifecycle mapping**: deploy phase 7 → install + plant (allowed pre-competition; the
+  day-0 catalog lands BEFORE the tz-ready snapshot, so blue restores onto it and the
+  platform's checks score exactly that remediation). Scrim fire-test stop / T0 start
+  mirror tlaloc: `stop_red_director` also `stop_comp`s, `start_red_director` flips the
+  settings loops on and `start_comp`s — that call is c3rberus's T0 (scheduler fires its
+  first cycle immediately). Teardown's `pull_red_state` harvests `stop_comp` + the DB
+  snapshot (folded with `.backup`, never a raw cp off the WAL) + logs + inventory into
+  `evidence/red/c3rberus/` and writes `c3rberus-verdict.json` beside tlaloc's — the
+  verdicts are deliberately NOT merged; the report shows both realities.
+- **The operator agent** (`scrim/red_c3rberus.py`): when the platform is selected, the
+  scrim also runs an opencode agent on the driver host — red's human-shaped player. It
+  stages the c3rberus repo (for the IOC/wiki sources) + a `./c3r` curl wrapper holding
+  the login/CSRF-free API, and runs blue-style cycles (~12 min) reading the platform
+  scoreboard and re-deploying what blue fixed. It talks ONLY through the API — the same
+  surface a real CDE red team has — and dies loudly: its feed thread is supervised like a
+  blue team's, because an event where the IOC war silently stopped being fought is a
+  broken replica.
+- **Known bets**: (1) implant call-home and script fetch go straight to red01's LAN
+  address, no per-team gateway DNAT — fine while red's boxes sit on the mgmt LAN, revisit
+  if team egress is ever firewalled from it; (2) no web UI (vite/node skipped — the API
+  and JSON scoreboard are the interface); (3) FreeBSD/firewall IOCs are out of scope with
+  the firewall excluded. Each is an inventory/Compfile change away, not a redesign.
+
 ## estate/
 
 The one component that mutates real infrastructure. Each creator is an ordinary function that calls

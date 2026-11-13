@@ -9,7 +9,7 @@ from guests.domain_ops import deploy_domain_configs
 from guests.service_fixup_ops import reensure_mysql_credlist_users
 from common.timing import timed
 from common.utils import compfile_flag, run_concurrent
-from red import tlaloc_ops
+from red import c3rberus_ops, tlaloc_ops
 
 from deploy_lib.phases._snapshots import snap_ready
 
@@ -95,6 +95,14 @@ def phase7_domains_and_final(ctx):
         # the late pass still writes account files, the trail wipe still runs and tz-ready is
         # still being taken.
         red_summary = tlaloc_ops.plant_assume_breach(ctx, start_loop=False)
+    # The c3rberus platform installs beside tlaloc on the same red01, and its day-0
+    # IOC catalog must be inside tz-ready too — blue restores ONTO the IOCs, and the
+    # platform scores exactly that remediation.
+    if c3rberus_ops.selected(ctx.comp_dir):
+        with timed(ctx.comp_dir, 7, "red_c3rberus"):
+            red_summary["c3rberus"] = c3rberus_ops.stage(
+                ctx.comp_dir, ssh_key=ctx.ssh_key, red_ip=red_summary["red_ip"],
+                box_pw=ctx.box_password)
 
     # Last of the account writers (useradd resets /etc/{passwd,shadow,group} to default modes,
     # undoing any earlier plant), but before the trail wipe so this pass leaves no SSH trace.
@@ -140,3 +148,7 @@ def begin_red_after_delivery(ctx, red_summary):
     with timed(ctx.comp_dir, 7, "red_start"):
         tlaloc_ops.start_director(ctx.ssh_key, red_summary["red_ip"])
     print(f"  tlaloc      : loop started on red01 ({red_summary['red_ip']})")
+    if c3rberus_ops.selected(ctx.comp_dir):
+        # the platform's own T0: box-touching loops on, comp started, scheduler fires
+        c3rberus_ops.begin(ctx.comp_dir, ssh_key=ctx.ssh_key,
+                           red_ip=red_summary["red_ip"])

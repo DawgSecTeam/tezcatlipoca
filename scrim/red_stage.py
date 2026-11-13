@@ -247,6 +247,16 @@ def stage_red(args, comp, creds, run_dir):
             f"tunnel (--red-tunnel), then re-run.")
     log(f"red01 reached the LLM at {base_url} — clear to start")
     verify_red_reaches_teams(args, comp, creds)
+    # The c3rberus platform rides along when the Compfile selects it: install/adopt on
+    # the same red01, render its inventory from THIS range's state, plant its day-0
+    # catalog once. It comes up after tlaloc's own gates so a platform failure is
+    # never mistaken for a campaign failure — and it aborts the run all the same:
+    # an event with half its red tooling silently missing is the thing we're fixing.
+    from red import c3rberus_ops
+    if c3rberus_ops.selected(comp):
+        info = c3rberus_ops.stage(comp, ssh_key=ssh_key, red_ip=args.red_ip,
+                                  box_pw=core.read_state(comp).get("box_password", ""))
+        ctx.state["red"]["c3rberus"] = info
     try:
         from guests import clean_trails
         clean_trails.clean_trails(comp, creds)

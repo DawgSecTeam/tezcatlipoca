@@ -29,9 +29,39 @@ def _ssh(args, cmd, timeout):
                           timeout=timeout, check=False)
 
 
+def _c3rberus_once(args):
+    """The platform's liveness is its OWN: the backend answers /docs and the scheduler
+    re-fires; a down unit silently stops IOC checks without touching tlaloc's world.json,
+    so the tlaloc probe above would never see it. Restart the units that are down."""
+    from pathlib import Path
+    from common.comp_paths import resolve_comp_dir
+    from red import c3rberus_ops
+    try:
+        comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
+        if not c3rberus_ops.selected(comp):
+            return False
+        r = _ssh(args, "systemctl is-active c3rberus-backend.service sliver.service; "
+                        "curl -sk -m 8 -o /dev/null -w '%{http_code}' "
+                        "https://localhost:3000/docs || true", timeout=45)
+    except Exception:                                          # noqa: BLE001 - best effort
+        return False
+    lines = (r.stdout or "").split()
+    if not lines or "200" in lines[-1:]:
+        return False
+    down = [u for u, s in zip(("c3rberus-backend.service", "sliver.service"),
+                              lines[:2]) if s != "active"]
+    if not down:
+        return False                                           # units up, docs probe raced
+    log(f"RED WATCHDOG: c3rberus units down {down} — restarting")
+    for u in down:
+        _ssh(args, f"sudo -n systemctl restart {u}", timeout=120, check=False)
+    return False                                               # tlaloc restart is what the manifest counts
+
+
 def check_once(args):
     """One probe; returns True only when the loop was restarted (caller counts it)."""
     from scrim import red_link
+    _c3rberus_once(args)
     unit = red_link.red_unit(args)
     probe = (f"systemctl is-active {unit}; "
              "python3 -c 'import os,time;print(int(time.time()-os.path.getmtime("

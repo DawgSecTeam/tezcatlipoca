@@ -95,6 +95,28 @@ def preflight_blue_models(args):
             seen.add(base_url)
 
 
+# The blue kit real CDE defenders carry: the DawgSec quetzalcoatl repo on the LAN forgejo.
+# blue-kit/ (the engine's vendored subset) stages regardless — the clone is additive, and
+# a dead git host must degrade to the smaller kit, never abort staging.
+QUETZALCOATL_REPO = "http://10.0.0.132:3000/bossagent/quetzalcoatl.git"
+
+
+def _stage_quetzalcoatl(wd):
+    dest = Path(wd) / "quetzalcoatl"
+    if dest.exists():
+        return True          # resume: the kit was staged by an earlier pass
+    url = os.environ.get("TEZ_BLUE_KIT_REPO", QUETZALCOATL_REPO)
+    if not url:
+        return False
+    r = subprocess.run(["git", "clone", "--quiet", "--depth", "1", url, str(dest)],
+                       capture_output=True, timeout=300, check=False)
+    if r.returncode != 0:
+        log(f"WARNING: quetzalcoatl clone failed ({r.stderr.decode(errors='ignore')[-160:]}) "
+            "— blue keeps the vendored blue-kit only")
+        return False
+    return True
+
+
 def stage_blues(args, comp, run_dir, creds, t0):
     log(f"blue endpoint: {llm_endpoints.describe(args.blue_base_url)}")
     endpoints.api_key(args.blue_base_url)     # public entries raise when their key is missing
@@ -130,6 +152,8 @@ def stage_blues(args, comp, run_dir, creds, t0):
         if kit_src.is_dir():
             core.shutil_copytree(kit_src, wd / "blue-kit")
             log(f"blue-kit staged into blue-team{n}")
+        if _stage_quetzalcoatl(wd):
+            log(f"quetzalcoatl staged into blue-team{n}")
         (wd / "LOG.md").write_text(
             f"# Blue team {n} — defense log\n"
             "# Your after-action report goes in REPORT.md (an operator reads it afterwards)\n")
@@ -161,10 +185,11 @@ class CycleTimeout(subprocess.TimeoutExpired):
         self.reason = reason
 
 
-def _opencode_run(args, prompt, wd, env, stop=None):
+def _opencode_run(args, prompt, wd, env, stop=None, ep=None):
     m = re.search(r"team(\d+)$", wd.name)
     n_team = int(m.group(1)) if m else 1
-    base_url, blue_model = endpoints.blue_ep(args, n_team)
+    # ep lets the red operator reuse this runner with the RED model on the same gateway
+    base_url, blue_model = ep or endpoints.blue_ep(args, n_team)
     # subprocess cwd= does not update $PWD and opencode resolves its project (and thus
     # the per-workdir opencode.jsonc defining the scrim-llm provider) from $PWD; it also
     # needs a shell parent to survive — see docs/scrim-harness.md.
@@ -391,12 +416,14 @@ def write_cycle_timeout(wd, elapsed, *, window=False):
 # One lock acquisition per attempt: wrapping the attempt AND its retry held the lock for up to
 # 2 x CYCLE_TIMEOUT and starved every other team of a whole cycle on the shared endpoint. The
 # retry is skipped once stop is set, so teardown is never held up by a doomed second attempt.
-def run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=None):
+def run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=None, ep=None):
     who = team if team is not None else "?"
+    # ep is only passed through when set: test doubles patch the four-arg signature
+    kw = {"ep": ep} if ep is not None else {}
     with llm_lock:
-        r = _opencode_run(args, prompt, wd, env, stop=stop)
+        r = _opencode_run(args, prompt, wd, env, stop=stop, **kw)
     if r.returncode != 0 and not stop.is_set():
         log(f"blue-team{who} cycle rc={r.returncode} — retrying once (lock released)")
         with llm_lock:
-            r = _opencode_run(args, prompt, wd, env, stop=stop)
+            r = _opencode_run(args, prompt, wd, env, stop=stop, **kw)
     return r

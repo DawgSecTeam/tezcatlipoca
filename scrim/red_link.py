@@ -195,6 +195,26 @@ def pull_red_state(args):
       + [(f"/tmp/ba/{name}", name) for name in staged])
     log(f"red state pulled before teardown: {got or 'nothing (see collection.json)'}")
     _land_canonical_red_report(args, got)
+    _c3rberus_harvest(args)
+    return got
+
+
+def _c3rberus_harvest(args):
+    """Stop the platform's clock at the event's end, then take its AAR truth: the DB
+    snapshot (folded via .backup), logs, rendered inventory — and the verdict beside
+    tlaloc's restore table, in evidence/red/."""
+    comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
+    from red import c3rberus_ops
+    if not c3rberus_ops.selected(comp):
+        return None
+    ssh_key, red_ip = core.ssh_key_path(), getattr(args, "red_ip", None)
+    c3rberus_ops.end(comp, ssh_key=ssh_key, red_ip=red_ip, runner=procs.run_tree)
+    ev = Path(args.run_dir) / "evidence" / "red"
+    got = c3rberus_ops.harvest(comp, ev, ssh_key=ssh_key, red_ip=red_ip,
+                               runner=procs.run_tree)
+    if got and got.get("db"):
+        c3rberus_ops.verdict(comp, ev)
+    log(f"c3rberus evidence: {got}")
     return got
 
 
@@ -223,6 +243,7 @@ def start_red_director(args):
         if r.returncode == 0:
             log(f"red director started after the seed — {target} "
                 f"{' '.join((r.stdout or '').split())[-24:]}")
+            _c3rberus_t0(args)
             return True
     raise RuntimeError(
         f"could not start {red_unit(args)} on red01 after the seed. An event whose "
@@ -251,9 +272,32 @@ def stop_red_director(args):
             continue
         if r.returncode == 0:
             log("red director stopped for the pre-T0 fire test (restarted after the seed)")
+            _c3rberus_stop(args)
             return True
     log("WARNING: could not stop the red director for the pre-T0 fire test")
     return False
+
+
+def _c3rberus_t0(args):
+    comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
+    from red import c3rberus_ops
+    if c3rberus_ops.selected(comp):
+        c3rberus_ops.begin(comp, ssh_key=core.ssh_key_path(),
+                           red_ip=getattr(args, "red_ip", None))
+
+
+def _c3rberus_stop(args):
+    # tolerant by design: this runs on the PRE-T0 fire-test stop, where a range whose
+    # platform never came up (a --skip-deploy onto a half-built red01) must still stop
+    # quietly — stage_red's own gate right after is where a missing platform fails loud.
+    comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
+    from red import c3rberus_ops
+    if c3rberus_ops.selected(comp):
+        try:
+            c3rberus_ops.end(comp, ssh_key=core.ssh_key_path(),
+                             red_ip=getattr(args, "red_ip", None))
+        except Exception as e:                                    # noqa: BLE001
+            log(f"c3rberus: pre-T0 stop_comp skipped ({e})")
 
 
 def red_box_power_state(args):

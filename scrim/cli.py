@@ -19,6 +19,7 @@ from scrim import lock_ops
 from common import procs
 from scrim import red_link
 from scrim import red_stage
+from scrim import red_c3rberus
 from scrim import run_manifest
 from scrim import staging
 from scrim import test_folder
@@ -211,6 +212,9 @@ def main():
     # marker BEFORE stage_red: red01 deploys take tens of minutes; a death in there must leave a resume marker
     run_manifest.record_phase(run_dir, args, "red")
     red_stage.stage_red(args, comp, creds, run_dir)
+    # The platform's operator agent (workdir + access) stages beside tlaloc; its
+    # feed thread starts with the event, like the blue ones.
+    args.red_c3rberus = red_c3rberus.stage_operator(args, comp, run_dir)
     # T0 is the event clock: starting red before this point lets its opening cycle
     # take scored services down before blue's first turn.
     # (lost in the sliver-c2 squash 69c7fa1; every scrim since ran with a held red
