@@ -202,6 +202,11 @@ def render_env(comp_dir, box_pw, *, red_ip, scoring_pw):
         "STAGE_LISTENER_PORT=%d" % PLATFORM_LISTENER_PORTS[1],
         "PIVOT_LISTENER_PORT_BASE=9900",
         f"SCRIPT_SERVER_URL=https://{red_ip}:4000",
+        # combined deploy scripts ride curl+wget fetch-retry tails (~185s worst
+        # case); at the stock 120-180s window nxc kills the ssh, SIGHUP skips the
+        # result POST, and the awaited future orphans — deploy_all then NEVER
+        # completes (run-64f7c02a: 28 children parked 'running' for 45 min).
+        "NXC_DEPLOY_TIMEOUT=300",
         "SLIVER_CFG_PATH=./sliver_operator.cfg",
         "RED_SCORING_ENABLED=true", "RED_SCORING_USERNAME=red_scoring",
         "RED_SCORING_DOMAIN=", f"RED_SCORING_PASSWORD={scoring_pw}",
