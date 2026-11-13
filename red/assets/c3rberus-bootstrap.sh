@@ -43,13 +43,15 @@ for i in 1 2 3; do apt-get install -y -q git openssl python3 python3-pip python3
 command -v pip3 >/dev/null 2>&1 || { echo "ERROR: python3-pip did not install"; exit 1; }
 python3 -c "import ensurepip" >/dev/null 2>&1 || { echo "ERROR: python3-venv did not install"; exit 1; }
 
-echo "== netexec (pip wheel; the apt line in the repo's setup.sh is Kali-only)"
+echo "== netexec (own venv; @main — the v1.5.1 TAG is unsolvable: it requires
+certipy-ad@git whose pyproject renamed itself certipy-nxc, so pip discards it; main
+fixed the pin. A system-site install additionally collides with debian's pyparsing.)"
 if ! command -v nxc >/dev/null 2>&1; then
-  # v1.5.1, v-prefixed like every real tag — `@1.5.1` resolved to nothing and the
-  # WARNING hid a platform with no delivery/IOC scanner at all (run-a00f5e29 audit).
-  retry 4 pip3 install --break-system-packages \
-    "git+https://github.com/Pennyw0rth/NetExec@v1.5.1" \
+  [ -x /opt/nxc-venv/bin/pip ] || python3 -m venv /opt/nxc-venv || exit 1
+  retry 4 /opt/nxc-venv/bin/pip install -q \
+    "git+https://github.com/Pennyw0rth/NetExec@main" \
     || { echo "ERROR: netexec did not install — the platform cannot scan or plant"; exit 1; }
+  ln -sf /opt/nxc-venv/bin/nxc /usr/local/bin/nxc
 fi
 
 echo "== sliver server+client"
