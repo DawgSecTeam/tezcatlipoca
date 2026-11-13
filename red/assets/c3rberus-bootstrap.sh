@@ -45,8 +45,11 @@ python3 -c "import ensurepip" >/dev/null 2>&1 || { echo "ERROR: python3-venv did
 
 echo "== netexec (pip wheel; the apt line in the repo's setup.sh is Kali-only)"
 if ! command -v nxc >/dev/null 2>&1; then
+  # v1.5.1, v-prefixed like every real tag — `@1.5.1` resolved to nothing and the
+  # WARNING hid a platform with no delivery/IOC scanner at all (run-a00f5e29 audit).
   retry 4 pip3 install --break-system-packages \
-    "git+https://github.com/Pennyw0rth/NetExec@1.5.1" || echo "WARNING: nxc install failed"
+    "git+https://github.com/Pennyw0rth/NetExec@v1.5.1" \
+    || { echo "ERROR: netexec did not install — the platform cannot scan or plant"; exit 1; }
 fi
 
 echo "== sliver server+client"
