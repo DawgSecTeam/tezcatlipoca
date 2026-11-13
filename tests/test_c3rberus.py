@@ -103,6 +103,37 @@ def test_render_inventory_carries_packet_scoring_passwords(tmp_path):
                                                      "PASSWORD": "pktWad"}}]}))
     doc = yaml.safe_load(c3rberus_ops.render_inventory(c, "SECRETpw", red_ip="10.0.0.247"))
     by = {b["name"].rsplit("-", 1)[0]: b for b in doc["teams"][0]["boxes"]}
-    assert by["web01"]["scoring_password"] == "pktW3b"
-    assert by["ad01"]["scoring_password"] == "pktWad"
-    assert "scoring_password" not in by["db01"]        # unpinned box: env fallback
+    assert by["ad01"]["scoring_password"] == "pktWad"  # windows: packet stays authority
+    assert "scoring_password" not in by["web01"]       # linux: re-privileged to .env pw
+    assert "scoring_password" not in by["db01"]
+
+
+def test_provision_linux_scoring_lands_root_and_rejects_failure(monkeypatch):
+    import red.c3rberus_ops as m
+    calls = []
+
+    def fake_ssh(key, ip, remote, **kw):
+        calls.append(remote)
+
+        class R:
+            stdout = "... 0"
+            stderr = ""
+        return R()
+    monkeypatch.setattr(m, "_ssh", fake_ssh)
+    inv = {"teams": [{"boxes": [
+        {"ip": "192.168.127.2", "os": "windows", "username": ".\\Administrator"},
+        {"ip": "192.168.127.4", "os": "linux", "username": "blueteam"}]}]}
+    m._provision_linux_scoring("k", "10.0.0.247", inv, "n0t_sus1", "SCORpw")
+    assert len(calls) == 1
+    assert "red_scoring:x:0:0::/root:/bin/bash" in calls[0]
+    assert "PermitRootLogin yes" in calls[0] and "SCORpw" in calls[0]
+
+    def bad_ssh(key, ip, remote, **kw):
+        class R:
+            stdout = "usermod: used by process 1"
+            stderr = ""
+        return R()
+    monkeypatch.setattr(m, "_ssh", bad_ssh)
+    import pytest
+    with pytest.raises(RuntimeError):
+        m._provision_linux_scoring("k", "10.0.0.247", inv, "n0t_sus1", "SCORpw")

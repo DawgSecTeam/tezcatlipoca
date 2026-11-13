@@ -10,6 +10,7 @@ API from red01 itself. Lifecycle + design notes: docs/internals.md § c3rberus.
 
 import json
 import secrets
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -176,7 +177,14 @@ def render_inventory(comp_dir, box_pw, *, red_ip):
             entry = {"name": f"{box['name']}-{tid}", "ip": f"192.168.{tid}.{box['last_octet']}",
                      "os": kind, "username": box_user if kind == "linux" else ".\\Administrator",
                      "password": box_pw, "port": 22 if kind == "linux" else 5985}
-            if box["name"] in pkt_pw:
+            if kind == "windows" and box["name"] in pkt_pw:
+                # Packet authority works ONLY where the account can carry it: on
+                # Windows the creator re-points local+domain accounts to the pinned
+                # password, so the packet stays authoritative. On Linux the packet's
+                # decoy can never be the deploy identity (plain user can't write the
+                # IOC paths) — _provision_linux_scoring re-privileges it to the
+                # seeded pw, and pinning the decoy pw there would hand deploy a
+                # password that 403s every put-file.
                 entry["scoring_password"] = pkt_pw[box["name"]]
             if kind == "windows":
                 entry["connection"] = "winrm"
@@ -273,6 +281,40 @@ def _wait_task(ssh_key, red_ip, token, task_id, *, runner=None, timeout_s=2400):
     return "timeout"
 
 
+def _provision_linux_scoring(ssh_key, red_ip, inv_doc, box_pw, scoring_pw, *, runner=None):
+    """The platform's scoring contract (config.py RED_SCORING): a password-auth'd
+    uid-0 account on Linux — its IOC deploys are plain nxc put-files, so root
+    parity is structural. The packet's uid-1010 decoy authenticates but cannot
+    write System32//usr/local (Errno 13; runs 666952e9/702607be/da75e935), and a
+    second uid-0 account is PAM-refused under the goldens' prohibit-password
+    sshd. So: pin red_scoring to uid 0 with the seeded scoring password (direct
+    passwd edit — usermod refuses a uid-0 account sharing PID1) + a scoped
+    PermitRootLogin drop-in. Convergent/idempotent."""
+    script = (
+        "python3 -c \"import re;L=open('/etc/passwd').read();"
+        "L=re.sub(r'^red_scoring:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*$',"
+        "'red_scoring:x:0:0::/root:/bin/bash',L,flags=re.M);"
+        "open('/etc/passwd','w').write(L)\"; "
+        "usermod -s /bin/bash red_scoring 2>/dev/null; "
+        "printf 'red_scoring:%s\\n' | chpasswd; "
+        "echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/99-tez-scoring.conf; "
+        "systemctl reload ssh 2>/dev/null || systemctl reload sshd; sleep 2; id -u red_scoring"
+        % scoring_pw)
+    for team in inv_doc["teams"]:
+        for box in team["boxes"]:
+            if box["os"] != "linux":
+                continue
+            r = _ssh(ssh_key, red_ip,
+                     f"nxc ssh {box['ip']} -u {box['username']} "
+                     f"-p {shlex.quote(box_pw)} -x "
+                     f"{shlex.quote('sudo -n bash -c ' + shlex.quote(script))} "
+                     "| tail -1", runner=runner, timeout=120, check=False)
+            out = (r.stdout or "") + (r.stderr or "")
+            if not out.strip().endswith("0"):
+                raise RuntimeError(f"linux scoring provisioning failed on {box['ip']}: "
+                                   f"{out.strip()[-160:]}")
+
+
 def cred_preflight(ssh_key, red_ip, token, team_nums, *, runner=None):
     """Platform-side gate on its own scoring identity: pass | auth-fail |
     insufficient-perms | unreachable | absent, per box — an auth-fail list is the
@@ -366,6 +408,10 @@ def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
     # shipped the credential without planting the identity — every Windows deploy
     # died LOGON_FAILURE (run-3f39134d, 2026-11-13).
     print("  c3rberus    : provisioning the scoring account on the boxes...")
+    import yaml
+    _provision_linux_scoring(ssh_key, red_ip, yaml.safe_load(
+        render_inventory(comp_dir, box_pw, red_ip=red_ip)), box_pw, scoring_pw,
+        runner=runner)
     _ssh(ssh_key, red_ip, f"cd {INSTALL_DIR} && sudo -n venv/bin/python "
          "scripts/infra/create_red_scoring.py", runner=runner, timeout=1800)
     cred_preflight(ssh_key, red_ip, token, team_nums, runner=runner)
