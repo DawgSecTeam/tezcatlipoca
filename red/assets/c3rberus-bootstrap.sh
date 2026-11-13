@@ -32,8 +32,11 @@ echo "== apt base"
 export DEBIAN_FRONTEND=noninteractive
 for i in 1 2 3; do apt-get update -q && break; sleep 20; done
 for i in 1 2 3; do apt-get install -y -q git openssl python3 python3-pip python3-venv \
-  python3-yaml python3-bcrypt rust-openssl jq curl ca-certificates nmap ncat netcat-openbsd \
+  python3-yaml python3-bcrypt jq curl ca-certificates nmap ncat netcat-openbsd \
   mingw-w64 clang lld psmisc gcc make g++ pkg-config libssl-dev libffi-dev && break; sleep 20; done
+# rust-openssl was in this line — it is no Ubuntu package, and one unknown name aborts
+# the WHOLE install, so every package above went uninstalled in silence (run-57d8ae2d
+# trace; red01's apt-cache confirms 24 OK, 1 MISSING).
 # loud, not cascading: a first-boot dpkg lock (cloud-init) once left python3-venv unpicked
 # up; every later step then "succeeded" into a pip-less venv and the backend died on
 # 203/EXEC (live run-c7f1dde4, 2026-11-13).
