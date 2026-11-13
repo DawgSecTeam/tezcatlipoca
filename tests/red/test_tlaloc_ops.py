@@ -395,6 +395,69 @@ class PlantTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"TEZ_TLALOC_DURATION_MIN": "480"}):
             block = to.red_block(self.comp)
         self.assertEqual(float(block["duration_min"]), 480.0)
+
+    def test_prepare_only_leaves_no_implant_on_a_box(self):
+        # The prepared restore points are taken on a range nobody has compromised: the C2
+        # and its frozen matrix exist on red01, and the seed is the event-start half.
+        self._patch()
+        out = to.plant_assume_breach(self.ctx, ssh_key="/k", runner=self.runner,
+                                    deploy_implants_now=False)
+        to.seed_via_red01.assert_not_called()
+        to.pull_manifest.assert_not_called()
+        to.start_unit.assert_not_called()
+        self.assertIsNone(out["manifest"])
+        self.assertTrue(self.ctx.state["red_staged"])
+        self.assertNotIn("red_deployed", self.ctx.state)
+
+
+class DeployImplantsTests(unittest.TestCase):
+    """The event-start half: seed the frozen matrix, prove it, and wipe the traces it made."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.comp = compfile(self.tmp.name, "red.assume_breach full\nred.c2_engine mythic\n"
+                                          "red.clef_url http://10.0.0.9:8080\n")
+        manifest = self.comp / "red" / "manifest.json"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps(
+            {"boxes": {"192.168.101.2": {"stages": ["access", "channel"]}}}))
+
+    def _patch(self):
+        for name, kw in (("seed_via_red01", {"return_value": {"ok": True}}),
+                         ("pull_manifest", {"return_value": {
+                             "path": str(self.comp / "red" / "manifest.json")}}),
+                         ("_wipe_arming_traces", {})):
+            patcher = mock.patch.object(to, name, **kw)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(gaia_ops, "mythic_enabled", return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_it_seeds_and_wipes_the_traces_the_seed_made(self):
+        self._patch()
+        out = to.deploy_implants(self.comp, {"red": {"red_ip": "10.0.0.241"}},
+                                 ssh_key="/k")
+        to.seed_via_red01.assert_called_once()
+        to._wipe_arming_traces.assert_called_once()
+        self.assertEqual(out["red_ip"], "10.0.0.241")
+
+    def test_a_range_that_was_never_staged_refuses(self):
+        self._patch()
+        with self.assertRaises(RuntimeError) as cm:
+            to.deploy_implants(self.comp, {}, ssh_key="/k")
+        self.assertIn("never staged", str(cm.exception))
+
+    def test_assume_breach_off_has_nothing_to_deploy(self):
+        off = compfile(self.tmp.name + "off", "red.assume_breach off\nred.c2 off\n"
+                                            "red.clef_url http://clef.test\n")
+        self._patch()
+        self.assertIsNone(to.deploy_implants(off, {"red": {"red_ip": "10.0.0.241"}},
+                                             ssh_key="/k"))
+        to.seed_via_red01.assert_not_called()
+
+
 class PayloadManifestGuardTests(unittest.TestCase):
     """A C2-enabled stage must not silently ship an empty payload matrix."""
 

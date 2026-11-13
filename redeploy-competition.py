@@ -21,7 +21,7 @@ from redeploy.redeploy_context import RedeployContext
 from redeploy.redeploy_light_ops import mode_reconfigure, mode_resync, mode_rollback
 from redeploy.redeploy_plant_ops import prepare_nakon_assets
 from redeploy.redeploy_rebuild_ops import mode_rebuild
-from redeploy.redeploy_reset_ops import mode_reset
+from redeploy.redeploy_reset_ops import mode_prepared, mode_reset
 from redeploy.redeploy_select_ops import select_targets
 from common.utils import competition_name, load_compfile, pick_competition, valid_comp_name
 from estate import config
@@ -40,6 +40,7 @@ MODES = {
     "reconfigure": lambda t, r, cfg, bundle: (mode_reconfigure(t, r, cfg, bundle), None),
     "resync": lambda t, r, cfg, bundle: (mode_resync(t, r), None),
     "reset": lambda t, r, cfg, bundle: mode_reset(t, r),
+    "prepared": lambda t, r, cfg, bundle: mode_prepared(t, r),
     "rebuild": lambda t, r, cfg, bundle: (mode_rebuild(t, r, cfg, bundle), None),
 }
 
@@ -81,8 +82,11 @@ def main():
                         help="Only boxes whose template is this platform.")
     parser.add_argument("--mode", default="rollback-ready",
                         choices=["rollback-ready", "rollback-base", "reconfigure", "rebuild",
-                                 "resync", "engine-recovery", "reset"],
+                                 "resync", "engine-recovery", "reset", "prepared"],
                         help="What to do to the selected boxes (default: rollback-ready). "
+                             "prepared = the whole range back to its prepared restore points "
+                             "(boxes, red01, engine) for a round rerun; re-arm with "
+                             "competition-ops.py start. "
                              "resync = align credentials with the engine and re-set box "
                              "passwords via the guest agent, touching nothing else. "
                              "engine-recovery = re-clone the engine VM from the engine "

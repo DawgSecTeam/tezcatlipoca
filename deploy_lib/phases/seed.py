@@ -6,6 +6,7 @@ from portal.portal_ops import deploy_portal
 from quotient.setup import create_injects, engine_paused, seed_teams, unpause_engine
 from common.ssh_ops import wait_for_http
 from common.timing import timed
+from deploy_lib.phases._snapshots import snap_prepared
 
 
 def phase8_seed(ctx):
@@ -58,6 +59,12 @@ def phase8_seed(ctx):
     else:
         print("  Teams already seeded (resume) — skipping.")
 
+    # One prepared point for the WHOLE range, after every box-touching prep step: a round
+    # resets all three VM classes here, so it cannot pair a pre-seed red01 with armed boxes
+    # or an engine expecting work the boxes no longer hold. Skipped once the range is armed.
+    if not ctx.state.get("red_deployed"):
+        snap_prepared(ctx)
+
     if held:
         # the hold outlives the deploy: engine stays paused and the clock unstarted
         # until competition-ops.py start flips both, so those flags stay unset
@@ -98,6 +105,11 @@ def phase8_seed(ctx):
         elif ctx.injects:
             print("  Injects already created (resume) — skipping.")
 
-    # Last: the portal needs Quotient's final event.conf (team logins) and the final box
-    # set. Opt-in via Compfile `portal 1`, and it never fails the deploy (portal_ops).
+    # Last: the range is prepared and snapshotted, so arm it (implants + the wipe of their
+    # traces) and let red attack — or hold, leaving the arming to competition-ops.py start.
+    from deploy_lib.phases.final import begin_red_after_delivery
+    begin_red_after_delivery(ctx, ctx.state.get("red"))
+
+    # The portal needs Quotient's final event.conf (team logins) and the final box set.
+    # Opt-in via Compfile `portal 1`, and it never fails the deploy (portal_ops).
     deploy_portal(ctx)

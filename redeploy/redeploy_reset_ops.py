@@ -3,11 +3,14 @@
 import json
 import time
 
+import pipeline_api
+
 from common.constants import SNAP_BASE, SNAP_READY
 from common.pam_bundle import capture_pam_bundle
 from infra.guest_exec import wait_for_guest_agent
-from infra.lifecycle import list_snapshots
-from common.ssh_ops import classify_ssh_failure, ssh_on_gateway
+from infra.lifecycle import list_snapshots, rollback_snapshot
+from common.ssh_ops import classify_ssh_failure, ssh_on_gateway, wait_for_http
+from estate import state as estate_state
 from redeploy.redeploy_select_ops import box_platform
 from redeploy.redeploy_plant_ops import prepare_nakon_assets
 from redeploy.redeploy_light_ops import mode_rollback
@@ -116,6 +119,62 @@ def probe_box_health(ctx, t, ports, node):
             return "healthy", "guest agent + scored ports" if windows else "ssh + scored ports"
         detail = "closed scored port(s): " + ", ".join(str(p) for p in sorted(missing))
     return "unhealthy", detail
+
+
+def mode_prepared(targets, rctx):
+    """Range-atomic reset to the prepared restore points; competition-ops.py start re-arms.
+
+    Not a per-box ladder: a rolled-back DC beside a live member is a dead trust, and boxes
+    carrying round-N implants beside a pre-seed red01 is the desync the prepared points
+    exist to remove. A range that cannot reset whole is a range to redeploy.
+    """
+    ctx, node, comp_dir, state = rctx.ctx, rctx.node, rctx.comp_dir, rctx.state
+    teams, boxes = rctx.teams or {}, rctx.boxes or []
+    whole = len(teams) * len(boxes)
+    if len(targets) != whole:
+        raise SystemExit(
+            f"  ERROR: --mode prepared resets the WHOLE range ({whole} box(es)); the selection "
+            f"covers {len(targets)}. Reset everything, or use --mode reset for a per-box repair.")
+
+    vms = [{"vm_name": t["vm_name"], "vmid": t["vmid"], "node": t.get("node") or node}
+           for t in targets]
+    red = state.get("red") or {}
+    if red.get("vmid"):
+        vms.append({"vm_name": "red01", "vmid": int(red["vmid"]),
+                    "node": red.get("node") or node})
+    engine_vmid = state.get("scoring_vm_id")
+    if engine_vmid:
+        vms.append({"vm_name": "engine", "vmid": int(engine_vmid),
+                    "node": state.get("node") or node})
+
+    missing = [v["vm_name"] for v in vms
+               if SNAP_READY not in list_snapshots(v["node"], v["vmid"])]
+    if missing:
+        raise SystemExit(
+            f"  ERROR: no '{SNAP_READY}' restore point on {', '.join(missing)} — this range "
+            f"predates prepared snapshots; use --mode reset (the repair ladder).")
+
+    print(f"\n  Prepared reset: rolling {len(vms)} VM(s) back to '{SNAP_READY}'...")
+    for v in vms:
+        print(f"    {v['vm_name']}: rollback")
+        rollback_snapshot(v["node"], v["vmid"], SNAP_READY)
+
+    # The engine's point holds the teams and a stopped clock; the rollback took the inject
+    # windows with it, so start must recreate them anchored at now.
+    state["engine_unpaused"] = False
+    state.pop("injects_created", None)
+    state.pop("injects_fingerprint", None)
+    state.pop("started", None)
+    state["red_staged"] = True
+    state["red_loop_held"] = True
+    state.pop("red_deployed", None)
+    estate_state.write_flat(comp_dir, state)
+
+    pipeline_api.wait_for_boxes_ssh(ctx, targets, timeout=900)
+    wait_for_http(f"http://{ctx['scoring_engine_ip']}/api/login", timeout=180)
+    print(f"\n  Prepared: {len(vms)} VM(s) reset to the built-but-unarmed state. Re-arm with:")
+    print(f"      python3 competition-ops.py start --comp-dir {comp_dir}")
+    return targets, {}
 
 
 def mode_reset(targets, rctx):

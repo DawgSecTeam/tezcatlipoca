@@ -336,12 +336,14 @@ class DeployHook(unittest.TestCase):
             from_phase, comp_dir, scoring_ip = 1, Path("/nonexistent"), "10.0.0.9"
             teams, admin_password, injects = {}, "a", []
             boxes, box_creds = [], {}  # falsy: the event.conf drift branch is not under test here
+            all_targets, engine_vmid, node = [], 1000, "pve"
             state = {"seeded": True, "engine_unpaused": True}
 
             def save_state(self):
                 pass
 
         with dpatch("wait_for_http"), dpatch("engine_paused", return_value=False), \
+                dpatch("snap_engine"), \
                 dpatch("timed", side_effect=lambda *a, **k: contextlib.nullcontext()), \
                 dpatch("deploy_portal", side_effect=lambda ctx: order.append("portal")), \
                 contextlib.redirect_stdout(io.StringIO()):

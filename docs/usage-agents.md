@@ -111,6 +111,7 @@ Selection (AND-combined; none = every box; no match is a hard error): `--teams 2
 | Mode | Does | Use when |
 |---|---|---|
 | `rollback-ready` (default) | Roll back to `tz-ready`, restart, wait for SSH | Box was fine at hour zero |
+| `prepared` | Roll the **whole range** back to its prepared `tz-ready` — every box, red01 and the engine — then clear the derived event flags. Refuses a partial selection. Re-arm with `competition-ops.py start` | Rerunning a round on a kept range |
 | `rollback-base` | Roll back to `tz-base`, rerun DNS/auth/`nakon deploy --only`/hardening, retake `tz-ready` | `tz-ready` is also bad |
 | `reconfigure` | No rollback; rerun that chain on the live box | Service died, box otherwise keepable |
 | `rebuild` | Destroy, re-clone from the **golden template**, configure, retake both snapshots | VM gone or won't boot |
@@ -118,7 +119,7 @@ Selection (AND-combined; none = every box; no match is a hard error): `--teams 2
 | `resync` | Pull engine-authoritative secrets (`event.conf`, credlist, `/opt/quotient/.env`) into state, re-set selected boxes' passwords via guest agent | Credential drift. Cannot recover `box_password` (baked in at bootstrap); reports unreachable boxes |
 | `engine-recovery` | Destroy the engine VM and re-clone it from the engine template through the estate component (scoped to the engine vmid by construction). Ignores selection flags. Scoring DB starts **empty** | Engine broken or deleted. Then `create-competition.py --competition <id> --from-phase 7` |
 
-`--reset-event` (with `rollback-ready`/`rollback-base`/`reset`) also restarts the event from the engine template and reruns the seed, so scores reset and injects re-anchor at now.
+`--reset-event` (with `rollback-ready`/`rollback-base`/`reset`) also restarts the event from the engine template and reruns the seed, so scores reset and injects re-anchor at now. Not needed with `prepared`: its engine rollback already returns the seeded-but-unstarted DB, and `competition-ops.py start` recreates the injects anchored at now.
 
 - `rebuild` clones the golden template, not a live box, so defenders' changes aren't inherited. It stamps the full ownership tag set and clone marker explicitly (a clone inherits its golden's tags, and a stale `run-<id>` would make teardown refuse it).
 - `rollback-base` and `rebuild` rerun the AD chain for selected boxes with a `domain_roles.json` role (a pre-nakon disk undoes promotion/joins). The stale ADDS done-marker is cleared first. If the chain can't run, `tz-ready` is not retaken.

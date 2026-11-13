@@ -537,11 +537,16 @@ def start_director(ssh_key, red_ip, *, runner=None):
 
 
 def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
-                        mythic_runner=None, llm=None, llm_key=None, start_loop=True):
+                        mythic_runner=None, llm=None, llm_key=None, start_loop=True,
+                        deploy_implants_now=True):
     """[7/8] Deploy red01, install the C2, seed, prove the config — every step raises.
 
     `start_loop=False` leaves the unit enabled but stopped, for a caller that has more work
     to do on the boxes before T0 (the scrim harness always stops before the fire test).
+
+    `deploy_implants_now=False` stops once the C2 and its payload matrix exist on red01 —
+    the range is built and armed but no implant has touched a box. The prepared restore
+    points are taken there, and `deploy_implants` arms the range at event start.
     """
     from infra.ownership import Ownership
     from red import gaia_ops, red01_ops, sliver_ops
@@ -716,31 +721,15 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         push_llm_env(ssh_key, red_ip, llm_key, runner=runner)
     install_unit(ssh_key, red_ip, runner=runner)
     manifest = None
-    if block.get("assume_breach") != "off":
-        seed_via_red01(ssh_key, red_ip, runner=runner)
-        manifest = pull_manifest(ssh_key, red_ip, comp_dir, runner=runner)
-        seeded = _seeded_boxes(manifest["path"])
-        if not seeded:
-            raise RuntimeError(
-                f"the day-0 seed left no planted box: the manifest at {manifest['path']} "
-                f"lists none (tlaloc's seed exits 0 even when every box fails)")
-        print(f"  tlaloc      : seed manifest proves {seeded} box(es) planted")
-        if (use_mythic or use_sliver) and int(block.get("depth", 3)) >= 2:
-            try:
-                seeded_boxes = (json.loads(Path(manifest["path"]).read_text())
-                                .get("boxes") or {})
-            except (OSError, ValueError):
-                seeded_boxes = {}
-            no_channel = [ip for ip, rec in seeded_boxes.items()
-                          if "channel" not in (rec.get("stages") or [])]
-            if no_channel:
-                raise RuntimeError(
-                    f"the day-0 seed did not plant a checked-in C2 channel on "
-                    f"{', '.join(no_channel)} — the payloads ran but their "
-                    f"callbacks never landed (full spread proves every transport)")
+    if not deploy_implants_now:
+        print(f"  tlaloc      : staged on red01 ({red_ip}) — no implant deployed, so the "
+              f"range is prepared but not compromised")
+    elif block.get("assume_breach") != "off":
+        manifest = _seed_and_prove(comp_dir, ssh_key, red_ip, block,
+                                   (use_mythic or use_sliver), runner)
     else:
         print("  tlaloc      : assume_breach off — no day-0 seed or manifest")
-    if start_loop:
+    if start_loop and deploy_implants_now:
         start_unit(ssh_key, red_ip, runner=runner)
         print(f"  tlaloc      : loop started on red01 ({UNIT})")
     else:
@@ -750,14 +739,65 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                "manifest": manifest.get("path") if manifest else None,
                "c2": c2_summary, "at": _now()}
     ctx.state["red"] = summary
+    if deploy_implants_now:
+        ctx.state["red_deployed"] = True
+        ctx.state.pop("red_staged", None)
+    else:
+        # A re-prepare is on a rebuilt disk, so nothing of the last arming survives it.
+        ctx.state["red_staged"] = True
+        ctx.state.pop("red_deployed", None)
     ctx.save_state()
     if manifest:
         print(f"  tlaloc      : seeded on red01 {red_ip} — the range is owned before T0 "
               f"(unit {UNIT}, state {STATE_DIR})")
-    else:
+    elif deploy_implants_now:
         print(f"  tlaloc      : red01 ready on {red_ip} (assume_breach off — no seed; "
               f"unit {UNIT} started)")
+    else:
+        print(f"  tlaloc      : red01 prepared on {red_ip} — competition-ops.py start "
+              f"deploys the implants")
     return summary
+
+def deploy_implants(comp_dir, state, *, ssh_key, runner=None):
+    """Event-start half of the plant: seed the frozen matrix, prove the channels, wipe the traces.
+
+    Split from `plant_assume_breach` so the prepared restore points can hold a range that is
+    built and armed but not compromised; every round re-arms through this after its reset.
+    """
+    from red import gaia_ops, red01_ops, sliver_ops
+    comp_dir = Path(comp_dir)
+    block = red_block(comp_dir)
+    if block.get("assume_breach") == "off":
+        print("  tlaloc      : assume_breach off — nothing to deploy")
+        return None
+    red_ip = ((state.get("red") or {}).get("red_ip")
+              or (red01_ops.recorded_identity(comp_dir) or {}).get("ip"))
+    if not red_ip:
+        raise RuntimeError(f"no red01 ip recorded for {comp_dir} — it was never staged")
+    engine = str(block.get("c2_engine") or "sliver").lower()
+    use_mythic = engine == "mythic" and gaia_ops.mythic_enabled(comp_dir)
+    use_sliver = (engine == "sliver" and not use_mythic
+                  and sliver_ops.sliver_enabled(comp_dir))
+    manifest = _seed_and_prove(comp_dir, ssh_key, red_ip, block,
+                               (use_mythic or use_sliver), runner)
+    _wipe_arming_traces(comp_dir, state, ssh_key)
+    return {"manifest": manifest.get("path") if manifest else None, "red_ip": red_ip}
+
+
+def _wipe_arming_traces(comp_dir, state, ssh_key):
+    # The seed is event-start work now, so its logs need the wipe the deploy's used to get:
+    # without it blue reads the implant deployment straight out of auth.log.
+    from common.utils import load_users_config
+    from guests import clean_trails
+    box_username, _credlist = load_users_config(comp_dir)
+    creds = clean_trails.creds_for(ssh_key, state.get("engine_mgmt_ip", ""),
+                                   box_username, state.get("box_password", ""))
+    try:
+        clean_trails.clean_trails(comp_dir, creds)
+    except Exception as e:                                   # noqa: BLE001 - never fatal
+        print(f"  WARNING: trail wipe failed ({type(e).__name__}: {e}) — box logs still "
+              f"hold the implant deployment")
+
 
 def destroy_tlaloc_red(comp_dir, *, ownership, engine_ip="", engine_user="sysadmin",
                        env=None, runner=None, ssh_key=None, red_ip=None, vmid=None):
@@ -816,6 +856,31 @@ def pull_manifest(ssh_key, red_ip, comp_dir, *, runner=None):
         return {"path": str(target)}
     raise RuntimeError(f"the agent wrote no seed manifest at {INTEL_DIR}/red/manifest.json "
                        f"({_tail(proc)})")
+
+
+def _seed_and_prove(comp_dir, ssh_key, red_ip, block, c2_on, runner):
+    seed_via_red01(ssh_key, red_ip, runner=runner)
+    manifest = pull_manifest(ssh_key, red_ip, comp_dir, runner=runner)
+    seeded = _seeded_boxes(manifest["path"])
+    if not seeded:
+        raise RuntimeError(
+            f"the day-0 seed left no planted box: the manifest at {manifest['path']} "
+            f"lists none (tlaloc's seed exits 0 even when every box fails)")
+    print(f"  tlaloc      : seed manifest proves {seeded} box(es) planted")
+    if c2_on and int(block.get("depth", 3)) >= 2:
+        try:
+            seeded_boxes = (json.loads(Path(manifest["path"]).read_text())
+                            .get("boxes") or {})
+        except (OSError, ValueError):
+            seeded_boxes = {}
+        no_channel = [ip for ip, rec in seeded_boxes.items()
+                      if "channel" not in (rec.get("stages") or [])]
+        if no_channel:
+            raise RuntimeError(
+                f"the day-0 seed did not plant a checked-in C2 channel on "
+                f"{', '.join(no_channel)} — the payloads ran but their "
+                f"callbacks never landed (full spread proves every transport)")
+    return manifest
 
 
 def pull_evidence(ssh_key, red_ip, dest, *, runner=None, timeout=300):

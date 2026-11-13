@@ -52,8 +52,11 @@ def golden_coverage_recorder(ctx):
 
 
 def build_goldens(ctx, stored):
-    return providers.of_ctx(ctx).build_golden_sets(ctx, stored,
-                                                   golden_coverage_recorder(ctx))
+    # Slot-0 build had no timed() wrapper, so a phase-4 golden build was invisible in the
+    # timings and read as dead time (an 83-minute hole in one deploy went unattributed).
+    with timed(ctx.comp_dir, 4, "golden_build"):
+        return providers.of_ctx(ctx).build_golden_sets(ctx, stored,
+                                                       golden_coverage_recorder(ctx))
 
 
 def record_golden_set(ctx, golden_ids, golden_ids_by_slot):
