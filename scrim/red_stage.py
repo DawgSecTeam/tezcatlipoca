@@ -217,8 +217,41 @@ class _PipelineCtx:
         pass
 
 
+def ensure_range_awake(comp, creds):
+    """An event teardown PRE-STOPS every guest (hard poweroff, machinery.py:104 —
+    the graceful path hangs Windows guests), so the next --skip-deploy scrim woke
+    onto a cold estate and verify failed on 'configuration file does not exist'
+    (run-68b93318). The deploy path boots its own guests; this is the idle-wake
+    half it never had. Idempotent: running guests are untouched."""
+    from estate import state as estate_state
+    from infra import lifecycle
+    from common import ssh_ops
+    import pipeline_api
+    st = estate_state.load_flat(comp) or {}
+    targets = (st.get("roster") or {}).get("targets") or {}
+    tmpl = {}
+    try:
+        for team in json.loads((Path(comp) / "boxes.json").read_text()):
+            for b in team.get("boxes", []):
+                tmpl[b["name"]] = b.get("template", "")
+    except (OSError, ValueError, AttributeError):
+        pass
+    down = []
+    for key, t in targets.items():
+        if lifecycle.vm_status(t.get("node"), t["vmid"]) != "running":
+            log(f"waking {key} (vmid {t['vmid']}) — powered off since the last teardown")
+            lifecycle.start_vm(t.get("node"), t["vmid"])
+        if tmpl.get(t.get("box_name")):
+            down.append({**t, "vm_name": key, "box": {"template": tmpl[t["box_name"]]}})
+    if down:
+        ssh_ops.wait_for_boxes_ssh(pipeline_api.engine_ctx(str(comp)) | {
+            "box_username": (creds or {}).get("box_username", "ubuntu")}, down, timeout=900)
+    return len(down)
+
+
 def stage_red(args, comp, creds, run_dir):
     from red import tlaloc_ops
+    ensure_range_awake(comp, creds)
     staging.set_red_clock(args)
     _resolve_red_vmid(args, comp)
     # A written placement is authoritative: pass it, never re-select for a live range.
