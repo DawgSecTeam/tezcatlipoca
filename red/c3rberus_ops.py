@@ -291,6 +291,10 @@ def plant(ssh_key, red_ip, token, team_nums, *, runner=None):
     rows = _api(ssh_key, red_ip, token, "GET", "/c2/iocs/deployed", runner=runner)
     deployed = len(rows) if isinstance(rows, list) else 0
     print(f"  c3rberus    : deploy-all-iocs {status}; {deployed} deployed rows")
+    if status not in ("done", "completed"):
+        # never stamp a half-planted catalog as the day-0 baseline (run-3f39134d:
+        # 21 windows deploys died on an unprovisioned scoring account)
+        raise RuntimeError(f"deploy-all-iocs ended {status} — catalog not fully planted")
     return deployed
 
 
@@ -340,9 +344,18 @@ def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
         raise RuntimeError(f"c3rberus's inventory shows {sorted(missing)} missing — the "
                            "rendered inventory does not match the range")
     team_nums = list(range(1, len(_teams(comp_dir)) + 1))
+    # The platform's own pre-competition provisioning step: create the red_scoring
+    # account that EVERY IOC deploy authenticates with (the script and the deploy
+    # side resolve the password identically: seeded value in .env). The engine
+    # shipped the credential without planting the identity — every Windows deploy
+    # died LOGON_FAILURE (run-3f39134d, 2026-11-13).
+    print("  c3rberus    : provisioning the scoring account on the boxes...")
+    _ssh(ssh_key, red_ip, f"cd {INSTALL_DIR} && sudo -n venv/bin/python "
+         "scripts/infra/create_red_scoring.py", runner=runner, timeout=1800)
     cred_preflight(ssh_key, red_ip, token, team_nums, runner=runner)
-    deployed = seed.get("deployed") or plant(ssh_key, red_ip, token, team_nums,
-                                            runner=runner)
+    # always plant: deploy-all is idempotent (skip_active reuses, retries failures)
+    # — a truthy count as a skip flag would freeze a half-planted catalog
+    deployed = plant(ssh_key, red_ip, token, team_nums, runner=runner)
     seeded.parent.mkdir(parents=True, exist_ok=True)
     seeded.write_text(json.dumps({"deployed": deployed, "admin_password": admin_pw,
                                   "scoring_password": scoring_pw, "red_ip": red_ip,
