@@ -316,8 +316,9 @@ def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
             # derived state — the backend's startup init rebuilds it from inventory.
             print("  c3rberus    : WARNING — reinitializing the platform database (a prior "
                   "stage rotated admin without persisting the seed)")
-            _ssh(ssh_key, red_ip, "systemctl stop c3rberus-backend && rm -f "
-                 "/opt/c3rberus/db/database.db* && systemctl start c3rberus-backend",
+            _ssh(ssh_key, red_ip,
+                 "sudo -n systemctl stop c3rberus-backend && sudo -n rm -f "
+                 f"{INSTALL_DIR}/db/database.db* && sudo -n systemctl start c3rberus-backend",
                  runner=runner, timeout=180)
             wait_backend(ssh_key, red_ip, runner=runner)
             login = _login(ssh_key, red_ip, DEFAULT_ADMIN[1], runner=runner)
