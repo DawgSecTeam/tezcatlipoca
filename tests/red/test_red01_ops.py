@@ -65,6 +65,14 @@ class Network(unittest.TestCase):
         self.assertIn("to: 192.168.0.0/16\n          via: 10.200.0.1", text)
         self.assertIn("nameservers:\n        addresses: [1.1.1.1, 8.8.8.8]", text)
 
+    def test_each_nic_is_matched_by_mac_not_only_by_name(self):
+        # A name the guest does not carry on the next boot leaves net0 DOWN, which is what a
+        # snapshot rollback is: the reboot is part of the reset, not an edge case.
+        text = r._netplan("eth0", "10.0.0.241", "10.0.0.1", "ens19",
+                          "bc:24:11:ea:89:62", "bc:24:11:bc:79:7b")
+        self.assertIn("macaddress: 'bc:24:11:ea:89:62'", text)
+        self.assertIn("macaddress: 'bc:24:11:bc:79:7b'", text)
+
 
 class Rules(unittest.TestCase):
     def _script(self, **kw):

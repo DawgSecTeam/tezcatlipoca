@@ -194,14 +194,20 @@ def find_template(node, name):
                        f"(a qemu-guest-agent + cloud-init Ubuntu template)")
 
 
-def _netplan(iface, ip, gw, red_iface):
+def _netplan(iface, ip, gw, red_iface, mgmt_mac="", red_mac=""):
     # This static config replaces cloud-init's, resolver included: name DNS here
     # or the box reaches 8.8.8.8 and still resolves nothing.
+    # Each NIC is matched by MAC as well as named: the guest's predictable name is not
+    # stable across a reboot, and a name that does not match leaves net0 DOWN (live: the
+    # file said eth0, a snapshot rollback booted ens18, and the arm could not reach red01).
+    mgmt_match = f"      match:\n        macaddress: '{mgmt_mac}'\n" if mgmt_mac else ""
+    red_match = f"      match:\n        macaddress: '{red_mac}'\n" if red_mac else ""
     return (f"network:\n  version: 2\n  ethernets:\n"
-            f"    {iface}:\n      dhcp4: no\n      addresses: ['{ip}/24']\n"
+            f"    {iface}:\n{mgmt_match}      dhcp4: no\n      addresses: ['{ip}/24']\n"
             f"      nameservers:\n        addresses: [{', '.join(box_dns().split())}]\n"
             f"      routes:\n        - to: default\n          via: {gw}\n"
-            f"    {red_iface}:\n      dhcp4: no\n      addresses: ['{RED_SEGMENT_IP}/24']\n"
+            f"    {red_iface}:\n{red_match}      dhcp4: no\n"
+            f"      addresses: ['{RED_SEGMENT_IP}/24']\n"
             f"      routes:\n        - to: {ROUTE_NOTE}\n          via: {RED_SEGMENT_GW}\n")
 
 
@@ -331,7 +337,8 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
     if not red_iface:
         raise RuntimeError("red01 has one NIC but the red bridge needs a second — "
                            "the clone did not get net1 on the red segment")
-    netplan = _netplan(iface, ip, gw, red_iface)
+    netplan = _netplan(iface, ip, gw, red_iface, mac,
+                       _mac_from_net(cfg.get("net1", "")))
     _write(node, vmid, "/etc/netplan/51-tlaloc.yaml", netplan, "600")
     _write(node, vmid, "/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg",
            "network: {config: disabled}\n", "644")
