@@ -47,6 +47,11 @@ COST = {"low": 0.0, "med": 1.0, "high": 3.0}
 # The gate/arbiter in decide.py treat these differently:
 HIGH_STAKES = ("takedown", "rotate_credlist", "lockout", "block_port")
 
+# Tactics the scrim gate counts beyond the pressure loop's takedown/implant/task trio:
+# one clean use of any of these is the fourth distinct tactic.
+BREADTH_TACTICS = ("persist", "recon", "lockout", "block_port", "rotate_credlist")
+
+
 
 class Candidate(dict):
     @property
@@ -264,6 +269,47 @@ class Policy:
                            "— ease off")
         return True, "ok"
 
+    def _killed_services(self, team):
+        out = set()
+        for impact in self.world.impacts():
+            ip = impact.get("ip")
+            service = impact.get("target_service") or impact.get("service")
+            if ip and service and self.intel.team_of(ip) == team:
+                out.add(_service_key(service))
+        return out
+
+    def _fresh_pressure_exists(self, team):
+        killed = self._killed_services(team)
+        for box in self.intel.boxes():
+            if box["team"] != team:
+                continue
+            for name in self.intel.services_for(box["ip"]):
+                slug = str(name).lower().removesuffix(".service").strip()
+                if slug not in ("ssh", "sshd") and _service_key(name) not in killed:
+                    return True
+        return False
+
+    def pressure_floor(self, chosen_effect=None):
+        """Extra takedowns this cycle to reach red's own concurrent-down cap.
+
+        The cap is the gate's threshold too: a run that only ever re-kills one
+        restored service reads max_simultaneous_down 2 against its own 4.
+        """
+        if not self.impact_started():
+            return 0
+        team = self.focus_team()
+        up, down = (self.counts or {}).get(team, (None, None))
+        max_down = self.max_down_now()
+        if up is None or down is None or not max_down:
+            return 0
+        standing = int((self.red.get("caps") or {}).get("min_standing", 1))
+        gap = min(max_down - down, up - standing)
+        if chosen_effect in ("takedown", "block_port"):
+            gap -= 1
+        budget = int((self.red.get("budget") or {}).get("extra_pressure_max", 1))
+        return max(0, min(gap, budget))
+
+
     def _service_matches(self, a, b):
         a, b = str(a or "").lower(), str(b or "").lower()
         return bool(a and b) and (a in b or b in a)
@@ -339,6 +385,16 @@ class Policy:
         from . import effects as effects_mod
         registered = set(effects_mod.REGISTRY)
         out = [c for c in out if c["effect"] in registered]
+        # The range gate wants four distinct tactics; the pressure loop otherwise
+        # repeats takedown/implant/task only. Only bid for a diversity cycle when
+        # pressure is capped (no takedown on offer) or the second half has room —
+        # otherwise pressure must win and the board never reaches its own cap.
+        used = set((self.world.meta or {}).get("tactics_used") or [])
+        pressure_open = any(c["effect"] == "takedown" for c in out)
+        if len(used) < 4 and (not pressure_open or self.progress() >= 0.5):
+            for cand in out:
+                if cand["effect"] in BREADTH_TACTICS and cand["effect"] not in used:
+                    cand["score"] += 45.0
         for cand in out:
             cand["score"] = round(cand["score"], 2)
             # the gate reads this flag, not its own copy
@@ -418,6 +474,12 @@ class Policy:
             ok, why = self.can_impact(team)
             modes = self.allowed_impact_modes()
             strongest = self.strongest_impact_mode()
+            # Re-hits score higher than fresh pressure (40 vs 6), so without this
+            # switch red only ever re-kills the one service blue restored and the
+            # board never shows more than two down at once.
+            need_breadth = (bool(self.max_down_now())
+                            and len(self._killed_services(team)) < self.max_down_now()
+                            and self._fresh_pressure_exists(team))
             if ok and modes and not dead:
                 for service in self._pressure_targets(ctx, ip, up):
                     if service.get("down") or not service.get("scored"):
@@ -432,6 +494,9 @@ class Policy:
                                                             service.get("down"))
                     if skip:
                         continue
+                    kill, _restore = self._kill_restore(ip, service["name"])
+                    if need_breadth and kill is not None:
+                        continue
                     # One broken mechanism must not eat the window: the effect refuses
                     # after two failures, so offering it again only spends the pick.
                     # A first failure demotes it below a fresh target (live: four
@@ -443,8 +508,10 @@ class Policy:
                         "takedown",
                         {"ip": ip, "service": service["name"], "mode": mode,
                          "access": access},
-                        BASE_SCORE["takedown"] + rot + score_bonus - 20 * fails,
-                        f"{service['name']} is a scored service on {ip}; {why}; "
+                        BASE_SCORE["takedown"] + rot + score_bonus - 20 * fails
+                        + (40 if need_breadth else 0),
+                        ("breadth: " if need_breadth else "")
+                        + f"{service['name']} is a scored service on {ip}; {why}; "
                         f"mechanism {mode}; via {access}"
                         + (f"; {fails} failed attempt(s) — rotate" if fails else ""),
                         cost="low", tag=f"{mode} {service['name']}@{ip}",

@@ -56,19 +56,16 @@ def test_loop_runs_cycles_through_the_gate_and_writes_reports(tmp_path):
                            escalation="sudo")
     candidates = policy.candidates(ctx)
     takedown = next(c for c in candidates if c["effect"] == "takedown")
-    decider.clef = StubClef(answers={
-        "A": {"type": "noul", "noul": 0.1},
-        "B": {"type": "noul", "noul": 0.1},
-        "C": {"type": "noul", "noul": 0.1},
-        "D": {"type": "noul", "noul": 0.1},
-        "E": {"type": "noul", "noul": 0.1},
-        "F": {"type": "noul", "noul": 0.95},
-        "G": {"type": "noul", "noul": 0.1},
-        "H": {"type": "noul", "noul": 0.1},
-        "HOLD": {"type": "noul", "noul": 0.05},
-        "pressure_count": {"type": "score", "score": 0.0,
-                           "probabilities": {"0": 0.9, "1": 0.1}},
-        "escalate_now": {"type": "noul", "noul": 0.05}})
+    # Choose the takedown by its position, not a fixed letter: the candidate list
+    # is score-ordered, so any policy scoring change moves it.
+    letters = "ABCDEFGH"
+    answers = {letter: {"type": "noul", "noul": 0.1} for letter in letters}
+    answers[letters[candidates.index(takedown)]] = {"type": "noul", "noul": 0.95}
+    answers["HOLD"] = {"type": "noul", "noul": 0.05}
+    answers["pressure_count"] = {"type": "score", "score": 0.0,
+                                 "probabilities": {"0": 0.9, "1": 0.1}}
+    answers["escalate_now"] = {"type": "noul", "noul": 0.05}
+    decider.clef = StubClef(answers=answers)
 
     loop = Loop(ctx, policy=policy, decider=decider, sensors=ctx.sensors,
                 sleeper=lambda _s: None)

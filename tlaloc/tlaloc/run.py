@@ -166,7 +166,11 @@ class Loop:
                 executed.append(self._run_candidate(stronger, source=escalate.source))
 
         budget = self.decider.pressure_count(digest, cycle=self.cycle)
-        wanted = int(budget.answer or 0)
+        # The score answer is the model's tempo, but red's own concurrent-down cap
+        # is deterministic: if the cycle's pick plus this budget cannot reach it,
+        # the cap is never tested and the board never shows the pressure.
+        wanted = max(int(budget.answer or 0),
+                     self.policy.pressure_floor((decision.chosen or {}).get("effect")))
         landed = 0
         # The budget is a target, not an allocation. A candidate the guardrails
         # refuse — ssh is our own access path — must not absorb it: fall through
@@ -233,6 +237,12 @@ class Loop:
                          "detail": (e.get("detail") or "")[:300]}
                         for e in executed if e],
         }
+        used = list(self.ctx.world.meta.get("tactics_used") or [])
+        for entry in executed:
+            effect = entry.get("effect") if entry else None
+            if effect and entry.get("ok") and effect not in used:
+                used.append(effect)
+        self.ctx.world.meta["tactics_used"] = used
         self.ctx.world.save()
         # A transport failure is an access decision, not another identical takedown.
         for entry in executed:

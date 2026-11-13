@@ -473,3 +473,33 @@ def test_a_dead_c2_implant_is_not_a_persist_family(tmp_path):
     cands = [c for c in policy.candidates(ctx)
              if c["effect"] == "persist" and c["params"]["ip"] == ip]
     assert all(c["params"]["family"] != "c2-implant" for c in cands)
+
+
+def test_pressure_floor_fills_reds_own_concurrent_cap(tmp_path):
+    ctx, policy = policy_for(tmp_path)
+    ctx.world.meta["event_start"] = policy._now() - 20 * 60
+    ctx.cfg["red"]["caps"]["max_down"] = 4
+    team = policy.focus_team()
+    policy.update_counts({team: (6, 2)})
+    assert policy.pressure_floor("takedown") == 1
+    assert policy.pressure_floor("recon") == 2
+    policy.update_counts({team: (6, 4)})
+    assert policy.pressure_floor("recon") == 0
+
+
+def test_an_unused_tactic_is_worth_a_cycle(tmp_path):
+    ctx, policy = policy_for(tmp_path, hours=0.6)
+    ctx.world.meta["event_start"] = policy._now() - policy.duration_sec * 0.6
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    persist = [c for c in policy.candidates(ctx) if c["effect"] == "persist"]
+    assert persist and persist[0]["score"] >= 90
+    ctx.world.meta["tactics_used"] = ["persist"]
+    persist = [c for c in policy.candidates(ctx) if c["effect"] == "persist"]
+    assert persist and persist[0]["score"] < 90
+
+
+def test_killed_services_counts_the_aimed_at_service(tmp_path):
+    ctx, policy = policy_for(tmp_path)
+    ctx.world.add_impact("192.168.1.10", "lighttpd", "stop", target_service="splunk")
+    assert "splunk" in policy._killed_services(ctx.intel.team_of("192.168.1.10"))
