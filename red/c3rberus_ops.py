@@ -207,6 +207,16 @@ def render_env(comp_dir, box_pw, *, red_ip, scoring_pw):
         # result POST, and the awaited future orphans — deploy_all then NEVER
         # completes (run-64f7c02a: 28 children parked 'running' for 45 min).
         "NXC_DEPLOY_TIMEOUT=300",
+        # The installed build's put_file path (pivot + per-box putfile acquires)
+        # still uses TWO run_in_executor submissions — the single-task
+        # _acquire_both fix covers _run only. Under a full deploy-all the
+        # acquire pool (NXC_MAX_CONCURRENT+20 threads) fills with stage-1
+        # holders and stage-2 acquires starve: zero nxc, zero timeouts, forever
+        # (run-dfccb687 froze 17:37 with 40/40 threads parked; the fork's own
+        # wrapper.py comment logs the identical 2026-06-20 incident). Pool =
+        # limit+20, so a bigger limit leaves free threads for release paths;
+        # real exec concurrency stays capped by PER_BOX=10 x 8 boxes either way.
+        "NXC_MAX_CONCURRENT=140",
         "SLIVER_CFG_PATH=./sliver_operator.cfg",
         "RED_SCORING_ENABLED=true", "RED_SCORING_USERNAME=red_scoring",
         "RED_SCORING_DOMAIN=", f"RED_SCORING_PASSWORD={scoring_pw}",
