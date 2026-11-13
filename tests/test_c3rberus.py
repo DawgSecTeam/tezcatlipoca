@@ -75,3 +75,15 @@ def test_render_env(tmp_path):
     assert kv["SA_COLLECTION_ENABLED"] == "false"   # boxes pristine until T0
     assert kv["NMAP_HEALTH_ENABLED"] == "false"
     assert kv["DEV_MODE"] == "False"
+    assert kv["MTLS_LISTENER_PORT"] == "38888"      # offset from tlaloc's 8888
+
+
+def test_transport_map_extension_survives_the_firewall_normalizer():
+    # run-c7f1dde4 died here: the first extension flattened the map to a port LIST and
+    # the normalizer's dict.items() (plus a sorted() mixing names and ints) exploded.
+    from red import red01_ops
+    tlaloc_map = {"mtls": {"gateway": 8888, "server": "8888"}}
+    specs = red01_ops._callback_ports(
+        None, c3rberus_ops.extend_transport_map(tlaloc_map))
+    assert [s["name"] for s in specs] == ["mtls", "c3rberus-mtls", "c3rberus-stage"]
+    assert all(isinstance(s["server"], int) for s in specs)

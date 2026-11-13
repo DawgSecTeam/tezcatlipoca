@@ -670,10 +670,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     # import: c3rberus_ops imports this module at load time.
     from red import c3rberus_ops
     if c3rberus_ops.selected(comp_dir):
-        callback_ports = dict(callback_ports or {})
-        for name, port in zip(("c3rberus-mtls", "c3rberus-stage"),
-                              c3rberus_ops.PLATFORM_LISTENER_PORTS):
-            callback_ports.setdefault(name, {"gateway": port, "server": port})
+        callback_ports = c3rberus_ops.extend_transport_map(callback_ports)
     red01_ops.install_engine_rules(
         getattr(ctx, "scoring_ip", "") or "", ssh_key,
         engine_user=getattr(ctx, "scoring_user", "sysadmin"),

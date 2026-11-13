@@ -34,6 +34,16 @@ def selected(comp_dir):
         not in ("", "0", "off", "false")
 
 
+def extend_transport_map(ports):
+    """The sliver transport map plus this platform's own listener entries (gateway ==
+    server, the same-port shape tlaloc's entries use — the engine firewall timer rewrites
+    everything from this map, so an absent entry is an unreachable C2)."""
+    out = dict(ports or {})
+    for name, port in zip(("c3rberus-mtls", "c3rberus-stage"), PLATFORM_LISTENER_PORTS):
+        out.setdefault(name, {"gateway": port, "server": port})
+    return out
+
+
 def repo_url(comp_dir):
     import os
     return (compfile_lines(Path(comp_dir)).get("c3rberus_repo")
