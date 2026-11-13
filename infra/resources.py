@@ -70,10 +70,18 @@ def cloudinit_gate(tagged_by_name, boxes, label=""):
         if box.get("unmanaged"):
             continue  # unmanaged boxes get no cloud-init identity (the create path skips the block)
         name = box.get("template")
-        vm = tagged_by_name.get(name)
-        if vm is None or name in seen:
+        cands = tagged_by_name.get(name) or []
+        if not cands or name in seen:
             continue
         seen.add(name)
+        if len(cands) > 1:
+            # A name two templates share resolves differently in the clone path than here —
+            # that split once cloned from the drive-less twin while this gate passed (109/1016).
+            raise SystemExit(
+                f"  ERROR: box template name '{name}' is ambiguous: vmids "
+                f"{sorted(v['vmid'] for v in cands)} are all tagged templates on this node — "
+                "clones would take whichever listing order favors. Rename the stale one.")
+        vm = cands[0]
         vmid, node = vm.get("vmid"), vm.get("node")
         try:
             config = proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/config")["data"]
@@ -101,7 +109,7 @@ def tagged_templates(vms):
     for vm in vms:
         if vm.get("template") == 1 and "template" in (vm.get("tags") or "").split(";"):
             tagged.add(vm.get("name"))
-            by_name.setdefault(vm.get("name"), vm)
+            by_name.setdefault(vm.get("name"), []).append(vm)
     return tagged, by_name
 
 

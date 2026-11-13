@@ -30,6 +30,9 @@ def _vm_exists(node, vmid):
 
 
 # The satellite's own endpoint owns its templates; a primary-side cluster query would never see them.
+# Colliding names collect into a list instead of silently overwriting: a duplicate template name
+# once made preflight verify one vmid while the clones took the other (109 vs 1016, 2026-11-12),
+# and the goldens booted with no cloud-init drive. Resolve every read through template_vmid().
 def _template_vmid_map(node):
     vms = cluster_vms_for(node)
     out = {}
@@ -39,8 +42,19 @@ def _template_vmid_map(node):
         # /cluster/resources joins tags with ';' (config GET uses ','), so split on both.
         tags = {t.strip() for t in str(vm.get("tags") or "").replace(";", ",").split(",") if t.strip()}
         if "template" in tags and vm.get("status") == "stopped":
-            out[vm["name"]] = vm["vmid"]
+            prev = out.get(vm["name"])
+            out[vm["name"]] = vm["vmid"] if prev is None else \
+                sorted({*(prev if isinstance(prev, list) else [prev]), vm["vmid"]})
     return out
+
+
+def template_vmid(template_map, name):
+    vmid = template_map.get(name)
+    if isinstance(vmid, list):
+        raise RuntimeError(
+            f"template name '{name}' is ambiguous: vmids {vmid} are all stopped templates — "
+            "rename the stale one; a clone would boot whichever ordering decides")
+    return vmid
 
 
 # A malformed domain_roles.json raises rather than reading as no-domain, which would give every

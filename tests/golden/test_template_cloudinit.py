@@ -37,8 +37,20 @@ class CloudinitGate(unittest.TestCase):
         out = io.StringIO()
         with patch.object(preflight_templates, "proxmox_api", _api(config, fail=fail)), \
              contextlib.redirect_stdout(out):
-            n = preflight_templates.cloudinit_gate({name: _vm(name)}, boxes)
+            n = preflight_templates.cloudinit_gate({name: [_vm(name)]}, boxes)
         return n, out.getvalue()
+
+    def test_one_name_two_templates_refuses(self):
+        # .150 lived this: preflight verified base-fedora44 vmid 1016 while the clone
+        # path took the stale drive-less 109 of the same name.
+        with self.assertRaises(SystemExit) as cm:
+            preflight_templates.cloudinit_gate(
+                {"base-fedora44": [_vm("base-fedora44", 109), _vm("base-fedora44", 1016)]},
+                [{"name": "web01", "template": "base-fedora44"}])
+        msg = str(cm.exception)
+        self.assertIn("ambiguous", msg)
+        self.assertIn("109", msg)
+        self.assertIn("1016", msg)
 
 
     def test_linux_without_ci_fails_naming_vmid_name_and_fix(self):
@@ -57,6 +69,16 @@ class CloudinitGate(unittest.TestCase):
         n, out = self._run({"ostype": "l26"}, fail=True)
         self.assertEqual(n, 0)
         self.assertIn("UNVERIFIED", out)
+
+
+class TemplateVmid(unittest.TestCase):
+    def test_accessor(self):
+        from golden.golden_target_ops import template_vmid
+        self.assertEqual(template_vmid({"x": 109}, "x"), 109)
+        self.assertIsNone(template_vmid({}, "x"))
+        with self.assertRaises(RuntimeError) as cm:
+            template_vmid({"x": [109, 1016]}, "x")
+        self.assertIn("ambiguous", str(cm.exception))
 
 
 if __name__ == "__main__":

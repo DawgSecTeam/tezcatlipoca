@@ -29,6 +29,7 @@ from golden.golden_target_ops import (
     _vm_exists,
     _template_vmid_map,
     golden_targets,
+    template_vmid,
 )
 from golden.golden_disk_ops import ensure_golden_disk_size, expand_guest_root_disks
 from estate import config
@@ -60,6 +61,11 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
     # (live: cde-2026 reuse run-438f7c08). A foreign comp's template still fails this set.
     reclaim_set = ownership_tags(competition_name(comp_dir), None, GOLDEN_TAG)
     for t in cold:
+        # Resolve BEFORE anything is destroyed: an ambiguous source must refuse the
+        # rebuild, not eat the old golden and then fail to name the new one.
+        src = template_vmid(templates, t["box"]["template"])
+        if src is None:
+            raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
         # A clone task that outlived its task-wait leaves only the BASE image's inherited tags, which
         # the strict guard refuses forever — adopt one on our slot with our clone marker.
         try:
@@ -75,9 +81,6 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
         except Exception:
             pass  # slot empty, or unreadable — the strict destroy below decides
         destroy_vm_if_exists(node, t["vmid"], expect_tags=reclaim_set)
-        src = templates.get(t["box"]["template"])
-        if src is None:
-            raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
         upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone",
                            data=full_clone_data(t["vmid"], t["vm_name"], competition_name(comp_dir)))["data"]
         wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
@@ -99,7 +102,7 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
     # loser died with `can't lock file ... got timeout`. Retry covers a foreign holder.
     for t in missing:
         skipped = False
-        src = templates.get(t["box"]["template"])
+        src = template_vmid(templates, t["box"]["template"])
         if src is None:
             raise RuntimeError(f"no stopped template named '{t['box']['template']}' on the node")
         with storage_queue_lock(node):
