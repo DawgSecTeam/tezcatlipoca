@@ -166,3 +166,28 @@ def test_probe_fetch_source_extracts_tagged_client(monkeypatch):
     assert nat == "10.0.0.251"
     assert "curl -sk" in seen["remote"] and "192.168.127.4" in seen["remote"]
     assert "Authorization: Bearer" in seen["remote"]          # bound to THIS probe, not history
+
+
+def test_stage_rewrite_targets_the_env_declared_inventory(monkeypatch):
+    # the backend loads INVENTORY_FILE=config/inventory.yml — rewriting the
+    # top-level file (where bootstrap STAGED it) is a silent no-op (run-9fcc1b2c)
+    import red.c3rberus_ops as m
+    calls = []
+
+    def fake_ssh(key, ip, remote, **kw):
+        calls.append((kw.get("input"), remote))
+
+        class R:
+            returncode, stdout, stderr = 0, "10.0.0.251\n", ""
+        return R()
+    monkeypatch.setattr(m, "_ssh", fake_ssh)
+    monkeypatch.setattr(m, "_probe_fetch_source", lambda *a, **k: "10.0.0.251")
+    monkeypatch.setattr(m, "wait_backend", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_api", lambda *a, **k: {"status": "ok", "boxes": []})
+    monkeypatch.setattr(m, "cred_preflight", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_provision_linux_scoring", lambda *a, **k: None)
+    monkeypatch.setattr(m, "plant", lambda *a, **k: [])
+    import pathlib
+    root = pathlib.Path(c3rberus_ops.__file__).parent  # unused; keep import light
+    src = pathlib.Path(m.__file__).read_text()
+    assert "tee /opt/c3rberus/config/inventory.yml" in src

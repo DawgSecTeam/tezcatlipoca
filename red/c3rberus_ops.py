@@ -410,7 +410,7 @@ def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
     # that the script server answers, pin the real fetch source and re-boot the
     # backend so its boot-derived inventory/credentials carry the corrected boxes.
     nat = _probe_fetch_source(ssh_key, red_ip, comp_dir, box_pw, runner=runner)
-    _ssh(ssh_key, red_ip, "sudo -n tee /opt/c3rberus/inventory.yml >/dev/null",
+    _ssh(ssh_key, red_ip, "sudo -n tee /opt/c3rberus/config/inventory.yml >/dev/null",
          input=render_inventory(comp_dir, box_pw, red_ip=red_ip, fetch_source=nat),
          runner=runner, timeout=120)
     _ssh(ssh_key, red_ip, "sudo -n systemctl restart c3rberus-backend",
