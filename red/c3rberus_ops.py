@@ -548,6 +548,42 @@ def _token_for(comp_dir, ssh_key, red_ip, runner=None):
     return token, seed
 
 
+def ensure_live(comp_dir, *, ssh_key, red_ip=None, runner=None):
+    """Skip-deploy counterpart of stage(): the platform is ALREADY the event's —
+    adopt it, prove it, touch nothing. A --skip-deploy scrim that re-ran stage()
+    would rewrite the inventory, restart the backend mid-event (operator state
+    gone) and full-re-plant 76 IOCs over whatever blue has remediated — scoring
+    amnesia dressed as idempotency. Verifies: units enabled, login works, every
+    box still carries a catalog."""
+    comp_dir = Path(comp_dir)
+    seeded = comp_dir / "red" / SEED_FILE
+    if not seeded.exists():
+        raise RuntimeError("c3rberus ensure-live: no seed document — deploy the "
+                           "comp (full scrim) before skipping deploy")
+    for unit in ("c3rberus-backend", "c3rberus-sliver"):
+        out = _ssh(ssh_key, red_ip or json.loads(seeded.read_text())["red_ip"],
+                    f"systemctl is-active {unit}", runner=runner, timeout=60,
+                    check=False)
+        if "active" not in (out.stdout or "") or "inactive" in (out.stdout or ""):
+            raise RuntimeError(f"c3rberus ensure-live: {unit} is not active — "
+                               f"the platform died before the event even started")
+    token, seed = _token_for(comp_dir, ssh_key, red_ip, runner=runner)
+    resp = _api(ssh_key, seed["red_ip"], token, "GET", "/c2/iocs/deployed",
+                runner=runner)
+    rows = resp.get("deployed", []) if isinstance(resp, dict) else (resp or [])
+    per = Counter(r.get("box_ip") for r in rows if r.get("status") == "active")
+    healthy = sum(1 for n in per.values() if n >= 25)
+    planted = sum(per.values())
+    if healthy < len(per) or healthy < 8:
+        raise RuntimeError(
+            f"c3rberus ensure-live: catalog is not event-ready ({planted} rows, "
+            f"{healthy} healthy of {len(per)} box IPs) — run a full deploy first")
+    print(f"  c3rberus    : adopted live — {planted} active rows on {healthy} "
+          f"boxes (no re-stage, no re-plant)")
+    return {"platform": "c3rberus", "red_ip": seed["red_ip"], "deployed": planted,
+            "boxes": sorted(ip for ip, n in per.items() if n >= 25)}
+
+
 def begin(comp_dir, *, ssh_key, red_ip=None, runner=None):
     """T0 hook: flip the box-touching loops on and start the competition — the
     scheduler fires its first check cycle immediately (start_comp semantics)."""

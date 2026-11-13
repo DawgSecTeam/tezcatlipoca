@@ -254,8 +254,15 @@ def stage_red(args, comp, creds, run_dir):
     # an event with half its red tooling silently missing is the thing we're fixing.
     from red import c3rberus_ops
     if c3rberus_ops.selected(comp):
-        info = c3rberus_ops.stage(comp, ssh_key=ssh_key, red_ip=args.red_ip,
-                                  box_pw=core.read_state(comp).get("box_password", ""))
+        if getattr(args, "skip_deploy", False):
+            # a live event must inherit the planted platform, not re-derive it:
+            # stage() rewrites inventory, restarts the backend and re-plants all
+            # 76 IOCs over blue's remediations (run-c1cabbd9 mid-event rewrite).
+            info = c3rberus_ops.ensure_live(comp, ssh_key=ssh_key,
+                                            red_ip=args.red_ip)
+        else:
+            info = c3rberus_ops.stage(comp, ssh_key=ssh_key, red_ip=args.red_ip,
+                                      box_pw=core.read_state(comp).get("box_password", ""))
         ctx.state["red"]["c3rberus"] = info
     try:
         from guests import clean_trails
