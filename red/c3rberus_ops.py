@@ -94,6 +94,13 @@ def _login(ssh_key, red_ip, password, *, runner=None):
     return doc["token"], doc.get("user_id", 1)
 
 
+def _login_or_none(ssh_key, red_ip, password, *, runner=None):
+    try:
+        return _login(ssh_key, red_ip, password, runner=runner)
+    except RuntimeError:
+        return None
+
+
 # ---------------------------------------------------------------- inventory + env
 
 def _compfile(comp_dir):
@@ -297,17 +304,36 @@ def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
     install(ssh_key, red_ip, comp_dir=comp_dir, box_pw=box_pw, scoring_pw=scoring_pw,
             runner=runner)
     wait_backend(ssh_key, red_ip, runner=runner)
-    token, user_id = _login(ssh_key, red_ip, DEFAULT_ADMIN[1], runner=runner)
-    if not seed.get("admin_password"):
+    # The seed must be on disk BEFORE anything can raise after it: a rotated admin
+    # password that was never persisted strands the platform behind credentials nobody
+    # holds (run-3a343726, parity died between rotate and write).
+    if seed.get("admin_password"):
+        token, user_id = _login(ssh_key, red_ip, seed["admin_password"], runner=runner)
+    else:
+        login = _login_or_none(ssh_key, red_ip, DEFAULT_ADMIN[1], runner=runner)
+        if login is None:
+            # A crashed earlier stage rotated and lost the password. Pre-plant the DB is
+            # derived state — the backend's startup init rebuilds it from inventory.
+            print("  c3rberus    : WARNING — reinitializing the platform database (a prior "
+                  "stage rotated admin without persisting the seed)")
+            _ssh(ssh_key, red_ip, "systemctl stop c3rberus-backend && rm -f "
+                 "/opt/c3rberus/db/database.db* && systemctl start c3rberus-backend",
+                 runner=runner, timeout=180)
+            wait_backend(ssh_key, red_ip, runner=runner)
+            login = _login(ssh_key, red_ip, DEFAULT_ADMIN[1], runner=runner)
+        token, user_id = login
         # the published db_init password is public knowledge — rotate on first boot
-        doc = _api(ssh_key, red_ip, token, "POST", "/admin/change_password",
-                   body={"user_id": user_id, "password": admin_pw}, runner=runner)
+        _api(ssh_key, red_ip, token, "POST", "/admin/change_password",
+             body={"user_id": user_id, "password": admin_pw}, runner=runner)
+        seeded.parent.mkdir(parents=True, exist_ok=True)
+        seeded.write_text(json.dumps({"admin_password": admin_pw,
+                                      "scoring_password": scoring_pw, "red_ip": red_ip}))
         token, _ = _login(ssh_key, red_ip, admin_pw, runner=runner)
-    board = _api(ssh_key, red_ip, token, "GET", "/scoreboard", runner=runner)
+    board = _api(ssh_key, red_ip, token, "GET", "/boxes", runner=runner)
     seen = {ip for ip in _walk_ips(board)}
     missing = want_boxes(comp_dir) - seen
     if missing:
-        raise RuntimeError(f"c3rberus's scoreboard never loaded {sorted(missing)} — the "
+        raise RuntimeError(f"c3rberus's inventory shows {sorted(missing)} missing — the "
                            "rendered inventory does not match the range")
     team_nums = list(range(1, len(_teams(comp_dir)) + 1))
     cred_preflight(ssh_key, red_ip, token, team_nums, runner=runner)
