@@ -11,5 +11,5 @@ def test_the_operator_config_provider_id_matches_the_call_argv():
            .replace("{BASE_URL}", base)
            .replace("{API_KEY_FIELD}", "{env:TEZ_LITELLM_API_KEY}")
            .replace("{MODEL_ID}", "qwen3.8-flash-next-alt"))
-    assert f'"{endpoints.provider_key(base)}": {' in cfg
+    assert '"%s": {' % endpoints.provider_key(base) in cfg
     assert "tez:" not in cfg
