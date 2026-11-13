@@ -109,6 +109,9 @@ class GoldenBuildHarness:
             return {"data": "UPID:test"}
         if method == "GET" and path.endswith("/qemu"):
             return {"data": []}
+        if method == "GET" and path.endswith("/config"):
+            # planted-VM reads: every fake clone came from base-linux, vmid 900 in the map
+            return {"data": {"description": "tezcatlipoca-clone comp from-template=900"}}
         return {"data": {}}
 
     def _snapshot(self, node, vmid, name, description="", timeout=900):

@@ -28,6 +28,7 @@ from golden.golden_target_ops import (
     _is_template,
     _vm_exists,
     _template_vmid_map,
+    golden_source_of,
     golden_targets,
     template_vmid,
 )
@@ -82,7 +83,7 @@ def _build_unbooted_goldens(node, cold, templates, comp_dir, own_set, ownership_
             pass  # slot empty, or unreadable — the strict destroy below decides
         destroy_vm_if_exists(node, t["vmid"], expect_tags=reclaim_set)
         upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone",
-                           data=full_clone_data(t["vmid"], t["vm_name"], competition_name(comp_dir)))["data"]
+                           data=full_clone_data(t["vmid"], t["vm_name"], competition_name(comp_dir), src=src))["data"]
         wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
         proxmox_api("PUT", f"/nodes/{node}/qemu/{t['vmid']}/config", data={
             "net0": f"virtio,bridge={t['bridge']}", "tags": ownership_tag_str})
@@ -124,7 +125,7 @@ def _clone_missing_goldens(node, missing, templates, comp_dir, ctx, box_password
                 else:
                     gc_orphan_volumes(node, t["vmid"])
                 upid = proxmox_api("POST", f"/nodes/{node}/qemu/{src}/clone",
-                                   data=full_clone_data(t["vmid"], t["vm_name"], competition_name(comp_dir)))["data"]
+                                   data=full_clone_data(t["vmid"], t["vm_name"], competition_name(comp_dir), src=src))["data"]
                 try:
                     wait_for_proxmox_task(node, upid, timeout=GOLDEN_CLONE_TIMEOUT)
                     break
@@ -304,6 +305,25 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     missing = [t for t in missing if t in booted]
     planted = [t for t in planted if t in booted]
     targets_all, targets = targets, booted
+
+    # A booted-but-unconverted golden is reused as-is unless its stamped provenance says it
+    # came from a DIFFERENT base than the name resolves to now — a full clone of the wrong
+    # twin is unfixable by config PUTs (live 2026-11-13: fedora 109 planted while preflight
+    # verified 1016). Re-clone those; cold targets already rebuild themselves.
+    for t in list(planted):
+        try:
+            cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
+        except Exception:
+            continue                                        # the clone path's own guards decide
+        want = template_vmid(templates, t["box"]["template"])
+        got = golden_source_of(cfg)
+        if got != want:
+            print(f"  Golden {t['vm_name']} (vmid {t['vmid']}): cloned from "
+                  f"{got if got is not None else 'unrecorded'}, "
+                  f"'{t['box']['template']}' resolves to {want} — re-cloning")
+            destroy_vm_if_exists(node, t["vmid"], expect_tags=own_set)
+            planted.remove(t)
+            missing.append(t)
 
     # A golden planted on an unchanged hash does not need it redone; trusted only while SNAP_BASE
     # exists, so a re-cloned golden is not mistaken for a done one.

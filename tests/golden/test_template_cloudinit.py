@@ -80,6 +80,15 @@ class TemplateVmid(unittest.TestCase):
             template_vmid({"x": [109, 1016]}, "x")
         self.assertIn("ambiguous", str(cm.exception))
 
+    def test_clone_stamps_source_and_parser_reads_it(self):
+        # tonight's failure mode: a golden slot holding a full clone of some OTHER vm
+        from infra.ownership import full_clone_data
+        from golden.golden_target_ops import golden_source_of
+        data = full_clone_data(1430, "golden-web01", "CDE-2026", src=1016)
+        self.assertEqual(golden_source_of({"description": data["description"]}), 1016)
+        self.assertIsNone(golden_source_of({"description": "tezcatlipoca-clone x"}))
+        self.assertIsNone(golden_source_of(None))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 """Golden slot arithmetic: vmids, IPs, template lookup, per-box target records."""
 
 import json
+import re
 
 from common.constants import GOLDEN_IP_BASE
 from infra.client import cluster_vms_for, proxmox_api
@@ -55,6 +56,12 @@ def template_vmid(template_map, name):
             f"template name '{name}' is ambiguous: vmids {vmid} are all stopped templates — "
             "rename the stale one; a clone would boot whichever ordering decides")
     return vmid
+
+
+def golden_source_of(config):
+    """The template vmid a golden clone was stamped with, or None (never recorded)."""
+    m = re.search(r"from-template=(\d+)", str((config or {}).get("description") or ""))
+    return int(m.group(1)) if m else None
 
 
 # A malformed domain_roles.json raises rather than reading as no-domain, which would give every
