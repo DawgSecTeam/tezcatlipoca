@@ -126,7 +126,7 @@ def _teams(comp_dir):
     return json.loads((Path(comp_dir) / "teams.json").read_text())
 
 
-def render_inventory(comp_dir, box_pw, *, red_ip):
+def render_inventory(comp_dir, box_pw, *, red_ip, fetch_source=None):
     """Live estate truth in c3rberus's inventory dialect.
 
     Explicit `os:` everywhere: c3rberus maps IOCs by exact string equality and its
@@ -169,6 +169,11 @@ def render_inventory(comp_dir, box_pw, *, red_ip):
             entry = {"name": f"{box['name']}-{tid}", "ip": f"192.168.{tid}.{box['last_octet']}",
                      "os": kind, "username": box_user if kind == "linux" else ".\\Administrator",
                      "password": box_pw, "port": 22 if kind == "linux" else 5985}
+            if fetch_source:
+                # HMAC fetch tokens bind to the source ip the script server sees; the
+                # lab router NATs every box, so a box_ip-signed token 401s with
+                # signature-mismatch on every fetch (run-4f784bed) — sign the NAT ip.
+                entry["fetch_source_ip"] = fetch_source
             if kind == "windows":
                 entry["connection"] = "winrm"
                 entry["domain"] = domain
@@ -330,7 +335,7 @@ def plant(ssh_key, red_ip, token, team_nums, *, runner=None):
                runner=runner, timeout=60)
     print(f"  c3rberus    : build-all-iocs {_wait_task(ssh_key, red_ip, token, doc.get('task_id'), runner=runner, timeout_s=3600)}")
     doc = _api(ssh_key, red_ip, token, "POST", "/admin/deploy-all-iocs",
-               body={"include_implants": True, "skip_active": True, "team_nums": team_nums},
+               body={"include_implants": True, "skip_active": False, "team_nums": team_nums},
                runner=runner, timeout=60)
     if not doc.get("task_id"):
         raise RuntimeError(f"deploy-all-iocs refused: {doc}")
@@ -345,6 +350,45 @@ def plant(ssh_key, red_ip, token, team_nums, *, runner=None):
     return deployed
 
 
+def _probe_fetch_source(ssh_key, red_ip, comp_dir, box_pw, *, runner=None):
+    """What source ip does the script server actually see a box fetch come from?
+    The lab router NATs every box LAN->lab, and HMAC fetch tokens bind to that
+    observed ip — a box_ip-signed token 401s signature-mismatch on EVERY deploy
+    fetch (run-4f784bed). Ask live rather than trusting any constant."""
+    box_user = "blueteam"
+    try:
+        box_user = json.loads((Path(comp_dir) / "users.json").read_text()).get(
+            "box_username", box_user)
+    except (OSError, ValueError):
+        pass
+    for rec in sorted(_teams(comp_dir).values(), key=lambda r: r["identifier"]):
+        for box in _boxes(comp_dir):
+            kind = box_os(box.get("template"))
+            if kind == "linux" and not box.get("in_path") and kind != "firewall":
+                ip = f"192.168.{rec['identifier']}.{box['last_octet']}"
+                break
+        else:
+            continue
+        break
+    else:
+        raise RuntimeError("no linux box to probe for the fetch source")
+    tag = secrets.token_hex(6)
+    r = _ssh(ssh_key, red_ip,
+             f"nxc ssh {ip} -u {box_user} -p {shlex.quote(box_pw)} -x "
+             f"'curl -sk --max-time 8 https://{red_ip}:4000/scripts/z{tag}' "
+             f">/dev/null 2>&1; cd /opt/c3rberus && "
+             f"sudo -n grep -ah z{tag} "
+             f"$(sudo -n ls -t logs/*.log 2>/dev/null | head -1) 2>/dev/null "
+             f"| grep -oE 'client=[0-9.]+' | tail -1 | cut -d= -f2",
+             runner=runner, timeout=120, check=False)
+    nat = (r.stdout or "").strip().splitlines()[-1].strip() if (r.stdout or "").strip() else ""
+    if not nat.count(".") == 3:
+        raise RuntimeError(f"fetch-source probe saw nothing from {ip} — script server down? "
+                           f"({nat!r})")
+    print(f"  c3rberus    : boxes reach the script server as {nat} (lab NAT source)")
+    return nat
+
+
 def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
     """Phase 7 / scrim hook, run AFTER tlaloc plants: install (adopt on re-stage),
     rotate the published admin password, prove the platform sees the range, plant
@@ -357,6 +401,16 @@ def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
     admin_pw = seed.get("admin_password") or secrets.token_urlsafe(15)
     install(ssh_key, red_ip, comp_dir=comp_dir, box_pw=box_pw, scoring_pw=scoring_pw,
             runner=runner)
+    wait_backend(ssh_key, red_ip, runner=runner)
+    # Inventory was written blind (no server to probe during first install); now
+    # that the script server answers, pin the real fetch source and re-boot the
+    # backend so its boot-derived inventory/credentials carry the corrected boxes.
+    nat = _probe_fetch_source(ssh_key, red_ip, comp_dir, box_pw, runner=runner)
+    _ssh(ssh_key, red_ip, "sudo -n tee /opt/c3rberus/inventory.yml >/dev/null",
+         input=render_inventory(comp_dir, box_pw, red_ip=red_ip, fetch_source=nat),
+         runner=runner, timeout=120)
+    _ssh(ssh_key, red_ip, "sudo -n systemctl restart c3rberus-backend",
+         runner=runner, timeout=60)
     wait_backend(ssh_key, red_ip, runner=runner)
     # The seed must be on disk BEFORE anything can raise after it: a rotated admin
     # password that was never persisted strands the platform behind credentials nobody

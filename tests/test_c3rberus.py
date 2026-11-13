@@ -105,6 +105,10 @@ def test_render_inventory_never_pins_scoring_password(tmp_path):
     doc = yaml.safe_load(c3rberus_ops.render_inventory(c, "SECRETpw", red_ip="10.0.0.247"))
     assert not any("scoring_password" in b for team in doc["teams"] for b in team["boxes"])
     assert doc["scoring_account"]["username"] == "red_scoring"
+    doc = yaml.safe_load(c3rberus_ops.render_inventory(
+        c, "SECRETpw", red_ip="10.0.0.247", fetch_source="10.0.0.251"))
+    assert all(b.get("fetch_source_ip") == "10.0.0.251"
+               for team in doc["teams"] for b in team["boxes"])
 
 
 def test_provision_linux_scoring_lands_root_and_rejects_failure(monkeypatch):
@@ -137,3 +141,28 @@ def test_provision_linux_scoring_lands_root_and_rejects_failure(monkeypatch):
     import pytest
     with pytest.raises(RuntimeError):
         m._provision_linux_scoring("k", "10.0.0.247", inv, "n0t_sus1", "SCORpw")
+
+
+def test_probe_fetch_source_extracts_tagged_client(monkeypatch):
+    import red.c3rberus_ops as m
+    seen = {}
+
+    def fake_ssh(key, ip, remote, **kw):
+        seen["remote"] = remote
+
+        class R:
+            stdout = "10.0.0.251\n"
+            stderr = ""
+        return R()
+    monkeypatch.setattr(m, "_ssh", fake_ssh)
+    import pathlib
+    comp_dir = pathlib.Path(__file__).parent / "fixtures" / "comp_min"
+    if not (comp_dir / "teams.json").exists():
+        monkeypatch.setattr(m, "_teams", lambda d: {"t1": {"identifier": 127}})
+        monkeypatch.setattr(m, "_boxes", lambda d: [{"name": "web01", "last_octet": 4,
+                                                     "template": "ubuntu-golden"}])
+        monkeypatch.setattr(m, "box_os", lambda t: "linux")
+    nat = m._probe_fetch_source("k", "10.0.0.247", comp_dir, "pw")
+    assert nat == "10.0.0.251"
+    assert "curl -sk" in seen["remote"] and "192.168.127.4" in seen["remote"]
+    assert "grep -ah z" in seen["remote"]          # bound to THIS probe, not history
