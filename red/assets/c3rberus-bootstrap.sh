@@ -142,5 +142,9 @@ User=root
 WantedBy=multi-user.target
 U
 systemctl daemon-reload && systemctl reset-failed c3rberus-backend.service 2>/dev/null
-systemctl enable --now c3rberus-backend
+# enable --now is a NO-OP on a live unit — and the backend derives inventory, DB
+# seed creds, and scoring identity at boot ONLY. Freshly uploaded config lands here,
+# so restart is the only path that makes a stage re-run actually take effect
+# (run-666952e9: overrides on disk, stale creds in the deploy path, 2026-11-13).
+systemctl enable c3rberus-backend && systemctl restart c3rberus-backend
 echo "== bootstrap done"
