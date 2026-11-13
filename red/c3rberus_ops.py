@@ -217,9 +217,12 @@ def render_env(comp_dir, box_pw, *, red_ip, scoring_pw):
         # limit+20, so a bigger limit leaves free threads for release paths;
         # real exec concurrency stays capped by PER_BOX=10 x 8 boxes either way.
         "NXC_MAX_CONCURRENT=140",
-        # per-box 3 (template tail) makes box slots < putfile(1)+exec demand —
-        # stage-1 holders convoy behind slow execs; 12 > 1+10.
-        "NXC_MAX_CONCURRENT_PER_BOX=12",
+        # per-box 3 (template tail) makes box slots < putfile(1)+exec demand,
+        # but 12 overshoots sshd's MaxStartups (10:30:100): the 11th concurrent
+        # handshake gets cut mid-banner — nxc logs 'Unknown SSH Version,
+        # skipping' (exit 0, invisible to retries-as-auth-failures). 8 sits
+        # safely under the drop threshold with room for the putfile slot.
+        "NXC_MAX_CONCURRENT_PER_BOX=8",
         "SLIVER_CFG_PATH=./sliver_operator.cfg",
         "RED_SCORING_ENABLED=true", "RED_SCORING_USERNAME=red_scoring",
         "RED_SCORING_DOMAIN=", f"RED_SCORING_PASSWORD={scoring_pw}",

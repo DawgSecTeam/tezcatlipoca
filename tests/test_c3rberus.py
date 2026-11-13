@@ -83,7 +83,7 @@ def test_render_env(tmp_path):
     keys = [l.split("=", 1)[0] for l in env.strip().splitlines() if "=" in l]
     assert len(keys) == len(set(keys)), [k for k in set(keys) if keys.count(k) > 1]
     assert kv["NXC_MAX_CONCURRENT"] == "140"
-    assert int(kv["NXC_MAX_CONCURRENT_PER_BOX"]) >= 12
+    assert 12 >= int(kv["NXC_MAX_CONCURRENT_PER_BOX"]) >= 8  # > putfile+exec, < MaxStartups
 
 
 def test_transport_map_extension_survives_the_firewall_normalizer():
