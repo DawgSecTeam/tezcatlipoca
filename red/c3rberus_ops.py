@@ -9,6 +9,7 @@ API from red01 itself. Lifecycle + design notes: docs/internals.md § c3rberus.
 """
 
 import json
+from collections import Counter
 import secrets
 import shlex
 import subprocess
@@ -355,7 +356,7 @@ def cred_preflight(ssh_key, red_ip, token, team_nums, *, runner=None):
     return status, bad
 
 
-def plant(ssh_key, red_ip, token, team_nums, *, runner=None):
+def plant(ssh_key, red_ip, token, team_nums, *, comp_dir=None, runner=None):
     """Build the catalog and deploy it — c3rberus's assume-breach. Pre-competition
     state accepts deploy-all without the RUNNING confirm flag."""
     doc = _api(ssh_key, red_ip, token, "POST", "/admin/build-all-iocs",
@@ -368,14 +369,29 @@ def plant(ssh_key, red_ip, token, team_nums, *, runner=None):
     if not doc.get("task_id"):
         raise RuntimeError(f"deploy-all-iocs refused: {doc}")
     status = _wait_task(ssh_key, red_ip, token, doc["task_id"], runner=runner, timeout_s=5400)
-    rows = _api(ssh_key, red_ip, token, "GET", "/c2/iocs/deployed", runner=runner)
-    deployed = len(rows) if isinstance(rows, list) else 0
-    print(f"  c3rberus    : deploy-all-iocs {status}; {deployed} deployed rows")
-    if status not in ("done", "completed"):
+    resp = _api(ssh_key, red_ip, token, "GET", "/c2/iocs/deployed", runner=runner)
+    rows = resp.get("deployed", []) if isinstance(resp, dict) else (resp or [])
+    # deploy-all-iocs returns per box, under a dict wrapper — the old bare
+    # len(list) read 0 on EVERY run while a 1107-row catalog sat planted.
+    per = Counter(r.get("box_ip") for r in rows if r.get("status") == "active")
+    planted = sum(per.values())
+    healthy_boxes = sum(1 for n in per.values() if n >= 25)
+    want = 2 * len(_boxes(comp_dir)) if comp_dir else 8
+    print(f"  c3rberus    : deploy-all-iocs {status}; {planted} active rows, "
+          f"{healthy_boxes}/{want} boxes carry a catalog")
+    if status not in ("done", "completed") and healthy_boxes < want:
         # never stamp a half-planted catalog as the day-0 baseline (run-3f39134d:
         # 21 windows deploys died on an unprovisioned scoring account)
-        raise RuntimeError(f"deploy-all-iocs ended {status} — catalog not fully planted")
-    return deployed
+        raise RuntimeError(f"deploy-all-iocs ended {status} with only "
+                           f"{healthy_boxes}/{want} catalog-carrying boxes")
+    if status not in ("done", "completed"):
+        # the parent grades itself per IOC (run-24737a0d: 'failed' over 21
+        # stragglers — mostly windows IOCs fighting still-running day-1 images
+        # from earlier eras — while every box kept its >=25-row catalog). The
+        # estate is planted; the operator re-plants deploy_failed rows live.
+        print("  c3rberus    : WARNING tolerating per-IOC stragglers "
+              "(re-deploy via /c2/iocs/deployed/<id>/redeploy during the event)")
+    return planted
 
 
 def _probe_fetch_source(ssh_key, red_ip, comp_dir, box_pw, *, runner=None):
@@ -492,7 +508,7 @@ def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
     cred_preflight(ssh_key, red_ip, token, team_nums, runner=runner)
     # always plant: deploy-all is idempotent (skip_active reuses, retries failures)
     # — a truthy count as a skip flag would freeze a half-planted catalog
-    deployed = plant(ssh_key, red_ip, token, team_nums, runner=runner)
+    deployed = plant(ssh_key, red_ip, token, team_nums, comp_dir=comp_dir, runner=runner)
     seeded.parent.mkdir(parents=True, exist_ok=True)
     seeded.write_text(json.dumps({"deployed": deployed, "admin_password": admin_pw,
                                   "scoring_password": scoring_pw, "red_ip": red_ip,

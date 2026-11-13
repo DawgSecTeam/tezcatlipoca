@@ -199,3 +199,39 @@ def test_stage_rewrite_targets_the_env_declared_inventory(monkeypatch):
     root = pathlib.Path(c3rberus_ops.__file__).parent  # unused; keep import light
     src = pathlib.Path(m.__file__).read_text()
     assert "tee /opt/c3rberus/config/inventory.yml" in src
+
+
+def test_plant_counts_dict_rows_and_tolerates_stragglers(tmp_path, monkeypatch, capsys):
+    # run-24737a0d: the OLD code read 0 rows (dict wrapper) and raised on the
+    # parent's per-IOC 'failed' status while 1107 rows on 8 healthy boxes sat
+    # planted. plant must count real rows and tolerate stragglers ONLY when
+    # every box carries a catalog.
+    import json as _json
+    (tmp_path / "boxes.json").write_text(_json.dumps(
+        {f"b{i}": {"name": f"b{i}"} for i in range(4)}))
+    m = c3rberus_ops
+    monkeypatch.setattr(m, "_wait_task", lambda *a, **k: "failed")
+    boxes = [f"192.168.12{t}.{n}" for t in (7, 8) for n in range(2, 6)]
+    rows = [{"box_ip": ip, "status": "active"} for ip in boxes for _ in range(60)]
+    def fake_api(ssh_key, red_ip, token, method, path, **kw):
+        return {"task_id": 7} if method == "POST" else {"deployed": rows}
+    monkeypatch.setattr(m, "_api", fake_api)
+    got = m.plant("k", "10.0.0.247", "t", [104, 105], comp_dir=str(tmp_path))
+    assert got == len(rows)                      # was 0 under the len(list) bug
+    assert "WARNING tolerating" in capsys.readouterr().out
+
+    # a box stripped of its catalog is NOT tolerable
+    rows.append({"box_ip": "192.168.129.9", "status": "active"})  # noise
+    thin = [r for r in rows if r["box_ip"] != boxes[0]]
+    rows2 = [r for r in rows if not (r["box_ip"] == boxes[0] and rows.index(r) > 10)]
+    def api2(ssh_key, red_ip, token, method, path, **kw):
+        if method == "POST":
+            return {"task_id": 7}
+        return {"deployed": [r for r in rows if r["box_ip"] != boxes[0]] +
+                             [r for r in rows if r["box_ip"] == boxes[0]][:5]}
+    monkeypatch.setattr(m, "_api", api2)
+    try:
+        m.plant("k", "10.0.0.247", "t", [104, 105], comp_dir=str(tmp_path))
+        assert False, "must raise on a catalog-less box"
+    except RuntimeError as e:
+        assert "catalog-carrying boxes" in str(e)
