@@ -40,7 +40,7 @@ def _c3rberus_once(args):
         comp = resolve_comp_dir(args.competition, getattr(args, "comp_dir", None))
         if not c3rberus_ops.selected(comp):
             return False
-        r = _ssh(args, "systemctl is-active c3rberus-backend.service sliver.service; "
+        r = _ssh(args, "systemctl is-active c3rberus-backend.service c3rberus-sliver.service; "
                         "curl -sk -m 8 -o /dev/null -w '%{http_code}' "
                         "https://localhost:3000/docs || true", timeout=45)
     except Exception:                                          # noqa: BLE001 - best effort
@@ -48,7 +48,7 @@ def _c3rberus_once(args):
     lines = (r.stdout or "").split()
     if not lines or "200" in lines[-1:]:
         return False
-    down = [u for u, s in zip(("c3rberus-backend.service", "sliver.service"),
+    down = [u for u, s in zip(("c3rberus-backend.service", "c3rberus-sliver.service"),
                               lines[:2]) if s != "active"]
     if not down:
         return False                                           # units up, docs probe raced

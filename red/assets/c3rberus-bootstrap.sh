@@ -43,38 +43,27 @@ fi
 
 echo "== sliver server+client"
 if [ ! -x /usr/local/bin/sliver-server ]; then
-  SLIVER_VER="${SLIVER_VER:-v5.4.40}"
+  # v1.7.8 = the sliver_ops.py version already proven on the estate; the release
+  # assets are RAW binaries (a .zip-suffixed URL 404s and curl 22 never retries —
+  # killed the first cde-2026 run here, 2026-11-13).
+  SLIVER_VER="${SLIVER_VER:-v1.7.8}"
   for b in sliver-server_linux-amd64 sliver-client_linux-amd64; do
-    fetch "https://github.com/BishopFox/sliver/releases/download/${SLIVER_VER}/${b}.zip" \
-          "/opt/c3rberus-staging/${b}.zip" || exit 1
-    mkdir -p /tmp/c3rs && (cd /tmp/c3rs && unzip -o -q "/opt/c3rberus-staging/${b}.zip")
+    fetch "https://github.com/BishopFox/sliver/releases/download/${SLIVER_VER}/${b}" \
+          "/opt/c3rberus-staging/${b}" || exit 1
+    install -m 0755 "/opt/c3rberus-staging/${b}" "/usr/local/bin/${b/_linux-amd64/}"
   done
-  install -m 0755 /tmp/c3rs/sliver-server_linux-amd64 /usr/local/bin/sliver-server
-  install -m 0755 /tmp/c3rs/sliver-client_linux-amd64 /usr/local/bin/sliver-client
 fi
-# the installer's release also needs its embedded assets unpacked before first Generate
-timeout 120 sliver-server unpack --force >/dev/null 2>&1 || true
-
-cat >/etc/systemd/system/sliver.service <<'U'
-[Unit]
-Description=Sliver C2
-After=network-online.target
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/sliver-server daemon
-Restart=on-failure
-User=root
-[Install]
-WantedBy=multi-user.target
-U
-systemctl daemon-reload && systemctl enable --now sliver
-until timeout 1 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/31337'; do sleep 1; done
+# the daemon + its state dir live under $DEST — set up after the checkout below.
 
 echo "== c3rberus checkout (LAN forgejo)"
 if [ ! -d "$DEST/.git" ]; then
   retry 3 git clone --depth 1 "$REPO_URL" "$DEST" || exit 1
 fi
 cd "$DEST"
+# the fork's not-reachable fallback runs `systemctl start sliver` — beside tlaloc that
+# unit is the CAMPAIGN's daemon, not ours; retarget it (line fails to match = sed no-ops).
+sed -i 's/"systemctl", "start", "sliver",/"systemctl", "start", "c3rberus-sliver",/' \
+  fastapi_backend/c2/sliver_manager.py
 # the committed SQORECARD keypair (and the committed operator cfg + secrets) must go;
 # setup.sh only mints certs when none exist, so delete first, then mint.
 rm -f certs/cert.pem certs/key.pem sliver_operator.cfg .env
@@ -87,10 +76,31 @@ echo "== venv + requirements (pypi via the flaky uplink, retried)"
 retry 5 venv/bin/pip install -q -r requirements.txt \
   || echo "WARNING: some python deps did not land — backend health will tell"
 
+echo "== c3rberus sliver daemon (own instance: 127.0.0.1:31338, own state dir —
+tlaloc's sliver.service owns :31337 and /opt/sliver beside us)"
+cat >/etc/systemd/system/c3rberus-sliver.service <<U
+[Unit]
+Description=C3rberus Sliver C2 (own instance)
+After=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=$DEST
+Environment=HOME=$DEST
+ExecStart=/usr/local/bin/sliver-server daemon --lhost 127.0.0.1 --lport 31338
+Restart=on-failure
+User=root
+[Install]
+WantedBy=multi-user.target
+U
+if [ ! -d "$DEST/.sliver" ]; then HOME="$DEST" timeout 300 sliver-server unpack --force >/dev/null 2>&1 || true; fi
+systemctl daemon-reload && systemctl enable --now c3rberus-sliver
+until timeout 1 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/31338'; do sleep 1; done
+
 echo "== sliver operator config"
 if [ ! -f sliver_operator.cfg ]; then
-  sliver-server operator --name c3rberus --lhost localhost --permissions all \
-    --save "$DEST/sliver_operator.cfg" >/dev/null 2>&1
+  HOME="$DEST" sliver-server operator --name c3rberus --lhost 127.0.0.1 --lport 31338 \
+    --permissions all --save "$DEST/sliver_operator.cfg" >/dev/null 2>&1 \
+    || { echo "ERROR: operator config mint failed"; exit 1; }
   chmod 600 sliver_operator.cfg
 fi
 
@@ -101,7 +111,7 @@ install -m 0600 "$STAGE/env" "$DEST/.env"
 cat >/etc/systemd/system/c3rberus-backend.service <<'U'
 [Unit]
 Description=C3rberus scoring backend
-After=sliver.service network-online.target
+After=c3rberus-sliver.service network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/c3rberus

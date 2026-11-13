@@ -23,6 +23,10 @@ INSTALL_DIR = "/opt/c3rberus"
 API = "https://localhost:3000"              # curl always runs ON red01 against itself
 DEFAULT_ADMIN = ("admin", "phoenix-collide-surprise-oaf")   # db_init.py:628-641, published
 SEED_FILE = "c3rberus-seed.json"
+# The platform's own sliver listeners, offset from tlaloc's stock ports because both
+# daemons live on red01. These values must match the unit + mint in
+# red/assets/c3rberus-bootstrap.sh and the FORWARD extension in tlaloc_ops.
+PLATFORM_LISTENER_PORTS = (38888, 38890)
 
 
 def selected(comp_dir):
@@ -163,7 +167,11 @@ def render_env(comp_dir, box_pw, *, red_ip, scoring_pw):
         f"SCRIPT_ENCRYPTION_SALT={secrets.token_hex(16)}",
         "CSRF_PROTECT_MUTATIONS=false",
         f"C2_IP={red_ip}", f"SLIVER_HOST={red_ip}", "SLIVER_ENABLED=true",
-        "MTLS_LISTENER_PORT=8888", "PIVOT_LISTENER_PORT_BASE=9900",
+        # tlaloc's daemon already holds the stock mTLS/stage ports on red01 — ours
+        # bind offsets, or its listener create fails and the platform scores ghosts.
+        "MTLS_LISTENER_PORT=%d" % PLATFORM_LISTENER_PORTS[0],
+        "STAGE_LISTENER_PORT=%d" % PLATFORM_LISTENER_PORTS[1],
+        "PIVOT_LISTENER_PORT_BASE=9900",
         f"SCRIPT_SERVER_URL=https://{red_ip}:4000",
         "SLIVER_CFG_PATH=./sliver_operator.cfg",
         "RED_SCORING_ENABLED=true", "RED_SCORING_USERNAME=red_scoring",
