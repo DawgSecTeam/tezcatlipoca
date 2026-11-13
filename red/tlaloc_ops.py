@@ -665,13 +665,15 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     # Without a C2 the DNAT is skipped but not the FORWARD trio: red01 must still reach teams.
     print("  red rules   : installing the red-segment rules on the engine...")
     # c3rberus runs its OWN sliver listeners on offset ports beside tlaloc's — the timer
-    # rewrites the whole rule set from this list, so its ports must be in here or the
-    # platform's implants can never beacon back from the team LANs. Deferred import:
-    # c3rberus_ops imports this module at load time.
+    # rewrites the whole rule set from this transport map, so they must be entries here
+    # or the platform's implants can never beacon back from the team LANs. Deferred
+    # import: c3rberus_ops imports this module at load time.
     from red import c3rberus_ops
     if c3rberus_ops.selected(comp_dir):
-        callback_ports = sorted(set(list(callback_ports or [])
-                                    + list(c3rberus_ops.PLATFORM_LISTENER_PORTS)))
+        callback_ports = dict(callback_ports or {})
+        for name, port in zip(("c3rberus-mtls", "c3rberus-stage"),
+                              c3rberus_ops.PLATFORM_LISTENER_PORTS):
+            callback_ports.setdefault(name, {"gateway": port, "server": port})
     red01_ops.install_engine_rules(
         getattr(ctx, "scoring_ip", "") or "", ssh_key,
         engine_user=getattr(ctx, "scoring_user", "sysadmin"),
