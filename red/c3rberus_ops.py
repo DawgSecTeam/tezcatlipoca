@@ -147,20 +147,12 @@ def render_inventory(comp_dir, box_pw, *, red_ip):
         pass
     prefix = str(_compfile(comp_dir).get("domain_prefix", "team"))
     suffix = str(_compfile(comp_dir).get("domain_suffix", ".local"))
-    # The packet OWNS the scoring identity: box_baseline.json planted a red_scoring
-    # (out of scope, do not touch) with its own per-box password on EVERY box. The
-    # platform's Box model carries exactly this as scoring_password (checked before
-    # the .env fallback) — without it the creator verifies against a password nobody
-    # can set on Linux (root-parity login refused, root-password ssh refused) and
-    # every Linux deploy/check dies LOGON_FAILURE (runs 1b76723f/21514aa0, 2026-11-13).
-    pkt_pw = {}
-    try:
-        for b, pins in json.loads((Path(comp_dir) / "box_baseline.json").read_text()).items():
-            for pin in pins:
-                if pin.get("vars", {}).get("USERNAME") == "red_scoring":
-                    pkt_pw[b] = pin["vars"]["PASSWORD"]
-    except (OSError, ValueError, KeyError, AttributeError):
-        pass
+    # The scoring identity resolves box.scoring_password → .env → box admin, so the
+    # engine renders NO per-box scoring_password: the seeded value in .env is what
+    # the creator actually provisions on every box (AD account for domain Windows,
+    # local SAM for members, uid-0 via _provision_linux_scoring for Linux). Pinning
+    # the packet decoy pw strands the domain channel — MIRA\red_scoring LOGON_FAILURE
+    # rotation storm on members (run-fca282ee).
     out = {"c2_settings": {"script_server_url": f"https://{red_ip}:4000",
                            "sliver_host": red_ip, "c2_ip": red_ip},
            "scoring_account": {"username": "red_scoring", "domain": "", "enabled": True},
@@ -177,15 +169,6 @@ def render_inventory(comp_dir, box_pw, *, red_ip):
             entry = {"name": f"{box['name']}-{tid}", "ip": f"192.168.{tid}.{box['last_octet']}",
                      "os": kind, "username": box_user if kind == "linux" else ".\\Administrator",
                      "password": box_pw, "port": 22 if kind == "linux" else 5985}
-            if kind == "windows" and box["name"] in pkt_pw:
-                # Packet authority works ONLY where the account can carry it: on
-                # Windows the creator re-points local+domain accounts to the pinned
-                # password, so the packet stays authoritative. On Linux the packet's
-                # decoy can never be the deploy identity (plain user can't write the
-                # IOC paths) — _provision_linux_scoring re-privileges it to the
-                # seeded pw, and pinning the decoy pw there would hand deploy a
-                # password that 403s every put-file.
-                entry["scoring_password"] = pkt_pw[box["name"]]
             if kind == "windows":
                 entry["connection"] = "winrm"
                 entry["domain"] = domain

@@ -89,11 +89,12 @@ def test_transport_map_extension_survives_the_firewall_normalizer():
     assert all(isinstance(s["server"], int) for s in specs)
 
 
-def test_render_inventory_carries_packet_scoring_passwords(tmp_path):
-    # the packet owns red_scoring with its own per-box password (box_baseline.json,
-    # "out of scope, do not touch"); the platform checks scoring_password before its
-    # .env fallback — without the pin the creator verifies against a password that
-    # no channel can set on Linux (runs 1b76723f/21514aa0, 2026-11-13)
+def test_render_inventory_never_pins_scoring_password(tmp_path):
+    # .env's seeded password is the ONE scoring password: the creator provisions
+    # AD+local SAM accounts with it and _provision_linux_scoring sets uid-0 Linux
+    # to it. A per-box scoring_password outranks .env in the platform's resolver
+    # and strands the domain channel — MIRA\red_scoring LOGON_FAILURE rotation on
+    # members (run-fca282ee): the packet decoy pw must stay in box_baseline.json.
     import yaml
     c = comp(tmp_path, [125])
     (c / "box_baseline.json").write_text(json.dumps({
@@ -102,10 +103,8 @@ def test_render_inventory_carries_packet_scoring_passwords(tmp_path):
         "ad01": [{"name": "local-user-win", "vars": {"USERNAME": "red_scoring",
                                                      "PASSWORD": "pktWad"}}]}))
     doc = yaml.safe_load(c3rberus_ops.render_inventory(c, "SECRETpw", red_ip="10.0.0.247"))
-    by = {b["name"].rsplit("-", 1)[0]: b for b in doc["teams"][0]["boxes"]}
-    assert by["ad01"]["scoring_password"] == "pktWad"  # windows: packet stays authority
-    assert "scoring_password" not in by["web01"]       # linux: re-privileged to .env pw
-    assert "scoring_password" not in by["db01"]
+    assert not any("scoring_password" in b for team in doc["teams"] for b in team["boxes"])
+    assert doc["scoring_account"]["username"] == "red_scoring"
 
 
 def test_provision_linux_scoring_lands_root_and_rejects_failure(monkeypatch):
