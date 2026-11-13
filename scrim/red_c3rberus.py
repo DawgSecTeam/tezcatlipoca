@@ -128,21 +128,16 @@ echo
 """
 
 OPENCODE_CFG = """{
-  // opencode project config (the harness renders the provider block; red model)
-  $schema: "https://opencode.ai/config.json",
-  provider: {
-    // provider id MUST equal endpoints.provider_key(base_url) — the cycle argv
-    // calls {PROVIDER_KEY}/{model}; a hardcoded foreign name made opencode fall
-    // through to its built-in litellm provider (wrong key) and every red
-    // operator cycle died 'Model unavailable' (run-c1cabbd9 T+4).
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
     "{PROVIDER_KEY}": {
-      npm: "@ai-sdk/openai-compatible",
-      name: "tezcatlipoca club gateway",
-      options: { baseURL: "{BASE_URL}", apiKey: "{API_KEY_FIELD}" },
-      models: { "{MODEL_ID}": { limit: { context: 120000, output: 8000 } } },
-    },
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "tezcatlipoca club gateway",
+      "options": { "baseURL": "{BASE_URL}", "apiKey": "{API_KEY_FIELD}" },
+      "models": { "{MODEL_ID}": { "limit": { "context": 120000, "output": 8000 } } }
+    }
   },
-  permission: "allow",
+  "permission": "allow"
 }
 """
 
