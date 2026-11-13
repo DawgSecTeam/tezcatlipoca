@@ -503,3 +503,25 @@ def test_killed_services_counts_the_aimed_at_service(tmp_path):
     ctx, policy = policy_for(tmp_path)
     ctx.world.add_impact("192.168.1.10", "lighttpd", "stop", target_service="splunk")
     assert "splunk" in policy._killed_services(ctx.intel.team_of("192.168.1.10"))
+
+
+def test_breadth_skips_a_rehit_while_the_concurrent_cap_has_room(tmp_path):
+    from types import SimpleNamespace
+    ctx, policy = policy_for(tmp_path)
+    ctx.world.meta["event_start"] = policy._now() - 20 * 60
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    ctx.world.add_impact("192.168.1.10", "nginx", "stop")
+    policy.sensors = None
+    policy.intel = SimpleNamespace(
+        boxes=lambda: [{"ip": "192.168.1.10", "team": "Blue1", "windows": False}],
+        services_for=lambda ip: ["nginx", "mysql"],
+        team_of=lambda ip: "Blue1",
+        box_by_ip=lambda ip: {"box": "web01", "identifier": "105", "ip": ip},
+        teams=lambda: [{"team": "Blue1"}])
+    policy.update_counts({"Blue1": (6, 2)})
+    takes = {c["params"]["service"]: c for c in policy.candidates(ctx)
+             if c["effect"] == "takedown"}
+    assert "nginx" not in takes, takes
+    assert "mysql" in takes and takes["mysql"]["score"] >= 95
+    assert takes["mysql"]["reason"].startswith("breadth:")
