@@ -283,6 +283,8 @@ class Policy:
         for box in self.intel.boxes():
             if box["team"] != team:
                 continue
+            if not can_root(self.world.foothold(box["ip"])):
+                continue
             for name in self.intel.services_for(box["ip"]):
                 slug = str(name).lower().removesuffix(".service").strip()
                 if slug not in ("ssh", "sshd") and _service_key(name) not in killed:
