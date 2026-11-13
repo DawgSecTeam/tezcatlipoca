@@ -134,6 +134,11 @@ class GoldenBuildHarness:
             P("rollback_snapshot",
               side_effect=lambda _n, vmid, _s: self.events.record("rollback", str(vmid)))
             P("retag_ownership")
+            # the real build_nakon_bundle shells `python -m nakon build` against the
+            # live vulndb — every golden path test must stub it (the plant helper
+            # did; the conversion tests didn't, so the first build call raised
+            # 'vulndb unreachable' on any host without cached bundles)
+            P("build_nakon_bundle", return_value="bundles/test.zip")
             P("destroy_vm_if_exists")
             P("gc_orphan_volumes")
             P("wait_for_proxmox_task")
@@ -345,8 +350,14 @@ class GoldenCoverageRecords(unittest.TestCase):
                                  "ide2": "local-lvm:vm-1412-cloudinit,media=cloudinit"}}
             return real(method, path, **kw)
 
+        # run_nakon must be stubbed: a reused-hash lineup skips conversion here and
+        # reaches the PLANT stage, whose raw `ssh scoring-ip import paramiko` probe
+        # is real subprocess I/O no harness stub covers — the test then failed on
+        # whatever 10.0.0.1 answered (green only on a host with a live engine).
         with patch.object(harness, "_proxmox", side_effect=half_converted), \
-                patch("time.sleep", lambda *_: None):
+                patch("time.sleep", lambda *_: None), \
+                patch.object(golden_ops, "run_nakon",
+                             return_value=NakonResult([], [])):
             _r, _e, exc = harness.run()
         self.assertIsNotNone(exc)
         self.assertIn("never became base- volumes", str(exc))
