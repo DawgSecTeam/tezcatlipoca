@@ -95,7 +95,8 @@ def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None)
                          or ctx.state.get("box_creds") or {
                              name: random_password() for name in ctx.credlist_usernames
                          })
-        ctx.domain_creds = ctx.state.get("domain_creds")
+        ctx.domain_creds = (dict(ctx.packet_credlists.get("domain") or {})
+                            or ctx.state.get("domain_creds"))
         ctx.inject_password = ctx.state.get("inject_password")
         ctx.state.update({
             "admin_password": ctx.admin_password,
