@@ -395,6 +395,25 @@ def plant(ssh_key, red_ip, token, team_nums, *, comp_dir=None, runner=None):
         time.sleep(10)
     # deploy-all-iocs returns per box, under a dict wrapper — the old bare
     # len(list) read 0 on EVERY run while a 1107-row catalog sat planted.
+    # Self-heal first: failed rows get exactly one operator-style redeploy pass
+    # (the same /redeploy the red lane drives live), then the ledger re-settles.
+    dead = [r for r in rows if r.get("status") == "failed" and r.get("id")]
+    if dead:
+        print(f"  c3rberus    : {len(dead)} failed rows — redeploying once "
+              "(operator-style)")
+        for r in dead:
+            _api(ssh_key, red_ip, token, "POST",
+                 f"/c2/iocs/deployed/{r['id']}/redeploy", runner=runner, timeout=90)
+        rows, prev = [], None
+        for _round in range(12):
+            resp = _api(ssh_key, red_ip, token, "GET", "/c2/iocs/deployed", runner=runner)
+            cand = resp.get("deployed", []) if isinstance(resp, dict) else (resp or [])
+            sig = sum(1 for x in cand if x.get("status") == "active")
+            if sig and sig == prev and _round:
+                rows = cand
+                break
+            prev, rows = sig, cand
+            time.sleep(10)
     per = Counter(r.get("box_ip") for r in rows if r.get("status") == "active")
     planted = sum(per.values())
     # Catalog size is legitimately per-box-type (linux 31, windows 24-27): an
