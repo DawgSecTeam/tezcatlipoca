@@ -436,7 +436,7 @@ def _probe_fetch_source(ssh_key, red_ip, comp_dir, box_pw, *, runner=None):
     # single-shot probe failed twice on a WARM server the manual repro proved
     # correct (run-94316d50). Each attempt re-tags so the log grep is exact.
     nat = ""
-    for attempt in range(6):
+    for attempt in range(10):
         tag = "zz" + secrets.token_hex(6)
         exp = int(time.time()) + 600
         r = _ssh(ssh_key, red_ip,
@@ -451,11 +451,11 @@ def _probe_fetch_source(ssh_key, red_ip, comp_dir, box_pw, *, runner=None):
         nat = out.splitlines()[-1].strip() if out else ""
         if nat.count(".") == 3:
             break
-        print(f"  c3rberus    : fetch-source probe retry {attempt + 1}/6 "
+        print(f"  c3rberus    : fetch-source probe retry {attempt + 1}/10 "
               f"(server may still be warming)")
-        time.sleep(20)
+        time.sleep(45)
     if not nat.count(".") == 3:
-        raise RuntimeError(f"fetch-source probe saw nothing from {ip} after 6 attempts — "
+        raise RuntimeError(f"fetch-source probe saw nothing from {ip} after 10 attempts — "
                            f"script server down? ({nat!r})")
     print(f"  c3rberus    : boxes reach the script server as {nat} (lab NAT source)")
     return nat

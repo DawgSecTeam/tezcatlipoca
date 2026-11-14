@@ -335,7 +335,7 @@ def test_fetch_source_probe_retries_past_server_warmup(monkeypatch, tmp_path):
         m._probe_fetch_source("k", "10.0.0.247", str(tmp_path), "pw")
         assert False, "must raise after exhausting retries"
     except RuntimeError as e:
-        assert "after 6 attempts" in str(e)
+        assert "after 10 attempts" in str(e)
 
 
 def test_wait_backend_gates_the_script_server_too(monkeypatch):
