@@ -84,10 +84,17 @@ def resolve_competition_teams(ctx, num_teams, from_phase, team_identifiers=None)
         ctx.scoring_password = ctx.state.get("scoring_password") or random_password()
         ctx.postgres_password = ctx.state.get("postgres_password") or random_password()
         ctx.redis_password = ctx.state.get("redis_password") or random_password()
-        ctx.box_password = ctx.state.get("box_password") or random_password()
-        ctx.box_creds = ctx.state.get("box_creds") or {
-            name: random_password() for name in ctx.credlist_usernames
-        }
+        # passwords.json outranks carried state on the RESUME path too — a
+        # document written by a mint-era deploy can hold a box_password the boxes
+        # never received (the packet's value was stamped instead), and that
+        # phantom starved every credential-consuming phase-7 hop
+        # (run-4203d941; mint path line ~162 already follows the rule).
+        ctx.box_password = ((ctx.packet_pw or {}).get("box_password")
+                            or ctx.state.get("box_password") or random_password())
+        ctx.box_creds = (dict(ctx.packet_credlists.get("linux") or {})
+                         or ctx.state.get("box_creds") or {
+                             name: random_password() for name in ctx.credlist_usernames
+                         })
         ctx.domain_creds = ctx.state.get("domain_creds")
         ctx.inject_password = ctx.state.get("inject_password")
         ctx.state.update({
