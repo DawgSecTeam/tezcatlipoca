@@ -235,3 +235,78 @@ def test_plant_counts_dict_rows_and_tolerates_stragglers(tmp_path, monkeypatch, 
         assert False, "must raise on a catalog-less box"
     except RuntimeError as e:
         assert "catalog-carrying boxes" in str(e)
+
+
+def _bootstrap_fakes(monkeypatch, m, accept):
+    """Stateful fake DB: `accept` is the live password set; change_password
+    mutates it exactly like a rotation does — nothing the code believes can
+    log in is allowed to be a fiction."""
+    log = {"rm": 0, "rotated": []}
+    live = set(accept)
+    monkeypatch.setattr(m, "wait_backend", lambda *a, **k: None)
+    def _login_or_none(key, ip, pw, **k):
+        return ("tok-" + pw[:4], 1) if pw in live else None
+    def _login(key, ip, pw, **k):
+        if pw not in live:
+            raise RuntimeError(f"c3rberus login refused: {pw}")
+        return ("tok-" + pw[:4], 1)
+    def _api(key, ip, token, method, path, **k):
+        if "change_password" in path:
+            pw = k["body"]["password"]
+            log["rotated"].append(pw)
+            live.add(pw)
+        return {}
+    def _ssh(key, ip, remote, **k):
+        import subprocess
+        if "database.db" in remote:
+            log["rm"] += 1
+            live.update(accept if "fresh" not in remote else set())
+        return subprocess.CompletedProcess([], 0, "", "")
+    for name, fn in [("_login_or_none", _login_or_none), ("_login", _login),
+                     ("_api", _api), ("_ssh", _ssh)]:
+        monkeypatch.setattr(m, name, fn)
+    return log
+
+
+def test_stale_seed_readopts_the_rebuilt_platform(monkeypatch, tmp_path):
+    # run-327c994e: destroy-and-rebuild = seed doc old, DB factory-fresh. The
+    # seeded password must lose to reality and be re-rotated BACK so every
+    # already-published credential stays true.
+    from red import c3rberus_ops as m
+    seeded = tmp_path / "red" / "c3rberus-seed.json"
+    seeded.parent.mkdir(); seeded.write_text('{"admin_password": "seeded-pw"}')
+    log = _bootstrap_fakes(monkeypatch, m, {"seeded-pw"})
+    tok = m._bootstrap_admin("k", "ip", {"admin_password": "seeded-pw"},
+                             "seeded-pw", "sc", seeded)
+    assert tok == "tok-seed" and log["rm"] == 0 and log["rotated"] == []
+
+    monkeypatch.undo()
+    log2 = _bootstrap_fakes(monkeypatch, m, {m.DEFAULT_ADMIN[1]})
+    tok2 = m._bootstrap_admin("k", "ip", {"admin_password": "seeded-pw"},
+                              "seeded-pw", "sc", seeded)
+    assert tok2 == "tok-seed" and log2["rm"] == 0          # default path, no wipe
+    assert log2["rotated"] == ["seeded-pw"]              # rotated BACK to seed
+
+    monkeypatch.undo()
+    log3 = {"rm": 0, "rotated": []}                    # DB answers to nobody yet
+    monkeypatch.setattr(m, "wait_backend", lambda *a, **k: None)
+    def _none3(key, ip, pw, **k):
+        return ("tok-phon", 1) if (pw == m.DEFAULT_ADMIN[1] and log3["rm"]) else None
+    def _hard3(key, ip, pw, **k):
+        if log3["rm"] and pw in (m.DEFAULT_ADMIN[1], "seeded-pw"):
+            return ("tok-seed" if pw == "seeded-pw" else "tok-phon", 1)
+        raise RuntimeError("c3rberus login refused")
+    def _api3(key, ip, token, method, path, **k):
+        log3["rotated"].append(k.get("body", {}).get("password", path))
+        return {}
+    def _ssh3(key, ip, remote, **k):
+        import subprocess
+        if "database.db" in remote:
+            log3["rm"] += 1
+        return subprocess.CompletedProcess([], 0, "", "")
+    for n3, f3 in [("_login_or_none", _none3), ("_login", _hard3),
+                   ("_api", _api3), ("_ssh", _ssh3)]:
+        monkeypatch.setattr(m, n3, f3)
+    tok3 = m._bootstrap_admin("k", "ip", {"admin_password": "seeded-pw"},
+                              "seeded-pw", "sc", seeded)
+    assert log3["rm"] == 1 and log3["rotated"] == ["seeded-pw"] and tok3 == "tok-seed"

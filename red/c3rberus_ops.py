@@ -437,6 +437,55 @@ def _probe_fetch_source(ssh_key, red_ip, comp_dir, box_pw, *, runner=None):
     return nat
 
 
+def _bootstrap_admin(ssh_key, red_ip, seed, admin_pw, scoring_pw, seeded, runner=None):
+    """Login/rotate/re-adoption decision table. Returns a live (token) pair valid
+    for admin calls. Seed-held password wins when it works; a rebuilt platform
+    (fresh DB behind a stale seed) re-rotates BACK to the seeded value so every
+    already-published credential stays true."""
+    def _fresh_db_login():
+        # Pre-plant the DB is DERIVED state — the backend's startup init rebuilds
+        # it from inventory/config. Losing it loses nothing that is not re-made.
+        print("  c3rberus    : WARNING — reinitializing the platform database "
+              "(stale seed: a prior stage rotated without persisting, or red01 was "
+              "rebuilt under this comp's seed document)")
+        _ssh(ssh_key, red_ip,
+             "sudo -n systemctl stop c3rberus-backend && sudo -n rm -f "
+             f"{INSTALL_DIR}/db/database.db* && sudo -n systemctl start c3rberus-backend",
+             runner=runner, timeout=180)
+        wait_backend(ssh_key, red_ip, runner=runner)
+        return _login(ssh_key, red_ip, DEFAULT_ADMIN[1], runner=runner)
+
+    if seed.get("admin_password"):
+        login = _login_or_none(ssh_key, red_ip, seed["admin_password"], runner=runner)
+        if login is not None:
+            token, user_id = login
+        else:
+            # seed-carried password refused: rebuilt platform (or lost rotation).
+            # Re-establish from the fresh DB and rotate BACK to the seeded value,
+            # so every already-published credential stays true (run-327c994e: the
+            # destroy-and-rebuild made stale-seed the COMMON case and the tolerant
+            # path existed only in the no-seed branch).
+            login = (_login_or_none(ssh_key, red_ip, DEFAULT_ADMIN[1], runner=runner)
+                     or _fresh_db_login())
+            _tok, uid = login
+            _api(ssh_key, red_ip, _tok, "POST", "/admin/change_password",
+                 body={"user_id": uid, "password": admin_pw}, runner=runner)
+            token, user_id = _login(ssh_key, red_ip, admin_pw, runner=runner)
+    else:
+        login = _login_or_none(ssh_key, red_ip, DEFAULT_ADMIN[1], runner=runner)
+        if login is None:
+            login = _fresh_db_login()
+        token, user_id = login
+        # the published db_init password is public knowledge — rotate on first boot
+        _api(ssh_key, red_ip, token, "POST", "/admin/change_password",
+             body={"user_id": user_id, "password": admin_pw}, runner=runner)
+        seeded.parent.mkdir(parents=True, exist_ok=True)
+        seeded.write_text(json.dumps({"admin_password": admin_pw,
+                                      "scoring_password": scoring_pw, "red_ip": red_ip}))
+        token, _ = _login(ssh_key, red_ip, admin_pw, runner=runner)
+    return token
+
+
 def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
     """Phase 7 / scrim hook, run AFTER tlaloc plants: install (adopt on re-stage),
     rotate the published admin password, prove the platform sees the range, plant
@@ -463,29 +512,8 @@ def stage(comp_dir, *, ssh_key, red_ip, box_pw, runner=None, state=None):
     # The seed must be on disk BEFORE anything can raise after it: a rotated admin
     # password that was never persisted strands the platform behind credentials nobody
     # holds (run-3a343726, parity died between rotate and write).
-    if seed.get("admin_password"):
-        token, user_id = _login(ssh_key, red_ip, seed["admin_password"], runner=runner)
-    else:
-        login = _login_or_none(ssh_key, red_ip, DEFAULT_ADMIN[1], runner=runner)
-        if login is None:
-            # A crashed earlier stage rotated and lost the password. Pre-plant the DB is
-            # derived state — the backend's startup init rebuilds it from inventory.
-            print("  c3rberus    : WARNING — reinitializing the platform database (a prior "
-                  "stage rotated admin without persisting the seed)")
-            _ssh(ssh_key, red_ip,
-                 "sudo -n systemctl stop c3rberus-backend && sudo -n rm -f "
-                 f"{INSTALL_DIR}/db/database.db* && sudo -n systemctl start c3rberus-backend",
-                 runner=runner, timeout=180)
-            wait_backend(ssh_key, red_ip, runner=runner)
-            login = _login(ssh_key, red_ip, DEFAULT_ADMIN[1], runner=runner)
-        token, user_id = login
-        # the published db_init password is public knowledge — rotate on first boot
-        _api(ssh_key, red_ip, token, "POST", "/admin/change_password",
-             body={"user_id": user_id, "password": admin_pw}, runner=runner)
-        seeded.parent.mkdir(parents=True, exist_ok=True)
-        seeded.write_text(json.dumps({"admin_password": admin_pw,
-                                      "scoring_password": scoring_pw, "red_ip": red_ip}))
-        token, _ = _login(ssh_key, red_ip, admin_pw, runner=runner)
+    token = _bootstrap_admin(ssh_key, red_ip, seed, admin_pw, scoring_pw, seeded,
+                             runner=runner)
     board = _api(ssh_key, red_ip, token, "GET", "/boxes", runner=runner)
     seen = {ip for ip in _walk_ips(board)}
     missing = want_boxes(comp_dir) - seen
