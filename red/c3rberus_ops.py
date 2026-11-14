@@ -417,6 +417,33 @@ def _probe_fetch_source(ssh_key, red_ip, comp_dir, box_pw, *, runner=None):
             "box_username", box_user)
     except (OSError, ValueError):
         pass
+    # Candidate passwords, most-published first: the packet box_pw is what the
+    # box stamp applied; state's secrets.box_password can be a mint that was
+    # never stamped (run-1f59bd06: the hop died at LOGON_FAILURE in silence for
+    # 15 minutes because the probe could only try the phantom).
+    cands = []
+    # published packet first — it is the credential the stamp applied (inputs.py:
+    # passwords.json outranks state everywhere else; the probe must agree)
+    try:
+        _pk = json.loads((Path(comp_dir) / "passwords.json").read_text())
+        for _v in ([_pk.get("box_password")] + list((_pk.get("box_creds") or {}).values())):
+            if _v and _v not in cands:
+                cands.append(_v)
+    except (OSError, ValueError):
+        pass
+    if box_pw and box_pw not in cands:
+        cands.append(box_pw)
+    try:
+        from estate import state as _st
+        _flat = _st.load_flat(Path(comp_dir).parent) or {}
+        _v = _flat.get("box_password")
+        if _v and _v not in cands:
+            cands.append(_v)
+        for _cv in (_flat.get("box_creds") or {}).values():
+            if _cv and _cv not in cands:
+                cands.append(_cv)
+    except Exception:                                      # noqa: BLE001 - candidates
+        pass
     for rec in sorted(_teams(comp_dir).values(), key=lambda r: r["identifier"]):
         for box in _boxes(comp_dir):
             kind = box_os(box.get("template"))
@@ -439,16 +466,29 @@ def _probe_fetch_source(ssh_key, red_ip, comp_dir, box_pw, *, runner=None):
     for attempt in range(10):
         tag = "zz" + secrets.token_hex(6)
         exp = int(time.time()) + 600
+        # diagnostics-first: the hop's stderr goes to a file (not /dev/null) and
+        # the local :4000 listener answers too, so a retry failure names WHICH
+        # leg died instead of implying the server (three runs starved on the
+        # silent 2>&1 — run-1f59bd06)
+        hop_pw = next((c for c in cands if c), box_pw)
         r = _ssh(ssh_key, red_ip,
-                 f"nxc ssh {ip} -u {box_user} -p {shlex.quote(box_pw)} -x "
+                 f"nxc ssh {ip} -u {box_user} -p {shlex.quote(hop_pw)} -x "
                  f"'curl -sk --max-time 8 -H \"Authorization: Bearer {tag}.{exp}\" "
                  f"https://{red_ip}:4000/scripts/wrapper/{tag}' "
-                 f">/dev/null 2>&1; cd /opt/c3rberus && "
-                 f"sudo -n grep -rah {tag} logs/ 2>/dev/null "
-                 f"| grep -oE 'client=[0-9.]+' | tail -1 | cut -d= -f2",
+                 f">/dev/null 2>/tmp/c3r_probe.err; cd /opt/c3rberus && "
+                 f"out=$(sudo -n grep -rah {tag} logs/ 2>/dev/null "
+                 f"| grep -oE 'client=[0-9.]+' | tail -1 | cut -d= -f2); "
+                 f"if [ -z \"$out\" ]; then echo HOPFAIL: $(sudo -n tail -2 /tmp/c3r_probe.err "
+                 f"2>/dev/null | tr \"\\n\" \" \" | cut -c1-120); "
+                 f"echo LOCAL: $(curl -sk -m 4 -o /dev/null -w '%{{http_code}}' "
+                 f"https://127.0.0.1:4000/ || true); fi; echo \"$out\"",
                  runner=runner, timeout=150, check=False)
-        out = (r.stdout or "").strip()
-        nat = out.splitlines()[-1].strip() if out else ""
+        raw = (r.stdout or "").strip()
+        for ln in raw.splitlines():
+            if ln.startswith(("HOPFAIL", "LOCAL")):
+                print(f"  c3rberus    :   probe leg — {ln[:150]}")
+        nat_out = raw.splitlines()[-1].strip() if raw else ""
+        nat = nat_out if nat_out.count(".") == 3 else ""
         if nat.count(".") == 3:
             break
         print(f"  c3rberus    : fetch-source probe retry {attempt + 1}/10 "

@@ -249,6 +249,16 @@ def ensure_range_awake(comp, creds):
     return len(down)
 
 
+def _box_password(comp):
+    """Packet-published password outranks the state doc (inputs.py's rule) — a
+    resumed deploy reading only state used a phantom mint the boxes never got
+    (run-1f59bd06: every probe hop died at LOGON_FAILURE in silence)."""
+    from config.config_ops import load_packet_passwords
+    pk = load_packet_passwords(Path(comp)) or {}
+    return (pk.get("box_password")
+            or core.read_state(comp).get("box_password", ""))
+
+
 def stage_red(args, comp, creds, run_dir):
     from red import tlaloc_ops
     ensure_range_awake(comp, creds)
@@ -295,7 +305,7 @@ def stage_red(args, comp, creds, run_dir):
                                             red_ip=args.red_ip)
         else:
             info = c3rberus_ops.stage(comp, ssh_key=ssh_key, red_ip=args.red_ip,
-                                      box_pw=core.read_state(comp).get("box_password", ""))
+                                      box_pw=_box_password(comp))
         ctx.state["red"]["c3rberus"] = info
     try:
         from guests import clean_trails
