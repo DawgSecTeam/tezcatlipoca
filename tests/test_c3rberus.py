@@ -310,3 +310,29 @@ def test_stale_seed_readopts_the_rebuilt_platform(monkeypatch, tmp_path):
     tok3 = m._bootstrap_admin("k", "ip", {"admin_password": "seeded-pw"},
                               "seeded-pw", "sc", seeded)
     assert log3["rm"] == 1 and log3["rotated"] == ["seeded-pw"] and tok3 == "tok-seed"
+
+
+def test_fetch_source_probe_retries_past_server_warmup(monkeypatch, tmp_path):
+    import subprocess
+    from red import c3rberus_ops as m
+    calls = {"n": 0}
+    boxes = [{"template": "linux", "last_octet": 4, "in_path": False}]
+    monkeypatch.setattr(m, "_boxes", lambda cd: boxes)
+    monkeypatch.setattr(m, "_teams", lambda cd: {1: {"identifier": 127}})
+    monkeypatch.setattr(m, "box_os", lambda t: "linux")
+    monkeypatch.setattr(m, "time", type("T", (), {"sleep": staticmethod(lambda s: None),
+                                                  "time": staticmethod(lambda: 1700000000)}))
+    def ssh(key, ip, remote, **k):
+        calls["n"] += 1
+        out = "10.0.0.251" if calls["n"] >= 3 else ""
+        return subprocess.CompletedProcess([], 0, out, "")
+    monkeypatch.setattr(m, "_ssh", ssh)
+    assert m._probe_fetch_source("k", "10.0.0.247", str(tmp_path), "pw") == "10.0.0.251"
+    assert calls["n"] == 3
+    calls["n"] = 0
+    monkeypatch.setattr(m, "_ssh", lambda *a, **k: subprocess.CompletedProcess([], 0, "", ""))
+    try:
+        m._probe_fetch_source("k", "10.0.0.247", str(tmp_path), "pw")
+        assert False, "must raise after exhausting retries"
+    except RuntimeError as e:
+        assert "after 6 attempts" in str(e)

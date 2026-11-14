@@ -416,23 +416,35 @@ def _probe_fetch_source(ssh_key, red_ip, comp_dir, box_pw, *, runner=None):
         break
     else:
         raise RuntimeError("no linux box to probe for the fetch source")
-    tag = "zz" + secrets.token_hex(6)
     # a Bearer-less GET 401s BEFORE the (logged) HMAC check — send a syntactically
     # valid junk token so the request travels the same signature-mismatch path a
     # real deploy fetch does, which is what records client= in the log.
-    exp = int(time.time()) + 600
-    r = _ssh(ssh_key, red_ip,
-             f"nxc ssh {ip} -u {box_user} -p {shlex.quote(box_pw)} -x "
-             f"'curl -sk --max-time 8 -H \"Authorization: Bearer {tag}.{exp}\" "
-             f"https://{red_ip}:4000/scripts/wrapper/{tag}' "
-             f">/dev/null 2>&1; cd /opt/c3rberus && "
-             f"sudo -n grep -rah {tag} logs/ 2>/dev/null "
-             f"| grep -oE 'client=[0-9.]+' | tail -1 | cut -d= -f2",
-             runner=runner, timeout=120, check=False)
-    nat = (r.stdout or "").strip().splitlines()[-1].strip() if (r.stdout or "").strip() else ""
+    # RETRY: :4000 is served by the backend but lags its readiness by tens of
+    # seconds after a restart, and a cold nxc negotiation adds another 30s — the
+    # single-shot probe failed twice on a WARM server the manual repro proved
+    # correct (run-94316d50). Each attempt re-tags so the log grep is exact.
+    nat = ""
+    for attempt in range(6):
+        tag = "zz" + secrets.token_hex(6)
+        exp = int(time.time()) + 600
+        r = _ssh(ssh_key, red_ip,
+                 f"nxc ssh {ip} -u {box_user} -p {shlex.quote(box_pw)} -x "
+                 f"'curl -sk --max-time 8 -H \"Authorization: Bearer {tag}.{exp}\" "
+                 f"https://{red_ip}:4000/scripts/wrapper/{tag}' "
+                 f">/dev/null 2>&1; cd /opt/c3rberus && "
+                 f"sudo -n grep -rah {tag} logs/ 2>/dev/null "
+                 f"| grep -oE 'client=[0-9.]+' | tail -1 | cut -d= -f2",
+                 runner=runner, timeout=150, check=False)
+        out = (r.stdout or "").strip()
+        nat = out.splitlines()[-1].strip() if out else ""
+        if nat.count(".") == 3:
+            break
+        print(f"  c3rberus    : fetch-source probe retry {attempt + 1}/6 "
+              f"(server may still be warming)")
+        time.sleep(20)
     if not nat.count(".") == 3:
-        raise RuntimeError(f"fetch-source probe saw nothing from {ip} — script server down? "
-                           f"({nat!r})")
+        raise RuntimeError(f"fetch-source probe saw nothing from {ip} after 6 attempts — "
+                           f"script server down? ({nat!r})")
     print(f"  c3rberus    : boxes reach the script server as {nat} (lab NAT source)")
     return nat
 
