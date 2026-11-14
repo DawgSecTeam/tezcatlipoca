@@ -381,13 +381,27 @@ def plant(ssh_key, red_ip, token, team_nums, *, comp_dir=None, runner=None):
     if not doc.get("task_id"):
         raise RuntimeError(f"deploy-all-iocs refused: {doc}")
     status = _wait_task(ssh_key, red_ip, token, doc["task_id"], runner=runner, timeout_s=5400)
-    resp = _api(ssh_key, red_ip, token, "GET", "/c2/iocs/deployed", runner=runner)
-    rows = resp.get("deployed", []) if isinstance(resp, dict) else (resp or [])
+    # Settle poll: the parent task flips done while stragglers are still being
+    # stamped active; a single immediate read under-counted 3 boxes and refused
+    # a fully-planted estate (run-8ec19d10 — 5/8 at read, live-checked 8/8).
+    rows, prev = [], None
+    for _round in range(18):
+        resp = _api(ssh_key, red_ip, token, "GET", "/c2/iocs/deployed", runner=runner)
+        rows = resp.get("deployed", []) if isinstance(resp, dict) else (resp or [])
+        sig = sum(1 for r in rows if r.get("status") == "active")
+        if sig and sig == prev and _round:
+            break
+        prev, _ = sig, sig
+        time.sleep(10)
     # deploy-all-iocs returns per box, under a dict wrapper — the old bare
     # len(list) read 0 on EVERY run while a 1107-row catalog sat planted.
     per = Counter(r.get("box_ip") for r in rows if r.get("status") == "active")
     planted = sum(per.values())
-    healthy_boxes = sum(1 for n in per.values() if n >= 25)
+    # Catalog size is legitimately per-box-type (linux 31, windows 24-27): an
+    # absolute floor mis-grades a small-but-complete box. Relative test —
+    # healthy means within 80% of the estate's own median, at least 12 rows.
+    _med = sorted(per.values())[len(per) // 2] if per else 0
+    healthy_boxes = sum(1 for n in per.values() if n >= max(12, int(0.8 * _med)))
     want = 2 * len(_boxes(comp_dir)) if comp_dir else 8
     print(f"  c3rberus    : deploy-all-iocs {status}; {planted} active rows, "
           f"{healthy_boxes}/{want} boxes carry a catalog")
@@ -664,7 +678,10 @@ def ensure_live(comp_dir, *, ssh_key, red_ip=None, runner=None):
                 runner=runner)
     rows = resp.get("deployed", []) if isinstance(resp, dict) else (resp or [])
     per = Counter(r.get("box_ip") for r in rows if r.get("status") == "active")
-    healthy = sum(1 for n in per.values() if n >= 25)
+    # same relative health rule as plant(): a 24-row windows box is complete,
+    # not thin (fixed floors mis-grade per-type catalogs — run-8ec19d10)
+    _med = sorted(per.values())[len(per) // 2] if per else 0
+    healthy = sum(1 for n in per.values() if n >= max(12, int(0.8 * _med)))
     planted = sum(per.values())
     if healthy < len(per) or healthy < 8:
         raise RuntimeError(
