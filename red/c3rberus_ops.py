@@ -273,15 +273,27 @@ def install(ssh_key, red_ip, *, comp_dir, box_pw, scoring_pw, runner=None):
 
 
 def wait_backend(ssh_key, red_ip, *, runner=None, timeout_s=1500):
+    """Both served faces must answer before a stage proceeds: the API gate alone
+    let deploys race the script server, which the backend supervises and which
+    comes up MINUTES later (the fetch-source probe's 'saw nothing' on warm
+    servers — run-f9b92d32/94316d50/cc86fe06). Any HTTP code from :4000 counts;
+    we only require the port to speak."""
     deadline = time.time() + timeout_s
+    last = ["", ""]
     while time.time() < deadline:
-        if "200" in (_ssh(ssh_key, red_ip,
-                          f"curl -sk -m 8 -o /dev/null -w '%{{http_code}}' {API}/docs",
-                          runner=runner, timeout=30, check=False).stdout or ""):
+        last[0] = _ssh(ssh_key, red_ip,
+                       f"curl -sk -m 8 -o /dev/null -w '%{{http_code}}' {API}/docs",
+                       runner=runner, timeout=30, check=False).stdout or ""
+        last[1] = _ssh(ssh_key, red_ip,
+                       "curl -sk -m 5 -o /dev/null -w '%{http_code}' "
+                       "https://127.0.0.1:4000/ || true",
+                       runner=runner, timeout=30, check=False).stdout or ""
+        if "200" in last[0] and last[1].strip() and "000" not in last[1]:
             return
         time.sleep(15)
     raise RuntimeError(f"the c3rberus backend never answered on red01 within {timeout_s}s "
-                       "(check systemctl status c3rberus-backend + logs/uvicorn_*.log)")
+                       f"(api={last[0]!r} scripts={last[1]!r}; check systemctl status "
+                       "c3rberus-backend + logs/uvicorn_*.log)")
 
 
 def _wait_task(ssh_key, red_ip, token, task_id, *, runner=None, timeout_s=2400):

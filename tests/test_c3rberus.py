@@ -336,3 +336,36 @@ def test_fetch_source_probe_retries_past_server_warmup(monkeypatch, tmp_path):
         assert False, "must raise after exhausting retries"
     except RuntimeError as e:
         assert "after 6 attempts" in str(e)
+
+
+def test_wait_backend_gates_the_script_server_too(monkeypatch):
+    from red import c3rberus_ops as m
+    calls = {"n": 0}
+    monkeypatch.setattr(m, "time", type("T", (), {
+        "sleep": staticmethod(lambda s: None),
+        "time": staticmethod(lambda: 1700000000.0)}))
+    def ssh(key, ip, remote, **k):
+        import subprocess
+        calls["n"] += 1
+        if "/docs" in remote:
+            return subprocess.CompletedProcess([], 0, "200", "")
+        # :4000 silent on the first two rounds (cold), answers 401 after
+        return subprocess.CompletedProcess([], 0, "" if calls["n"] < 5 else "401", "")
+    monkeypatch.setattr(m, "_ssh", ssh)
+    m.wait_backend("k", "10.0.0.247")          # must NOT return before :4000 speaks
+    assert calls["n"] >= 5
+    monkeypatch.setattr(m, "_ssh", lambda *a, **k: __import__("subprocess")
+                        .CompletedProcess([], 0, "000", "") if "/scripts" in a[2] or ":4000" in a[2]
+                        else __import__("subprocess").CompletedProcess([], 0, "200", ""))
+    # time now always advances past deadline: loop must terminate by timeout
+    tt = {"t": 0.0}
+    def clock():
+        tt["t"] += 16
+        return 1700000000.0 + tt["t"]
+    monkeypatch.setattr(m, "time", type("T", (), {"sleep": staticmethod(lambda s: None),
+                                                  "time": staticmethod(clock)}))
+    try:
+        m.wait_backend("k", "10.0.0.247", timeout_s=120)
+        assert False, "must raise when :4000 never speaks"
+    except RuntimeError as e:
+        assert "scripts=" in str(e)
