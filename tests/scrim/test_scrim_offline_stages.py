@@ -62,6 +62,14 @@ class RedLlmHeadroom(unittest.TestCase):
         self.assertEqual(llm["model"], "qwen3.8-flash-next")
         self.assertFalse(llm["enabled"])  # CLEF decides; no free-form arbiter
 
+    def test_red_llm_can_be_enabled_for_a_local_fallback(self):
+        from scrim import red_stage
+        llm = red_stage.red_llm_config(
+            _args(None, enable_red_llm=True,
+                  llm_base_url="http://10.0.0.212:4000/v1", red_model="qwen3.8-27b"))
+        self.assertTrue(llm["enabled"])
+        self.assertEqual(llm["model"], "qwen3.8-27b")
+
 
 
 class Base(unittest.TestCase):

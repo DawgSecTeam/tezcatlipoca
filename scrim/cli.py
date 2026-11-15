@@ -67,6 +67,9 @@ def main():
                    help="seconds per blue cycle (default: knobs.cycle_timeout, 600)")
     p.add_argument("--blue-model", default="k2", help="gateway model for blue agents")
     p.add_argument("--red-model", default="k2", help="gateway model for red")
+    p.add_argument("--enable-red-llm", action="store_true",
+                   help="allow the local red LLM to author commands; clef stays the "
+                        "decision layer and the deterministic policy remains the fallback")
     p.add_argument("--reasoning-effort", default="",
                    help="reasoning effort sent to the LLM (GPT-5.x/o-series only — "
                         "the local qwen endpoints 500 on it); pass e.g. 'minimal' "

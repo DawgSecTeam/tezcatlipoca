@@ -118,10 +118,11 @@ def red_pacing_caps(comp_dir=None):
 
 
 def red_llm_config(args, base_url=None):
-    """The decision model is clef; the free-form LLM must not arbitrate sliver's red loop."""
+    """Clef decides; the free-form LLM is opt-in command authoring, never the arbiter."""
     base = base_url or args.llm_base_url
     local = core.is_local_endpoint(base)
-    return {"enabled": False, "base_url": base, "model": args.red_model,
+    return {"enabled": bool(getattr(args, "enable_red_llm", False)),
+            "base_url": base, "model": args.red_model,
             "timeout_sec": 300 if local else 240,
             "api_key_env": "TLALOC_LLM_API_KEY"}
 
