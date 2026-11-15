@@ -352,9 +352,14 @@ def _prep_sliver(ctx, client, out_dir, manifest, transports, *, write=True):
     # jobs are split across them; each thread stays serial for its server.
     builders = [b for b in (getattr(ctx, "c2_builders", None) or [client])
                 if b is not None]
+    # A WG payload registers its peer in the server process that generated it, and
+    # only the main server owns the WG listener. A WG built on a build-only server
+    # can never handshake (live: dc01/win01/web01 WG silent; db01's main-built WG
+    # worked). Pin every WG job to the main builder.
     chunks = [[] for _ in builders]
     for index, job in enumerate(jobs):
-        chunks[index % len(builders)].append(job)
+        target = 0 if job["transport"] == "wg" else index % len(builders)
+        chunks[target].append(job)
     with ThreadPoolExecutor(max_workers=len(builders)) as pool:
         built = [entry for chunk in pool.map(_run_builder, builders, chunks)
                  for entry in chunk]

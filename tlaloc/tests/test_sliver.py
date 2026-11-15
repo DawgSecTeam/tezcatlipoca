@@ -180,6 +180,25 @@ def test_parallel_prep_splits_jobs_across_build_servers(tmp_path):
     assert all(build[1] == "mtls" for build in main.builds + extra.builds)
 
 
+def test_wg_builds_are_pinned_to_the_main_server(tmp_path):
+    from tlaloc import cli
+    boxes = [
+        {"box": "web01", "identifier": "150", "ip": "192.168.150.4",
+         "windows": False},
+        {"box": "win02", "identifier": "150", "ip": "192.168.150.3",
+         "windows": True},
+    ]
+    main, extra = FakePrepClient(), FakePrepClient()
+    ctx = SimpleNamespace(intel=SimpleNamespace(boxes=lambda: boxes),
+                          c2_builders=[main, extra])
+    manifest = {"boxes": {}}
+    cli._prep_sliver(ctx, main, Path(tmp_path), manifest, ["wg"])
+    # WG peers live in the generating server; the listener is on the main only
+    assert main.builds and not extra.builds
+    assert all(build[1] == "wg" for build in main.builds)
+    assert len(manifest["boxes"]) == 2
+
+
 def test_mythic_transports_are_validated_against_mythics_list():
     """The Mythic prep command defaults to `http,webhook`; validating that against
     Sliver's TRANSPORTS rejected the engine's own default before it could build."""
