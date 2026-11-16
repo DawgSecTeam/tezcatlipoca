@@ -427,6 +427,7 @@ class DeployImplantsTests(unittest.TestCase):
         for name, kw in (("seed_via_red01", {"return_value": {"ok": True}}),
                          ("pull_manifest", {"return_value": {
                              "path": str(self.comp / "red" / "manifest.json")}}),
+                         ("_replay_account_modes", {}),
                          ("_wipe_arming_traces", {})):
             patcher = mock.patch.object(to, name, **kw)
             patcher.start()
@@ -442,6 +443,17 @@ class DeployImplantsTests(unittest.TestCase):
         to.seed_via_red01.assert_called_once()
         to._wipe_arming_traces.assert_called_once()
         self.assertEqual(out["red_ip"], "10.0.0.241")
+
+    def test_the_account_modes_are_replayed_after_the_seed(self):
+        # The seed's chpasswd rewrites /etc/shadow and undoes the packet's mode pins, so
+        # the late pass is one more account writer between the seed and the wipe.
+        self._patch()
+        order = []
+        to.seed_via_red01.side_effect = lambda *a, **k: order.append("seed")
+        to._replay_account_modes.side_effect = lambda *a, **k: order.append("modes")
+        to._wipe_arming_traces.side_effect = lambda *a, **k: order.append("wipe")
+        to.deploy_implants(self.comp, {"red": {"red_ip": "10.0.0.241"}}, ssh_key="/k")
+        self.assertEqual(order, ["seed", "modes", "wipe"])
 
     def test_a_range_that_was_never_staged_refuses(self):
         self._patch()

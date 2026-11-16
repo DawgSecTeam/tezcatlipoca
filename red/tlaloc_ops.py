@@ -780,8 +780,33 @@ def deploy_implants(comp_dir, state, *, ssh_key, runner=None):
                   and sliver_ops.sliver_enabled(comp_dir))
     manifest = _seed_and_prove(comp_dir, ssh_key, red_ip, block,
                                (use_mythic or use_sliver), runner)
+    # The seed rotates the box credentials it escalates through (chpasswd rewrites
+    # /etc/shadow), which resets the account-file modes the packet promises. The deploy
+    # replays that pass after its own writers; the arm is one more writer, so it replays
+    # again — otherwise a reset range verifies with a misconfig missing.
+    _replay_account_modes(comp_dir, state, ssh_key, runner)
     _wipe_arming_traces(comp_dir, state, ssh_key)
     return {"manifest": manifest.get("path") if manifest else None, "red_ip": red_ip}
+
+
+def _replay_account_modes(comp_dir, state, ssh_key, runner=None):
+    from common.utils import compfile_flag
+    from guests import converge_ops
+    path = Path(comp_dir) / ".nakon-late.json"
+    if not path.exists():
+        return
+    machines = converge_ops.stage_machines(path)
+    if not machines:
+        return
+    from estate import config as estate_config
+    print(f"  account modes: replaying the late pass on {len(machines)} machine(s) "
+          f"after the seed")
+    converge_ops.run_stage(
+        path, machines, ssh_key=Path(ssh_key),
+        scoring_user=estate_config.active().engine.username,
+        scoring_ip=state.get("engine_mgmt_ip", ""),
+        jobs=max(1, compfile_flag(Path(comp_dir) / "Compfile", "nakon_jobs", 4)),
+        strict=False, label="late-arm", comp_dir=Path(comp_dir))
 
 
 def _wipe_arming_traces(comp_dir, state, ssh_key):
