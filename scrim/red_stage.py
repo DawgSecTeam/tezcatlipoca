@@ -246,6 +246,10 @@ def stage_red(args, comp, creds, run_dir):
             f"event red-LLM-less. Run a socat relay on this host and/or the reverse "
             f"tunnel (--red-tunnel), then re-run.")
     log(f"red01 reached the LLM at {base_url} — clear to start")
+    # The prepared range has no injects yet (a held deploy defers them to start), and the
+    # authoritative gate below fails on that. Publish them first; T0 re-anchors them.
+    from scrim import inject_sync
+    inject_sync.ensure_injects_created(args, comp, creds)
     verify_red_reaches_teams(args, comp, creds)
     try:
         from guests import clean_trails
