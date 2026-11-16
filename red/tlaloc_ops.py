@@ -731,8 +731,9 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         # packet's account-file modes must be re-pinned after it.
         _replay_account_modes(comp_dir,
                               {**ctx.state,
-                               "engine_mgmt_ip": getattr(ctx, "engine_mgmt_ip", "")
-                               or ctx.state.get("engine_mgmt_ip", "")},
+                               "engine_mgmt_ip": (getattr(ctx, "engine_mgmt_ip", "")
+                                                  or getattr(ctx, "scoring_ip", "")
+                                                  or ctx.state.get("engine_mgmt_ip", ""))},
                               ssh_key, runner)
     else:
         print("  tlaloc      : assume_breach off — no day-0 seed or manifest")
