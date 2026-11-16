@@ -727,6 +727,13 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     elif block.get("assume_breach") != "off":
         manifest = _seed_and_prove(comp_dir, ssh_key, red_ip, block,
                                    (use_mythic or use_sliver), runner)
+        # Same reason as the arm's: the seed's chpasswd rewrites /etc/shadow, so the
+        # packet's account-file modes must be re-pinned after it.
+        _replay_account_modes(comp_dir,
+                              {**ctx.state,
+                               "engine_mgmt_ip": getattr(ctx, "engine_mgmt_ip", "")
+                               or ctx.state.get("engine_mgmt_ip", "")},
+                              ssh_key, runner)
     else:
         print("  tlaloc      : assume_breach off — no day-0 seed or manifest")
     if start_loop and deploy_implants_now:
