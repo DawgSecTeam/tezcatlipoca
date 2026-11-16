@@ -16,7 +16,7 @@ from infra.lifecycle import list_snapshots, snapshot_support_hint
 from infra.ownership import parse_vm_tags
 from common.targets import describe_target
 from redeploy.redeploy_engine_ops import engine_recovery, reseed_event
-from redeploy.redeploy_gate_ops import load_deployed_range
+from redeploy.redeploy_gate_ops import load_deployed_range, range_identity
 from redeploy.redeploy_context import RedeployContext
 from redeploy.redeploy_light_ops import mode_reconfigure, mode_resync, mode_rollback
 from redeploy.redeploy_plant_ops import prepare_nakon_assets
@@ -156,7 +156,7 @@ def main():
 
     print(f"\n{'='*64}")
     print(f"  Redeploy — {name} ({comp_name})")
-    print(f"  {pipeline_api.env_summary()}")
+    print(f"  {range_identity(state, node)}")
     print(f"{'='*64}")
     print(f"  Mode: {args.mode}")
     print(f"  {len(targets)} of {len(teams) * len(boxes)} box(es) selected:\n")

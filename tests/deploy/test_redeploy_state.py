@@ -159,3 +159,19 @@ class HardeningOrderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RangeIdentity(unittest.TestCase):
+    """The redeploy banner names the range, not the ambient profile it was launched from."""
+
+    def test_it_reports_the_documents_engine_not_the_profiles(self):
+        from redeploy.redeploy_gate_ops import range_identity
+        line = range_identity({"endpoint": "https://10.0.0.150:8006", "node": "proxmox",
+                               "datastore": "hdd", "engine_mgmt_ip": "10.0.0.254"})
+        self.assertIn("engine-mgmt=10.0.0.254", line)
+        self.assertIn("datastore=hdd", line)
+        self.assertNotIn("10.0.0.252", line)
+
+    def test_a_document_without_the_keys_still_names_the_node(self):
+        from redeploy.redeploy_gate_ops import range_identity
+        self.assertIn("node=pve", range_identity({}, "pve"))
