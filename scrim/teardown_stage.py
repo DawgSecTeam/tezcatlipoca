@@ -41,7 +41,7 @@ def teardown_red(args, env):
     """Destroy this run's red01 and prove the recorded vmid is gone; returns it for verify_clean journaling."""
     log("teardown: red01 + the red segment rules")
     try:
-        red_link.pull_red_state(args)
+        red_link.pull_red_state(args, only_missing=True)
     except Exception as e:                                   # noqa: BLE001 - never blocks
         log(f"WARNING: red state pull failed before teardown: {type(e).__name__}: {e}")
     comp_path = str(resolve_comp_dir(args.competition,

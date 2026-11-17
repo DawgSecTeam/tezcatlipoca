@@ -62,6 +62,14 @@ class RedLlmHeadroom(unittest.TestCase):
         self.assertEqual(llm["model"], "qwen3.8-flash-next")
         self.assertFalse(llm["enabled"])  # CLEF decides; no free-form arbiter
 
+    def test_red_llm_can_be_enabled_for_a_local_fallback(self):
+        from scrim import red_stage
+        llm = red_stage.red_llm_config(
+            _args(None, enable_red_llm=True,
+                  llm_base_url="http://10.0.0.212:4000/v1", red_model="qwen3.8-27b"))
+        self.assertTrue(llm["enabled"])
+        self.assertEqual(llm["model"], "qwen3.8-27b")
+
 
 
 class Base(unittest.TestCase):
@@ -229,15 +237,22 @@ class StageManifest(Base):
     # Before this the run manifest only ever held the latest `phase`, so every scrim run showed
     # zero stages on the run page no matter how far it got.
 
+    def _record_clock(self, *a, **k):
+        # the event clock and the scoring clock must start together — a scrim that skips the
+        # engine leaves the range scoring nothing while its lanes play (run-7998e766)
+        self.clock_calls.append(a)
+        return self.clock_rc
+
     def _recorded(self):
         manifests = sorted((self.comp / ".automated-tests").glob("*/run.json"))
         self.assertTrue(manifests, "the run manifest was never written")
         return [p["phase"] for p in
                 run_manifest.load_manifest(manifests[0].parent).get("phases") or []]
 
-    def _run_main(self, argv, on_red=None):
+    def _run_main(self, argv, on_red=None, clock_rc=0):
         from scrim import cli, event_run, fire_test, inject_sync, red_link, red_stage, staging
         noop = lambda *a, **k: None  # noqa: E731
+        self.clock_calls, self.clock_rc = [], clock_rc
         with mock.patch.object(sys, "argv", ["run-agent-scrim.py", *argv]), \
                 mock.patch.object(cli, "resolve_comp_dir", return_value=self.comp), \
                 mock.patch.object(cli.procs, "run", noop), \
@@ -249,6 +264,7 @@ class StageManifest(Base):
                 mock.patch.object(blue_agent, "stage_blues", noop), \
                 mock.patch.object(red_stage, "stage_red", on_red or noop), \
                 mock.patch.object(red_link, "start_red_director", noop), \
+                mock.patch.object(cli, "start_engine_clock", self._record_clock), \
                 mock.patch.object(inject_sync, "reanchor_injects", noop), \
                 mock.patch.object(event_run, "run_event_and_finish", noop):
             cli.main()
@@ -266,6 +282,15 @@ class StageManifest(Base):
     def test_each_stage_records_itself_in_harness_order(self):
         self._run_main(["--competition", "c1", "--teams", "1", "--duration-min", "30"])
         self.assertEqual(self._recorded(), ["deploy", "verify", "blues", "red", "event"])
+
+    def test_t0_starts_the_scoring_engine_clock_with_the_event_clock(self):
+        # preflight rounds check the pins but record nothing: an event that never flips the
+        # engine plays against an empty scoreboard (cde-2026 run-7998e766)
+        self._run_main(["--competition", "c1", "--teams", "1", "--duration-min", "30"])
+        self.assertEqual(len(self.clock_calls), 1)
+        with self.assertRaises(RuntimeError):
+            self._run_main(["--competition", "c1", "--teams", "1", "--duration-min", "30"],
+                           clock_rc=1)
 
     def test_the_range_lock_is_taken_before_anything_is_staged(self):
         # the deploy's engine lock does not cover a --skip-deploy scrim, so the range's own

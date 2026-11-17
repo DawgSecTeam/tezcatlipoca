@@ -8,6 +8,7 @@ state", or whether injects are created.
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import requests
 
@@ -85,6 +86,16 @@ def release_held_red(state):
         print(f"  START WARNING: releasing the red loop failed ({e}) — run "
               "`sudo systemctl start tlaloc.service` on red01 before play begins")
         return 1
+
+
+def start_engine_clock(comp_dir, engine_ip=None):
+    """Flip the scoring engine from preflight to scored rounds. The preflight loop runs the same
+    pins but records nothing, so a range whose clock was never started plays an event against an
+    empty scoreboard: --hold-start defers the flip to `competition-ops start`, and a --skip-deploy
+    scrim never walks that door either — each half is correct and their combination ran 90 silent
+    minutes (cde-2026 run-7998e766: blue cycles rc=0, engine still competition_started:false at
+    T0+5). Idempotent; a live range just reports already-started."""
+    return cmd_start(SimpleNamespace(engine_ip=engine_ip, scoring_password=None), comp_dir)
 
 
 def cmd_start(args, comp_dir):

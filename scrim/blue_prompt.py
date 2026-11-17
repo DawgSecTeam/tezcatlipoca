@@ -55,6 +55,11 @@ def blue_cycle_prompt(n, creds, args, elapsed, remain, delta_text, inject_text, 
             "  harden.sh is NOT for you: it replaces shells and locks accounts (breaks the\n"
             "    scored ssh pins). Read it for ideas; never run it during the event.\n"
             "  Windows boxes: the kit is Linux-only; use PowerShell hardening directly.\n"
+            "  ./quetzalcoatl/ — the FULL defense kit real teams carry (when staged here):\n"
+            "    c2scanner.sh / beaconfinder.sh / angryc2scanner.sh (C2 + beacon hunters),\n"
+            "    baseline/specific.sh, minzero/ (stage-0 recovery), backup.sh, systems/.\n"
+            "    Same rule as harden.sh: audit scripts are safe, deploy scripts are not\n"
+            "    to run blind — verify with ./scorch after everything.\n"
         )
     return f"""{header}
 T+{elapsed}min of {args.duration_min} ({remain}min left). Work in THIS directory; everything you need is here.

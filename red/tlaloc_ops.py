@@ -829,8 +829,14 @@ def install_red_rules(comp_dir, engine_ip, ssh_key, *, team_identifiers,
     A prepared reset reboots the engine, and the arm then needs those rules to exist before
     the seed's callbacks can land — re-asserting here is what makes the arm independent of
     whatever timer restores them.
+
+    c3rberus runs its own sliver listeners on offset ports beside tlaloc's, and the rule set is
+    rewritten whole from this map — so the extension belongs here, where both the deploy and the
+    arm pass through.
     """
-    from red import red01_ops
+    from red import c3rberus_ops, red01_ops
+    if c3rberus_ops.selected(comp_dir):
+        callback_ports = c3rberus_ops.extend_transport_map(callback_ports)
     red01_ops.install_engine_rules(
         engine_ip, ssh_key, engine_user=engine_user, team_identifiers=team_identifiers,
         callback_port=callback_port, callback_host=callback_host or "",

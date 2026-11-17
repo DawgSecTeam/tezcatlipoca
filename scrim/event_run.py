@@ -5,6 +5,7 @@ from scrim import blue_agent
 from scrim import blue_watchdog
 from scrim import endpoints
 from scrim import evidence
+from scrim import red_c3rberus
 from scrim import red_watchdog
 from scrim import run_manifest
 from scrim import scoreboard_monitor
@@ -37,6 +38,11 @@ def stage_run(args, creds, t0):
                                               endpoint_locks[base_url], 300.0 * (n - 1))))
     threads.append(threading.Thread(target=scoreboard_monitor.monitor_loop, name="monitor",
                                     args=(args, creds, t0, stop)))
+    # The c3rberus operator: supervised like a blue team — its death IS a broken event
+    # when the platform is in play (tlaloc alone would hide that half went silent).
+    if getattr(args, "red_c3rberus", None):
+        threads.append(threading.Thread(target=red_c3rberus.red_feed_loop,
+                                        name="red-operator", args=(args, stop, t0)))
     if getattr(args, "blue_watchdog", False):
         threads.append(threading.Thread(target=blue_watchdog.blue_watchdog_loop, name="blue-watchdog",
                                         args=(args, creds, t0, stop)))

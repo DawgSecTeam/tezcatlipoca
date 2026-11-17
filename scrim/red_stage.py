@@ -118,10 +118,11 @@ def red_pacing_caps(comp_dir=None):
 
 
 def red_llm_config(args, base_url=None):
-    """The decision model is clef; the free-form LLM must not arbitrate sliver's red loop."""
+    """Clef decides; the free-form LLM is opt-in command authoring, never the arbiter."""
     base = base_url or args.llm_base_url
     local = core.is_local_endpoint(base)
-    return {"enabled": False, "base_url": base, "model": args.red_model,
+    return {"enabled": bool(getattr(args, "enable_red_llm", False)),
+            "base_url": base, "model": args.red_model,
             "timeout_sec": 300 if local else 240,
             "api_key_env": "TLALOC_LLM_API_KEY"}
 
@@ -217,8 +218,51 @@ class _PipelineCtx:
         pass
 
 
+def ensure_range_awake(comp, creds):
+    """An event teardown PRE-STOPS every guest (hard poweroff, machinery.py:104 —
+    the graceful path hangs Windows guests), so the next --skip-deploy scrim woke
+    onto a cold estate and verify failed on 'configuration file does not exist'
+    (run-68b93318). The deploy path boots its own guests; this is the idle-wake
+    half it never had. Idempotent: running guests are untouched."""
+    from estate import state as estate_state
+    from infra import lifecycle
+    from common import ssh_ops
+    import pipeline_api
+    st = estate_state.load_flat(comp) or {}
+    targets = (st.get("roster") or {}).get("targets") or {}
+    tmpl = {}
+    try:
+        for team in json.loads((Path(comp) / "boxes.json").read_text()):
+            for b in team.get("boxes", []):
+                tmpl[b["name"]] = b.get("template", "")
+    except (OSError, ValueError, AttributeError):
+        pass
+    down = []
+    for key, t in targets.items():
+        if lifecycle.vm_status(t.get("node"), t["vmid"]) != "running":
+            log(f"waking {key} (vmid {t['vmid']}) — powered off since the last teardown")
+            lifecycle.start_vm(t.get("node"), t["vmid"])
+        if tmpl.get(t.get("box_name")):
+            down.append({**t, "vm_name": key, "box": {"template": tmpl[t["box_name"]]}})
+    if down:
+        ssh_ops.wait_for_boxes_ssh(pipeline_api.engine_ctx(str(comp)) | {
+            "box_username": (creds or {}).get("box_username", "ubuntu")}, down, timeout=900)
+    return len(down)
+
+
+def _box_password(comp):
+    """Packet-published password outranks the state doc (inputs.py's rule) — a
+    resumed deploy reading only state used a phantom mint the boxes never got
+    (run-1f59bd06: every probe hop died at LOGON_FAILURE in silence)."""
+    from config.config_ops import load_packet_passwords
+    pk = load_packet_passwords(Path(comp)) or {}
+    return (pk.get("box_password")
+            or core.read_state(comp).get("box_password", ""))
+
+
 def stage_red(args, comp, creds, run_dir):
     from red import tlaloc_ops
+    ensure_range_awake(comp, creds)
     staging.set_red_clock(args)
     _resolve_red_vmid(args, comp)
     # A written placement is authoritative: pass it, never re-select for a live range.
@@ -251,6 +295,23 @@ def stage_red(args, comp, creds, run_dir):
     from scrim import inject_sync
     inject_sync.ensure_injects_created(args, comp, creds)
     verify_red_reaches_teams(args, comp, creds)
+    # The c3rberus platform rides along when the Compfile selects it: install/adopt on
+    # the same red01, render its inventory from THIS range's state, plant its day-0
+    # catalog once. It comes up after tlaloc's own gates so a platform failure is
+    # never mistaken for a campaign failure — and it aborts the run all the same:
+    # an event with half its red tooling silently missing is the thing we're fixing.
+    from red import c3rberus_ops
+    if c3rberus_ops.selected(comp):
+        if getattr(args, "skip_deploy", False):
+            # a live event must inherit the planted platform, not re-derive it:
+            # stage() rewrites inventory, restarts the backend and re-plants all
+            # 76 IOCs over blue's remediations (run-c1cabbd9 mid-event rewrite).
+            info = c3rberus_ops.ensure_live(comp, ssh_key=ssh_key,
+                                            red_ip=args.red_ip)
+        else:
+            info = c3rberus_ops.stage(comp, ssh_key=ssh_key, red_ip=args.red_ip,
+                                      box_pw=_box_password(comp))
+        ctx.state["red"]["c3rberus"] = info
     try:
         from guests import clean_trails
         clean_trails.clean_trails(comp, creds)

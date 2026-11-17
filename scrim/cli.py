@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from config.config_ops import write_state
+from quotient.lifecycle_ops import start_engine_clock
 from scrim import blue_agent
 from scrim import blue_watchdog
 from scrim import core
@@ -19,6 +20,7 @@ from scrim import lock_ops
 from common import procs
 from scrim import red_link
 from scrim import red_stage
+from scrim import red_c3rberus
 from scrim import run_manifest
 from scrim import staging
 from scrim import test_folder
@@ -66,6 +68,9 @@ def main():
                    help="seconds per blue cycle (default: knobs.cycle_timeout, 600)")
     p.add_argument("--blue-model", default="k2", help="gateway model for blue agents")
     p.add_argument("--red-model", default="k2", help="gateway model for red")
+    p.add_argument("--enable-red-llm", action="store_true",
+                   help="allow the local red LLM to author commands; clef stays the "
+                        "decision layer and the deterministic policy remains the fallback")
     p.add_argument("--reasoning-effort", default="",
                    help="reasoning effort sent to the LLM (GPT-5.x/o-series only — "
                         "the local qwen endpoints 500 on it); pass e.g. 'minimal' "
@@ -211,12 +216,20 @@ def main():
     # marker BEFORE stage_red: red01 deploys take tens of minutes; a death in there must leave a resume marker
     run_manifest.record_phase(run_dir, args, "red")
     red_stage.stage_red(args, comp, creds, run_dir)
+    # The platform's operator agent (workdir + access) stages beside tlaloc; its
+    # feed thread starts with the event, like the blue ones.
+    args.red_c3rberus = red_c3rberus.stage_operator(args, comp, run_dir)
     # T0 is the event clock: starting red before this point lets its opening cycle
     # take scored services down before blue's first turn.
     # (lost in the sliver-c2 squash 69c7fa1; every scrim since ran with a held red
     # that never fired — b2d runs 7-10 caught it live.)
     red_link.start_red_director(args)
     t0 = time.time()
+    # The engine must start scoring at the same instant the event clock does — its preflight
+    # loop checks the same pins but records nothing, and on a held deploy nothing else ever
+    # flips it (cde-2026 run-7998e766 played the whole event against preflight rounds).
+    if start_engine_clock(comp, getattr(args, "engine_ip", None)):
+        raise RuntimeError("the scoring engine's clock did not start — nothing would score")
     write_state(run_dir / "T0.txt", {"t0": t0, "duration_min": args.duration_min})
     run_manifest.record_phase(run_dir, args, "event", t0=t0)
     log(f"T0 — event clock starts now (red setup took {(t0 - red_setup_started) / 60:.0f} min, "

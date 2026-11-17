@@ -2,7 +2,7 @@
 
 import json
 
-from golden.golden_target_ops import _template_vmid_map, unbooted_golden_boxes
+from golden.golden_target_ops import _template_vmid_map, template_vmid, unbooted_golden_boxes
 from nakonops.nakon_bundle_ops import build_nakon_bundle
 from nakonops.nakon_config_ops import generate_nakon_config, generate_stage_configs
 from engine.template_freeze import frozen_code_drift, frozen_state, golden_freeze_gate
@@ -45,7 +45,8 @@ def generate_stage_configs_and_hashes(ctx, comp_dir):
     for box in ctx.boxes:
         for host in sorted(maps):
             if box["template"] in maps[host]:
-                base_template_ids[box["template"]] = maps[host][box["template"]]
+                # accessor: an ambiguous name must not hash whichever vmid ordering chose
+                base_template_ids[box["template"]] = template_vmid(maps[host], box["template"])
                 break
     ctx.golden_inputs, ctx.golden_hashes = golden_hash_entries(
         ctx.boxes, base_template_ids, golden_machines_by_box, golden_bundle,

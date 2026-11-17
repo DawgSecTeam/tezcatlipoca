@@ -110,11 +110,13 @@ def run_gates(args, comp_dir, ctx, teams, admin_password, boxes, base_url):
         run.add(gate_skip("misconfig", note, gating=False))
     else:
         run.add(misconfig.check_misconfig(ctx, boxes, comp_dir))
-    injects_relevant, injects_ok = engine.check_injects(base_url, admin_session, comp_dir)
+    injects_relevant, injects_ok, injects_note = engine.check_injects(base_url, admin_session,
+                                                                     comp_dir)
     if injects_relevant:
         run.add(bool_gate("injects", injects_ok))
     else:
-        run.add(gate_skip("injects", "competition ships no injects/ dir", gating=False))
+        run.add(gate_skip("injects", injects_note or "competition ships no injects/ dir",
+                          gating=False))
     run.add(engine.check_round_loop(base_url, admin_session, fix=args.fix_round_loop))
     print("\n  (telemetry — declared feeds are actually indexing, per team)")
     try:

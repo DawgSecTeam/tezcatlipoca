@@ -5,8 +5,8 @@ from guests.converge_ops import record_clean_coverage, record_stage, run_stage, 
 from guests.domain_ops import deploy_domain_configs
 from guests.service_fixup_ops import reensure_mysql_credlist_users
 from common.timing import timed
-from common.utils import compfile_flag
-from red import tlaloc_ops
+from common.utils import compfile_flag, run_concurrent
+from red import c3rberus_ops, tlaloc_ops
 
 
 def _publish_red_intel_state(ctx):
@@ -83,11 +83,22 @@ def phase7_domains_and_final(ctx):
     _ensure_pinned_ftp(ctx)
 
     # Red is STAGED before the snapshot, not deployed: the restore point every box carries
-    # must be a built range nobody has compromised yet. A range with no red team still
-    # aborts the deploy rather than degrade.
+    # must be a built range nobody has compromised yet. A range with no red team still aborts
+    # the deploy rather than degrade. The loop starts at the END of this phase: a live agent
+    # would generate traffic while the late pass writes account files, the trail wipe runs and
+    # tz-ready is taken.
     print("  Preparing assume-breach red presence (tlaloc: red01 + C2 + payload matrix)...")
     with timed(ctx.comp_dir, 7, "red_prepare"):
-        tlaloc_ops.plant_assume_breach(ctx, start_loop=False, deploy_implants_now=False)
+        red_summary = tlaloc_ops.plant_assume_breach(
+            ctx, start_loop=False, deploy_implants_now=False)
+    # The c3rberus platform installs beside tlaloc on the same red01, and its day-0
+    # IOC catalog must be inside tz-ready too — blue restores ONTO the IOCs, and the
+    # platform scores exactly that remediation.
+    if c3rberus_ops.selected(ctx.comp_dir):
+        with timed(ctx.comp_dir, 7, "red_c3rberus"):
+            red_summary["c3rberus"] = c3rberus_ops.stage(
+                ctx.comp_dir, ssh_key=ctx.ssh_key, red_ip=red_summary["red_ip"],
+                box_pw=ctx.box_password)
 
     # Last of the account writers (useradd resets /etc/{passwd,shadow,group} to default modes,
     # undoing any earlier plant), but before the trail wipe so this pass leaves no SSH trace.
@@ -136,3 +147,7 @@ def begin_red_after_delivery(ctx, red_summary):
     with timed(ctx.comp_dir, 8, "red_start"):
         tlaloc_ops.start_director(ctx.ssh_key, red_summary["red_ip"])
     print(f"  tlaloc      : loop started on red01 ({red_summary['red_ip']})")
+    if c3rberus_ops.selected(ctx.comp_dir):
+        # the platform's own T0: box-touching loops on, comp started, scheduler fires
+        c3rberus_ops.begin(ctx.comp_dir, ssh_key=ctx.ssh_key,
+                           red_ip=red_summary["red_ip"])

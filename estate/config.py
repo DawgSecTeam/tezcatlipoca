@@ -47,6 +47,11 @@ _SPEC = {
     "knobs.python": "",
     "knobs.competitions_root": "",
     "knobs.gaia_path": "",
+    # Kit sources with in-tree defaults (an estate may host its own fork of either):
+    # TEZ_BLUE_KIT_REPO overrides the blue team's quetzalcoatl clone URL,
+    # TEZ_C3RBERUS_REPO the red platform's repo (Compfile c3rberus_repo still outranks).
+    "knobs.blue_kit_repo": "",
+    "knobs.c3rberus_repo": "",
     # The decision model red asks (clef): a competition pins red.clef_url; this is
     # the estate-wide default, exported as TEZ_CLEF_URL.
     "knobs.clef_url": "",

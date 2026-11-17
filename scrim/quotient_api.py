@@ -109,6 +109,19 @@ def services_to_rows(services):
     return rows
 
 
+def preflight_to_services(doc, team):
+    """Normalize /api/engine/preflight checks into the /api/services shape, so every
+    reader (the fire test, the verify pin gate) works unchanged against a held range.
+    The scoreboard tables stay empty until a range's FIRST start — preflight runs the same
+    pins into its own tables — so /api/services/<tid> answers literal null pre-T0
+    (cde-2026 run-84c0e45d: the fire test read `unexpected payload: None` for 14 minutes and
+    aborted the event; every fire test that ever passed ran on a range already started once)."""
+    return [{"ServiceName": c.get("service_name"),
+             "Last10Rounds": [{"Checks": [{"Result": bool(c.get("result")),
+                                           "Error": c.get("error") or ""}]}]}
+            for c in (doc or {}).get("checks", []) if c.get("team_name") == team]
+
+
 def parsed_status(creds, team):
     # Team logins get "unauthorized" on /api/teams (and their teams.json password
     # need not match the engine's); the admin session can read every team.
@@ -120,7 +133,12 @@ def parsed_status(creds, team):
     except Exception:
         raise ValueError(f"non-JSON body: {(r.stdout or '')[:80]!r}")
     if not isinstance(services, list):
-        raise ValueError(f"unexpected payload: {str(services)[:80]}")
+        # null scoreboard rows on a range that has never started are not "no scoring
+        # path" — the preflight round proves the identical checks, per same pin.
+        pf = qget(creds, user, jar, "/api/engine/preflight")
+        services = preflight_to_services(json.loads(pf.stdout or "null"), team)
+        if not services:
+            raise ValueError(f"unexpected payload: {str(services)[:80]}")
     return services_to_rows(services)
 
 

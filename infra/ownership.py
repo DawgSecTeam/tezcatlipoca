@@ -58,9 +58,12 @@ def clone_marker(comp_name):
     return f"tezcatlipoca-clone {comp_tag(comp_name)}"
 
 
-def full_clone_data(newid, name, comp_name):
-    """Without `storage` a full clone inherits the source's pool — wrong pool for a golden."""
-    data = {"newid": newid, "name": name, "full": 1, "description": clone_marker(comp_name)}
+def full_clone_data(newid, name, comp_name, src=None):
+    """Without `storage` a full clone inherits the source's pool — wrong pool for a golden.
+    src stamps which template the clone came from: a golden slot holding a clone of some
+    OTHER vm (a twin name resolving elsewhere) is otherwise undetectable on resume."""
+    desc = clone_marker(comp_name) + (f" from-template={src}" if src is not None else "")
+    data = {"newid": newid, "name": name, "full": 1, "description": desc}
     storage = config.active().proxmox.datastore
     if storage:
         data["storage"] = storage

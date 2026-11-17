@@ -10,7 +10,7 @@ from .collect import load_collection
 from .constants import LOST, NOT_COLLECTED, REPORT_NAME, SIDES, SKIPPED, TODO_MARK, UNRECOVERABLE
 from .env import iso
 from .manifest import load_manifest
-from .status import side_status
+from .status import document_state
 from .verdict import verdict_block
 
 
@@ -168,7 +168,8 @@ def render_report_skeleton(test_path):
 
     lines += ["## Red", ""]
     if red.get("present"):
-        lines.append(f"Report: `{SIDES['red']}` ({side_status(collection, 'red')}). Red metrics "
+        lines.append(f"Report: `{SIDES['red']}` "
+                     f"({document_state(test_path, SIDES['red'], collection)}). Red metrics "
                      "live in the Verdict section; this section is the narrative.")
         lines.append("")
         lines.append("<!-- TODO(author): what red achieved, what it could not, and why -->")
@@ -176,7 +177,8 @@ def render_report_skeleton(test_path):
         lines.append("No red agent took part in this run.")
     lines += ["", "## Blue", ""]
     if blue.get("present"):
-        lines.append(f"Report: `{SIDES['blue']}` ({side_status(collection, 'blue')}). Sealed "
+        lines.append(f"Report: `{SIDES['blue']}` "
+                     f"({document_state(test_path, SIDES['blue'], collection)}). Sealed "
                      "evidence (logs, cycles, submissions) is under `evidence/blue/`.")
         lines.append("")
         lines.append("<!-- TODO(author): what blue did, time-to-restore, inject outcomes, and "

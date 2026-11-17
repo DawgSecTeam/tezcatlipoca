@@ -31,6 +31,11 @@ ENDPOINTS = (
              models=("clef-flash", "k2", "qwen3.8-flash-next", "qwen3.8-27b"),
              note="club LLM gateway (OpenAI-compatible chat; clef-flash is a decision "
                   "model — chat is refused by design)"),
+    Endpoint(name="litellm-local", base_url="http://10.0.0.212:4000/v1", kind=OPERATOR,
+             key_env="TEZ_LITELLM_API_KEY",
+             models=("k2", "qwen3.8-27b", "qwen3.8-flash-next", "clef-flash"),
+             note="local litellm gateway on the realm host; qwen3.8-27b is the local "
+                  "blue/red-LLM model"),
     Endpoint(name="deepseek", base_url="https://api.deepseek.com/v1", kind=PUBLIC,
              key_env="DEEPSEEK_API_KEY", models=("deepseek-flash", "deepseek-v4-pro"),
              note="official DeepSeek API (OpenAI-compatible)"),
@@ -85,9 +90,10 @@ def provider_name(base_url):
 
 
 def key_env(base_url):
+    """The env var carrying this endpoint's key; "" means no key is needed."""
     ep = lookup(base_url)
     if ep:
-        return ep.key_env if ep.kind == PUBLIC else ""
+        return ep.key_env
     return OPERATOR_KEY_ENV if os.environ.get(OPERATOR_KEY_ENV) else ""
 
 
