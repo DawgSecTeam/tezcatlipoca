@@ -159,16 +159,27 @@ def _red01(s):
     if not s["red"]:
         return {}
     from red import tlaloc_ops                                    # cycle: it imports this tree
-    proc = tlaloc_ops._ssh_run(s["red"]["ssh_key"], s["red"]["ip"], _RED_STATE, timeout=120)
+    try:
+        proc = tlaloc_ops._ssh_run(s["red"]["ssh_key"], s["red"]["ip"], _RED_STATE, timeout=120)
+    except Exception as exc:                                      # noqa: BLE001 - reported, like _agent_exec
+        return {"unreachable": type(exc).__name__}
     return parse_red_state((proc.stdout or "") + (proc.stderr or ""), s["red"]["ports"])
 
 
 # --- parsers (pure) ---------------------------------------------------------------------
 
+_EPHEMERAL = 49152                                       # RFC 6335's dynamic range
+
+
 def parse_ports(raw):
-    """Listening ports as a sorted set; the box's own service state reduced to one line."""
+    """Listening ports as a sorted set; the box's own service state reduced to one line.
+
+    The dynamic range is dropped: Windows' RPC endpoint mapper rebinds high ports on every
+    boot, and that is the box's own runtime, not the range's state. Everything a plant leaves
+    behind — an implant's 8888/8881/53 — sits below it, so a survivor still shows up.
+    """
     ports = {int(p) for p in re.findall(r"(?m)^\s*(\d{1,5})\s*$", raw)}
-    return sorted(ports)
+    return sorted(p for p in ports if p < _EPHEMERAL)
 
 
 def parse_rules(raw):

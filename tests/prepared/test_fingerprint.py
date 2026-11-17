@@ -53,6 +53,11 @@ class Parsers(unittest.TestCase):
     def test_listening_ports_are_reduced_to_a_sorted_set(self):
         self.assertEqual(fp.parse_ports("22\n80\n443\n22\n"), [22, 80, 443])
 
+    def test_the_dynamic_range_is_not_range_state(self):
+        # Windows' RPC endpoint mapper rebinds these every boot; an implant's listener is not
+        # in the range, so a survivor is still reported.
+        self.assertEqual(fp.parse_ports("135\n49167\n8888\n"), [135, 8888])
+
     def test_ownership_is_the_daemon_not_the_pid(self):
         state = fp.parse_red_state(SPLIT_BOOT, PORTS)
         self.assertEqual(state["listeners"]["8888"], "build:31338")
