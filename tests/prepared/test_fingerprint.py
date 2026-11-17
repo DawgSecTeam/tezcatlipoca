@@ -22,9 +22,9 @@ PORTS = {"daemon_port": "31337", "server": [5353, 8080, 8443, 8888, 51820]}
 # What the build-only server winning the boot race looks like: mTLS owned by the :31338 daemon,
 # dns and wg restored by neither.
 SPLIT_BOOT = """\
-tlaloc.service                           static   enabled
+tlaloc.service                           disabled enabled
 sliver.service                           enabled  enabled
-sliver-build-1.service                   enabled  enabled
+sliver-build-1.service                   disabled enabled
 #active
 inactive
 #daemons
@@ -63,7 +63,11 @@ class Parsers(unittest.TestCase):
     def test_a_clean_boot_puts_every_transport_on_the_main_server(self):
         state = fp.parse_red_state(CLEAN_BOOT, PORTS)
         self.assertEqual(set(state["listeners"].values()), {"main"})
+        # The STATE column, not the preset: an installed-and-held tlaloc reads disabled/enabled,
+        # and the preset never moves.
         self.assertEqual(state["units"]["sliver.service"], "enabled")
+        self.assertEqual(state["units"]["tlaloc.service"], "disabled")
+        self.assertEqual(state["units"]["sliver-build-1.service"], "disabled")
 
     def test_inactive_is_not_active(self):
         for text, want in (("inactive\n", False), ("active\n", True)):

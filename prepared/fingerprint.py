@@ -196,8 +196,8 @@ def parse_red_state(raw, transport_ports):
     units = {}
     for line in blocks.get("units", []):
         parts = line.split()
-        if len(parts) >= 3 and parts[0].endswith(".service"):
-            units[parts[0]] = parts[2]                          # name type state
+        if len(parts) >= 2 and parts[0].endswith(".service"):
+            units[parts[0]] = parts[1]          # UNIT FILE STATE PRESET — the middle one moves
     daemons = {}
     for line in blocks.get("daemons", []):
         pid = line.split(" ", 1)[0]
