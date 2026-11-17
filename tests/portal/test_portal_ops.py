@@ -294,6 +294,11 @@ class VpnEnrollment(unittest.TestCase):
 
 # deploy_portal is opt-in and must never fail the deploy
 class DeployHook(unittest.TestCase):
+    def setUp(self):
+        # Phase 8 fingerprints the restore point it just took; that is not what the hook is under
+        # test for, and the probes reach the hypervisor.
+        self.enterContext(patch("deploy_lib.phases._snapshots.record_fingerprint"))
+
     def _ctx(self, d, compfile):
         (d / "Compfile").write_text(compfile)
         saved = []

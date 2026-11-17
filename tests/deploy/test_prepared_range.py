@@ -27,7 +27,7 @@ BOX = {"team_key": "team1", "vm_name": "team1-web01", "vmid": 2001, "node": "pve
 
 def _rctx(comp, state, teams=None, boxes=None):
     return RedeployContext(comp_dir=comp, name="c", comp_name="c", node="pve",
-                           teams=teams if teams is not None else {"team1": {}},
+                           teams=teams if teams is not None else {"team1": {"identifier": 152}},
                            boxes=boxes if boxes is not None else [{"name": "web01"}],
                            difficulty=None, state=state, state_path=None,
                            ctx={"scoring_engine_ip": "10.0.0.9", "ssh_key_path": "/k"})
@@ -50,6 +50,9 @@ class PreparedReset(unittest.TestCase):
                 mock.patch.object(ro.pipeline_api, "wait_for_boxes_ssh"), \
                 mock.patch.object(ro, "wait_for_http"), \
                 mock.patch("red.tlaloc_ops.hold_unit") as hold, \
+                mock.patch("red.tlaloc_ops.install_red_rules"), \
+                mock.patch("red.sliver_ops.sliver_enabled", return_value=False), \
+                mock.patch("prepared.fingerprint.check", return_value=[]) as check, \
                 mock.patch.object(ro.estate_state, "write_flat"):
             done, _levels = ro.mode_prepared([BOX], rctx)
         self.assertEqual(sorted(c.args[1] for c in rollback.call_args_list),
@@ -58,12 +61,44 @@ class PreparedReset(unittest.TestCase):
         # The rollback reboots red01: the reset holds the loop itself instead of trusting
         # whatever enablement the restore point carries (a prepared range is an unarmed one).
         hold.assert_called_once_with("/k", "10.0.0.241")
+        check.assert_called_once()
         # The rollback took the inject windows with it: start must recreate them at now.
         self.assertNotIn("injects_created", state)
         self.assertNotIn("injects_fingerprint", state)
         self.assertFalse(state["engine_unpaused"])
         self.assertTrue(state["red_staged"])
         self.assertNotIn("red_deployed", state)
+
+    def _reset(self, diffs, sliver=False):
+        state = {"scoring_vm_id": 1000, "node": "pve",
+                 "red": {"red_ip": "10.0.0.241", "vmid": 1690, "node": "pve"}}
+        rctx = _rctx(self.comp, state)
+        with mock.patch.object(ro, "list_snapshots", return_value={ro.SNAP_READY}), \
+                mock.patch.object(ro, "rollback_snapshot"), \
+                mock.patch.object(ro.pipeline_api, "wait_for_boxes_ssh"), \
+                mock.patch.object(ro, "wait_for_http"), \
+                mock.patch("red.tlaloc_ops.hold_unit"), \
+                mock.patch("red.tlaloc_ops.bring_up_listeners") as listen, \
+                mock.patch("red.tlaloc_ops.install_red_rules") as rules, \
+                mock.patch("red.sliver_ops.sliver_enabled", return_value=sliver), \
+                mock.patch("prepared.fingerprint.check", return_value=diffs):
+            ro.mode_prepared([BOX], rctx)
+        return listen, rules
+
+    def test_a_field_the_rollback_did_not_restore_refuses_the_reset(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._reset([".red01.listeners.8888: at-snapshot='main' after-rollback='build:31338'"])
+        self.assertIn("did not restore", str(cm.exception))
+
+    def test_a_c2_range_gets_its_listeners_reconciled_before_being_measured(self):
+        listen, rules = self._reset([], sliver=True)
+        listen.assert_called_once_with("/k", "10.0.0.241")
+        # The engine's rules are memory, not disk: the rollback takes them, so the reset puts
+        # every C2 port back, not just the callback.
+        self.assertTrue(rules.call_args.kwargs["callback_ports"])
+
+    def test_a_range_with_no_reference_is_told_about_and_still_reset(self):
+        self._reset(["no reference for this range's tz-ready — recorded this reset's state"])
 
     def test_a_partial_selection_is_refused(self):
         rctx = _rctx(self.comp, {}, teams={"team1": {}, "team2": {}})
@@ -159,6 +194,7 @@ class Phase8PreparedPoint(unittest.TestCase):
                 dpatch("snap_red", side_effect=note("snap_red")), \
                 dpatch("run_concurrent", side_effect=note("snap_boxes")), \
                 dpatch("list_snapshots", return_value=set()), \
+                dpatch("record_fingerprint", side_effect=note("fingerprint")), \
                 dpatch("deploy_portal"), \
                 mock.patch("red.tlaloc_ops.deploy_implants",
                            side_effect=note("arm", {"red_ip": "10.0.0.242"})), \
@@ -169,7 +205,41 @@ class Phase8PreparedPoint(unittest.TestCase):
         self.assertLess(order.index("snap_boxes"), order.index("arm"))
         self.assertLess(order.index("snap_red"), order.index("arm"))
         self.assertLess(order.index("snap_engine"), order.index("arm"))
+        # The reading of the range is taken with the points it describes, never after arming.
+        for name in ("snap_boxes", "snap_red", "snap_engine"):
+            self.assertLess(order.index(name), order.index("fingerprint"))
+        self.assertLess(order.index("fingerprint"), order.index("arm"))
         self.assertEqual(order[-2:], ["arm", "loop"])
+
+
+class RestorePointIsFingerprinted(unittest.TestCase):
+    """The snapshots alone do not prove a reset: the reading of the range at that moment does."""
+
+    def setUp(self):
+        from prepared import fingerprint
+        self.ref = fingerprint.REFERENCE
+
+    def _snap(self, comp):
+        from deploy_lib.phases import _snapshots
+        ctx = SimpleNamespace(comp_dir=comp, node="pve", all_targets=[], state={},
+                              engine_vmid=1000)
+        with mock.patch.object(_snapshots, "list_snapshots", return_value={"tz-ready"}), \
+                mock.patch.object(_snapshots, "record_fingerprint") as rec:
+            _snapshots.snap_prepared(ctx)
+        return rec
+
+    def test_the_deploy_records_the_point(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self._snap(Path(tmp.name)).assert_called_once_with(Path(tmp.name))
+
+    def test_a_resume_keeps_the_reading_taken_by_the_attempt_that_made_the_point(self):
+        # tz-ready is taken once, by whoever took it: re-reading the range after a resume would
+        # fingerprint a disk an earlier attempt already armed.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        (Path(tmp.name) / self.ref).write_text("{}")
+        self._snap(Path(tmp.name)).assert_not_called()
 
 
 if __name__ == "__main__":

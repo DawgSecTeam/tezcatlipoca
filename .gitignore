@@ -50,6 +50,7 @@ competitions/
 */.tlaloc-state/
 */.tlaloc-config.yaml
 */red/manifest.json
+*/.prepared-fingerprint.json
 
 
 # In-tree scratch a live run writes (run/event logs, world.json, submitted-run dumps):

@@ -1,6 +1,7 @@
 """The restore points (tz-base before the sweep, tz-ready on a prepared range)."""
 
 from functools import partial
+from pathlib import Path
 
 import providers
 
@@ -8,6 +9,7 @@ from common.constants import SNAP_BASE, SNAP_READY
 from common.timing import timed
 from common.utils import run_concurrent
 from infra.lifecycle import list_snapshots
+from prepared.fingerprint import REFERENCE, record as record_fingerprint
 
 
 def snap_base(ctx, t, phase=4):
@@ -54,6 +56,8 @@ def snap_engine(ctx):
 def snap_prepared(ctx):
 # One prepared point for the whole range: every box, red01 and the engine, at one moment.
 #     Taken once — a resume must never capture a disk an earlier attempt already armed.
+#     The point is only half of it: what the range LOOKS like at that moment (rules, listeners,
+#     bound ports, VM definitions) is recorded beside it, so a reset can show its work.
     node = ctx.node
     fresh = [t for t in ctx.all_targets
              if SNAP_READY not in list_snapshots(t.get("node") or node, t["vmid"])]
@@ -66,3 +70,6 @@ def snap_prepared(ctx):
         snap_red(ctx, red)
     if SNAP_READY not in list_snapshots(node, ctx.engine_vmid):
         snap_engine(ctx)
+    if not (Path(ctx.comp_dir) / REFERENCE).exists():
+        record_fingerprint(ctx.comp_dir)
+        print("  prepared      : restore point fingerprinted (boxes, engine, red01)")
