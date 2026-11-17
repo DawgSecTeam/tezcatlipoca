@@ -70,14 +70,17 @@ class ImplantChannel(Effect):
         # reason in the record).
         fh = ctx.world.foothold(ip)
         if (info.get("ok") and not info.get("callback_seen")
-                and not ctx.is_windows(ip) and fh and info.get("unit")):
-            _rc, out, err = ctx.ssh.ssh(
-                ip, fh["user"], fh.get("password") or "",
-                f"journalctl -u {info['unit']} -n 20 --no-pager 2>&1 | tail -12",
-                timeout=30, key_path=fh.get("key_path"))
-            agent_log = (out or err or "").strip()
-            if agent_log:
-                detail += f"; agent log: {agent_log[-400:]}"
+                and not ctx.is_windows(ip) and fh):
+            logs = []
+            for transport, unit in sorted((info.get("units") or {}).items()):
+                _rc, out, err = ctx.ssh.ssh(
+                    ip, fh["user"], fh.get("password") or "",
+                    f"journalctl -u {unit} -n 20 --no-pager 2>&1 | tail -12",
+                    timeout=30, key_path=fh.get("key_path"))
+                if (out or err or "").strip():
+                    logs.append(f"{transport}: {(out or err).strip()[-300:]}")
+            if logs:
+                detail += "; agent log: " + " | ".join(logs)
         channel = ("callback observed" if info.get("callback_seen")
                    else f"no callback within {wait}s")
         outcome = f"{detail}; channel: {channel}"

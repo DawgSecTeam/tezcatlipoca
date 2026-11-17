@@ -151,6 +151,9 @@ class Planter:
         return {"ok": ok, "callback_seen": callback_seen, "box": box_id,
                 "os": os_name, "transport": installed[0]["transport"] if installed else None,
                 "detail": detail, "unit": installed[0].get("unit") if installed else None,
+                # Per transport: a full spread installs one unit each, and the silent one is
+                # the one worth reading.
+                "units": {o["transport"]: o.get("unit") for o in installed if o.get("unit")},
                 "paths": paths, "undo": undos, "mechanisms": mechanisms,
                 "coverage": {name: bool(seen.get(name)) for name in names},
                 "uuid": installed[0].get("uuid") if installed else None,

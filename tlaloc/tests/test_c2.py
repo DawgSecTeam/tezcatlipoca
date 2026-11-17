@@ -321,6 +321,34 @@ def test_implant_channel_effect_needs_the_callback_to_succeed(tmp_path):
         "the install is recorded even when the channel never checked in"
 
 
+def test_a_full_spread_reports_the_journal_of_every_silent_transport(tmp_path):
+    # A box whose channel stays silent is diagnosed from its payloads' own logs; with the
+    # full spread five units are installed and only one may be the liar.
+    for name in INTEL_FILES:
+        shutil.copy(FIXTURE / name, tmp_path / name)
+    payload_dir = tmp_path / "red" / "payloads"
+    payload_dir.mkdir(parents=True, exist_ok=True)
+    boxes = {}
+    for transport in ("mtls", "https"):
+        f = f"web01-1-{transport}.bin"
+        (payload_dir / f).write_bytes(b"\x7fELF fake")
+        boxes[f"web01-1:{transport}"] = {"uuid": f"u-{transport}", "file": f, "os": "linux",
+                                         "agent": "poseidon", "transport": transport}
+    (payload_dir / "manifest.json").write_text(json.dumps(
+        {"comp": "comp-x", "operation": "comp-x", "transports": ["mtls", "https"],
+         "boxes": boxes}))
+    ssh = (FakeSSH().on("is-active", rc=0, out="active")
+           .on("journalctl", rc=0, out="error client.Do: dial tcp: refused"))
+    ctx = make_ctx(tmp_path / "state", ssh=ssh, comp_dir=tmp_path)
+    ctx.cfg["c2"]["implant_spread"] = "full"
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root")
+    ctx.c2 = FakeMythic({})
+    from tlaloc.effects import execute
+    result = execute("implant_channel", {"ip": "192.168.1.10", "box_id": "web01-1"}, ctx)
+    assert result.ok is False
+    for transport in ("mtls", "https"):
+        assert f"{transport}: " in result.detail, result.detail
+
 def test_task_channel_attributes_an_impact_only_when_classified(tmp_path):
     ssh = FakeSSH()
     ctx = make_ctx(tmp_path / "state", ssh=ssh)
