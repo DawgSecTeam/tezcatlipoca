@@ -412,3 +412,41 @@ def test_wait_backend_gates_the_script_server_too(monkeypatch):
         assert False, "must raise when :4000 never speaks"
     except RuntimeError as e:
         assert "scripts=" in str(e)
+
+
+# --- ensure_live (a --skip-deploy scrim's adopt path) shares plant()'s health rule ---------
+# run-571515bf: the estate carried its full 449-row day-0 catalog, and ensure_live still graded
+# it with max(12, int(0.8*median)) — 46 > the two complete 44-row domain controllers — so the
+# scrim aborted with "6 healthy of 8 box IPs" three functions away from where that rule had
+# already been fixed. Untested code is where a fixed rule goes to be reintroduced.
+def _live_fixture(tmp_path, monkeypatch, counts):
+    import json as _json
+    m = c3rberus_ops
+    (tmp_path / "red").mkdir()
+    (tmp_path / "red" / m.SEED_FILE).write_text(_json.dumps({"red_ip": "10.0.0.247"}))
+    rows = [{"box_ip": ip, "status": "active"}
+            for ip, n in counts.items() for _ in range(n)]
+    monkeypatch.setattr(m, "_ssh",
+                        lambda *a, **k: type("R", (), {"stdout": "active"})())
+    monkeypatch.setattr(m, "_token_for",
+                        lambda *a, **k: ("t", {"red_ip": "10.0.0.247"}))
+    monkeypatch.setattr(m, "_api", lambda *a, **k: {"deployed": rows})
+    return m.ensure_live(tmp_path, ssh_key="k")
+
+
+def test_ensure_live_adopts_a_per_type_catalog_it_used_to_refuse(tmp_path, monkeypatch, capsys):
+    got = _live_fixture(tmp_path, monkeypatch, {
+        "192.168.127.2": 44, "192.168.127.3": 61, "192.168.127.4": 59, "192.168.127.5": 60,
+        "192.168.128.2": 44, "192.168.128.3": 61, "192.168.128.4": 59, "192.168.128.5": 60})
+    assert got["deployed"] == 448   # 44x2 DCs + 61+59+60 per team — the real estate histogram
+    assert "on 8 boxes" in capsys.readouterr().out
+
+
+def test_ensure_live_still_refuses_a_box_that_never_took_its_catalog(tmp_path, monkeypatch):
+    try:
+        _live_fixture(tmp_path, monkeypatch, {
+            "192.168.127.2": 44, "192.168.127.3": 61, "192.168.127.4": 59, "192.168.127.5": 60,
+            "192.168.128.2": 44, "192.168.128.3": 61, "192.168.128.4": 59, "192.168.128.5": 0})
+        assert False, "must raise on a box with no active rows"
+    except RuntimeError as e:
+        assert "not event-ready" in str(e)

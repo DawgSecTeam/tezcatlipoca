@@ -368,6 +368,20 @@ def cred_preflight(ssh_key, red_ip, token, team_nums, *, runner=None):
     return status, bad
 
 
+def _healthy_box_count(per):
+    """How many box IPs carry a real catalog. Size is legitimately per box TYPE — a Windows
+    DC carries 44 where a linux member carries 58 (cde-2026 run-84c0e45d) — so the estate
+    MEDIAN may only LOOSEN the floor for a small-but-complete catalog, never tighten it past
+    the 12-row floor: max(12, int(0.8*58)) = 46 refused two COMPLETE domain controllers, and
+    the same wrong rule then refused a healthy 449-row estate at a --skip-deploy scrim's
+    ensure-live (run-571515bf), one function away from where it was fixed. What this is for is
+    a box whose deploys all died — run-3f39134d, 0 active rows. ONE rule, both call sites."""
+    if not per:
+        return 0
+    _med = sorted(per.values())[len(per) // 2]
+    return sum(1 for n in per.values() if n >= 12 or n >= int(0.5 * _med))
+
+
 def plant(ssh_key, red_ip, token, team_nums, *, comp_dir=None, runner=None):
     """Build the catalog and deploy it — c3rberus's assume-breach. Pre-competition
     state accepts deploy-all without the RUNNING confirm flag."""
@@ -422,8 +436,7 @@ def plant(ssh_key, red_ip, token, team_nums, *, comp_dir=None, runner=None):
     # DCs read as "not planted" and the gate said 6/8. The median may only ever LOOSEN
     # the test (a tiny-but-complete estate), never tighten it past the floor. What this
     # is for is a box whose deploys all died — run-3f39134d, 0 active rows.
-    _med = sorted(per.values())[len(per) // 2] if per else 0
-    healthy_boxes = sum(1 for n in per.values() if n >= 12 or n >= int(0.5 * _med))
+    healthy_boxes = _healthy_box_count(per)
     want = 2 * len(_boxes(comp_dir)) if comp_dir else 8
     print(f"  c3rberus    : deploy-all-iocs {status}; {planted} active rows, "
           f"{healthy_boxes}/{want} boxes carry a catalog")
@@ -700,10 +713,7 @@ def ensure_live(comp_dir, *, ssh_key, red_ip=None, runner=None):
                 runner=runner)
     rows = resp.get("deployed", []) if isinstance(resp, dict) else (resp or [])
     per = Counter(r.get("box_ip") for r in rows if r.get("status") == "active")
-    # same relative health rule as plant(): a 24-row windows box is complete,
-    # not thin (fixed floors mis-grade per-type catalogs — run-8ec19d10)
-    _med = sorted(per.values())[len(per) // 2] if per else 0
-    healthy = sum(1 for n in per.values() if n >= max(12, int(0.8 * _med)))
+    healthy = _healthy_box_count(per)
     planted = sum(per.values())
     if healthy < len(per) or healthy < 8:
         raise RuntimeError(
