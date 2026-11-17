@@ -90,9 +90,10 @@ def provider_name(base_url):
 
 
 def key_env(base_url):
+    """The env var carrying this endpoint's key; "" means no key is needed."""
     ep = lookup(base_url)
     if ep:
-        return ep.key_env if ep.kind == PUBLIC else ""
+        return ep.key_env
     return OPERATOR_KEY_ENV if os.environ.get(OPERATOR_KEY_ENV) else ""
 
 

@@ -14,17 +14,18 @@ def blue_ep(args, n):
 def api_key(base_url=None, local=None):
     """The API key for an endpoint — resolved from the table, never invented.
 
-    A base_url naming a PUBLIC table entry MUST have its key in the environment: a missing
-    `TEZ_LITELLM_API_KEY` (the club gateway) or `DEEPSEEK_API_KEY` raises here instead of
-    degrading to the literal "local" (which reached blue as a 401 on every cycle, and red as a
-    bogus bearer token — an "empty room" that looked like a working defense).
+    A base_url naming a table entry that declares a key env MUST have that key in the
+    environment: a missing `TEZ_LITELLM_API_KEY` (the club gateway, and the local gateway that
+    also serves qwen) or `DEEPSEEK_API_KEY` raises here instead of degrading to the literal
+    "local" (which reached blue as a 401 on every cycle, and red as a bogus bearer token — an
+    "empty room" that looked like a working defense).
 
     No base_url, or a host that is not in the table (operator-side llama.cpp / a tailnet LLM
     host), uses `TEZ_SCRIM_API_KEY`, then `OPENROUTER_API_KEY`, then the literal "local" (a
     local llama.cpp ignores whatever it is sent).
     """
     ep = llm_endpoints.lookup(base_url) if base_url else None
-    if ep and ep.kind == llm_endpoints.PUBLIC:
+    if ep and ep.key_env:
         key = (os.environ.get(ep.key_env) or "").strip()
         if key:
             return key

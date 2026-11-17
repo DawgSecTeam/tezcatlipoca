@@ -23,6 +23,7 @@ DEEPSEEK = "https://api.deepseek.com/v1"
 LLAMA = "http://203.0.113.30:8080/v1"
 OPENROUTER = "https://openrouter.ai/api/v1"
 LITELLM = "https://litellm.dawgsec.com/v1"
+LOCAL_GATEWAY = "http://10.0.0.212:4000/v1"
 
 
 class Classification(unittest.TestCase):
@@ -75,6 +76,17 @@ class ApiKey(unittest.TestCase):
         key_env = endpoints.key_env_name(DEEPSEEK)
         self.assertEqual("{env:%s}" % key_env, "{env:DEEPSEEK_API_KEY}")
         self.assertIn("{API_KEY_FIELD}", blue_helpers.OPENCODE_PROJECT_CFG)
+
+    def test_an_operator_entry_that_declares_a_key_env_reads_it(self):
+        # The local litellm serves qwen behind a key on an operator-side entry; treating
+        # "operator" as "no key" sent the literal "local" bearer on every blue cycle.
+        with mock.patch.dict(os.environ, {"TEZ_LITELLM_API_KEY": "sk-local"}, clear=True):
+            self.assertEqual(endpoints.api_key(LOCAL_GATEWAY), "sk-local")
+            self.assertEqual(endpoints.key_env_name(LOCAL_GATEWAY), "TEZ_LITELLM_API_KEY")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                endpoints.api_key(LOCAL_GATEWAY)
+        self.assertIn("TEZ_LITELLM_API_KEY", str(ctx.exception))
 
     def test_an_operator_gateway_key_reaches_the_config_and_the_driver(self):
         with mock.patch.dict(os.environ, {"TEZ_SCRIM_API_KEY": "sk-gateway"}, clear=True):
