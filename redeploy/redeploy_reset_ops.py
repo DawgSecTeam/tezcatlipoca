@@ -187,16 +187,10 @@ def mode_prepared(targets, rctx):
             # below honestly say "restored".
             tlaloc_ops.bring_up_listeners(ctx["ssh_key_path"], red["red_ip"])
             print("  red01       : C2 listeners reconciled onto the main server")
-        # The engine rolled back with the rest, and iptables lives in its memory: the path from a
-        # team to red01 is non-disk state no restore point can carry. The arm installs it too —
-        # installing it here is what leaves a restored range rather than a waiting one.
-        ports = (sliver_ops.c2_plan(comp_dir, red_ip=red["red_ip"])["ports"] if c2 else None)
-        tlaloc_ops.install_red_rules(
-            comp_dir, ctx["scoring_engine_ip"], ctx["ssh_key_path"],
-            team_identifiers=[teams[k]["identifier"] for k in sorted(teams)],
-            callback_port=red.get("callback_port"), callback_host=red.get("callback_host") or "",
-            callback_ports=ports)
-        print("  engine      : red traffic path reinstalled — DNAT, FORWARD, SNAT")
+        # The engine's red DNAT rules are NOT reinstalled here, deliberately: the restore point
+        # has no `range-red-firewall` units and no chains (measured), because the arm is what
+        # installs them at event start. Re-asserting them from the reset would be the reset
+        # arming part of the range, and the comparison below would then pass for the wrong reason.
     # The claim itself, measured rather than asserted: what the range was at the snapshot,
     # against what this rollback produced.
     from prepared import fingerprint

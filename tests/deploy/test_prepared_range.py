@@ -50,7 +50,6 @@ class PreparedReset(unittest.TestCase):
                 mock.patch.object(ro.pipeline_api, "wait_for_boxes_ssh"), \
                 mock.patch.object(ro, "wait_for_http"), \
                 mock.patch("red.tlaloc_ops.hold_unit") as hold, \
-                mock.patch("red.tlaloc_ops.install_red_rules"), \
                 mock.patch("red.sliver_ops.sliver_enabled", return_value=False), \
                 mock.patch("prepared.fingerprint.check", return_value=[]) as check, \
                 mock.patch.object(ro.estate_state, "write_flat"):
@@ -79,11 +78,10 @@ class PreparedReset(unittest.TestCase):
                 mock.patch.object(ro, "wait_for_http"), \
                 mock.patch("red.tlaloc_ops.hold_unit"), \
                 mock.patch("red.tlaloc_ops.bring_up_listeners") as listen, \
-                mock.patch("red.tlaloc_ops.install_red_rules") as rules, \
                 mock.patch("red.sliver_ops.sliver_enabled", return_value=sliver), \
                 mock.patch("prepared.fingerprint.check", return_value=diffs):
             ro.mode_prepared([BOX], rctx)
-        return listen, rules
+        return listen
 
     def test_a_field_the_rollback_did_not_restore_refuses_the_reset(self):
         with self.assertRaises(SystemExit) as cm:
@@ -91,11 +89,15 @@ class PreparedReset(unittest.TestCase):
         self.assertIn("did not restore", str(cm.exception))
 
     def test_a_c2_range_gets_its_listeners_reconciled_before_being_measured(self):
-        listen, rules = self._reset([], sliver=True)
-        listen.assert_called_once_with("/k", "10.0.0.241")
-        # The engine's rules are memory, not disk: the rollback takes them, so the reset puts
-        # every C2 port back, not just the callback.
-        self.assertTrue(rules.call_args.kwargs["callback_ports"])
+        self._reset([], sliver=True).assert_called_once_with("/k", "10.0.0.241")
+
+    def test_the_reset_leaves_the_engine_rules_to_the_arm(self):
+        # The restore point carries no red chains and no range-red-firewall units (measured on a
+        # rolled-back engine): the arm installs them at event start, and a reset that installed
+        # them would be arming part of the range while claiming only to restore it.
+        with mock.patch("red.tlaloc_ops.install_red_rules") as rules:
+            self._reset([])
+        rules.assert_not_called()
 
     def test_a_range_with_no_reference_is_told_about_and_still_reset(self):
         self._reset(["no reference for this range's tz-ready — recorded this reset's state"])
