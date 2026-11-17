@@ -669,12 +669,12 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
 
     # Without a C2 the DNAT is skipped but not the FORWARD trio: red01 must still reach teams.
     print("  red rules   : installing the red-segment rules on the engine...")
-    red01_ops.install_engine_rules(
-        getattr(ctx, "scoring_ip", "") or "", ssh_key,
-        engine_user=getattr(ctx, "scoring_user", "sysadmin"),
+    install_red_rules(
+        comp_dir, getattr(ctx, "scoring_ip", "") or "", ssh_key,
         team_identifiers=team_identifiers,
         callback_port=callback_port, callback_host=callback_host or "",
         callback_ports=callback_ports,
+        engine_user=getattr(ctx, "scoring_user", "sysadmin"),
         # on gcp the engine's team-NIC is .2 (each subnet's .1 is the VCP gateway)
         platform=getattr(ctx, "platform", "") or "proxmox",
         runner=runner)
@@ -766,6 +766,22 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
               f"deploys the implants")
     return summary
 
+def install_red_rules(comp_dir, engine_ip, ssh_key, *, team_identifiers,
+                      callback_port=None, callback_host="", callback_ports=None,
+                      engine_user="sysadmin", platform="proxmox", runner=None):
+    """Idempotent: the engine's DNAT/FORWARD rules are runtime state, so a reboot drops them.
+
+    A prepared reset reboots the engine, and the arm then needs those rules to exist before
+    the seed's callbacks can land — re-asserting here is what makes the arm independent of
+    whatever timer restores them.
+    """
+    from red import red01_ops
+    red01_ops.install_engine_rules(
+        engine_ip, ssh_key, engine_user=engine_user, team_identifiers=team_identifiers,
+        callback_port=callback_port, callback_host=callback_host or "",
+        callback_ports=callback_ports, platform=platform, runner=runner)
+
+
 def deploy_implants(comp_dir, state, *, ssh_key, runner=None):
     """Event-start half of the plant: seed the frozen matrix, prove the channels, wipe the traces.
 
@@ -786,6 +802,21 @@ def deploy_implants(comp_dir, state, *, ssh_key, runner=None):
     use_mythic = engine == "mythic" and gaia_ops.mythic_enabled(comp_dir)
     use_sliver = (engine == "sliver" and not use_mythic
                   and sliver_ops.sliver_enabled(comp_dir))
+    # The engine rebooted with the reset; its rules are runtime state, so put them back
+    # before any callback is expected (round 2 of a kept range failed exactly here).
+    ids = [int(t["identifier"]) for t in (state.get("teams") or {}).values()
+           if str(t.get("identifier", "")).isdigit()]
+    if use_sliver:
+        plan = sliver_ops.c2_plan(comp_dir, red_ip=red_ip,
+                                  comp_id=competition_name(comp_dir))
+        install_red_rules(comp_dir, state.get("engine_mgmt_ip", ""), ssh_key,
+                          team_identifiers=ids, callback_ports=plan["ports"], runner=runner)
+    elif use_mythic:
+        plan = gaia_ops.c2_plan(comp_dir, red_ip=red_ip,
+                                comp_id=competition_name(comp_dir))
+        install_red_rules(comp_dir, state.get("engine_mgmt_ip", ""), ssh_key,
+                          team_identifiers=ids, callback_port=plan["callback_port"],
+                          callback_host=plan["callback_host"], runner=runner)
     manifest = _seed_and_prove(comp_dir, ssh_key, red_ip, block,
                                (use_mythic or use_sliver), runner)
     # The seed rotates the box credentials it escalates through (chpasswd rewrites
