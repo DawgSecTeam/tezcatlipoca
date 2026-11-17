@@ -118,6 +118,31 @@ class CheckServicesArity(unittest.TestCase):
 
 
 
+class HeldRangePins(unittest.TestCase):
+    # /api/services/<tid> is literal null until the range's FIRST start (the engine runs the
+    # same pins as preflight rounds). Grading only the scoreboard tables told a healthy fresh
+    # estate that all 9 of its pins were missing — cde-2026 run-84c0e45d.
+    PF = {"round": 4, "checks": [
+        {"team_id": 1, "team_name": "team1", "service_name": "web01-ssh", "result": True,
+         "error": ""},
+        {"team_id": 1, "team_name": "team1", "service_name": "ad01-dns", "result": True,
+         "error": ""}]}
+
+    def test_null_rows_are_graded_from_the_preflight_round(self):
+        session = _Session([{"ID": 1, "Name": "team1"}], {"1": None, "preflight": self.PF})
+        results, _ = _run(v_scoreboard.check_services, "http://e", session, {}, False,
+                          {"web01-ssh", "ad01-dns"})
+        pins = next(r for r in results if r.name == "pins_registered")
+        self.assertIs(pins.status, v_model.Status.PASS)
+
+    def test_no_preflight_data_is_still_a_missing_pin(self):
+        session = _Session([{"ID": 1, "Name": "team1"}], {"1": None, "preflight": None})
+        results, _ = _run(v_scoreboard.check_services, "http://e", session, {}, False,
+                          {"web01-ssh"})
+        pins = next(r for r in results if r.name == "pins_registered")
+        self.assertIs(pins.status, v_model.Status.FAIL)
+
+
 class StrictServices(unittest.TestCase):
 # D7: --strict-services must not pass an unscored scoreboard.
 

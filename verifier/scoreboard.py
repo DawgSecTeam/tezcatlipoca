@@ -78,6 +78,7 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
     actual_names = set()
     any_service = False
     any_scored = False
+    pf = _UNSET = object()
     for t in api_teams:
         tid, tname = t.get("ID"), t.get("Name", t.get("Identifier"))
         try:
@@ -89,6 +90,18 @@ def check_services(base_url, admin_session, teams, strict, expected_names=frozen
             query_ok = False
             all_up = False
             continue
+        if services is None:
+            # A range that has never been STARTED has no scoreboard rows at all — the engine
+            # runs the same pins as preflight rounds into their own tables (null here is not
+            # "pins missing"; cde-2026 run-84c0e45d). Read preflight before blaming the estate.
+            if pf is _UNSET:
+                try:
+                    pf = admin_session.get(f"{base_url}/api/engine/preflight", timeout=10).json()
+                except (requests.RequestException, json.JSONDecodeError, ValueError):
+                    pf = None
+            if pf:
+                from scrim.quotient_api import preflight_to_services
+                services = preflight_to_services(pf, tname)
         actual_names |= {svc.get("ServiceName", "?") for svc in services or []}
         up = 0
         unscored = 0
