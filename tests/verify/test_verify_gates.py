@@ -17,6 +17,7 @@ Each test corresponds to a reproduced defect:
 """
 
 import contextlib
+import pathlib
 import io
 import json
 import os
@@ -141,6 +142,36 @@ class HeldRangePins(unittest.TestCase):
                           {"web01-ssh"})
         pins = next(r for r in results if r.name == "pins_registered")
         self.assertIs(pins.status, v_model.Status.FAIL)
+
+
+class InjectsOnAHeldRange(unittest.TestCase):
+    # --hold-start defers create_injects to `start`, so a never-started range has zero injects
+    # rows by design. Grading that as damage refused cde-2026 run-8b3462ff at pre-T0 — on an
+    # estate whose engine answered competition_started:false, which is the fact the gate needs.
+    def _check(self, started, engine_injects, local=1):
+        session = _Session([{"ID": 1, "Name": "team1"}],
+                           {"injects": engine_injects,
+                            "engine": {"competition_started": started}})
+        with patch.object(v_engine, "count_local_injects", return_value=local):
+            return _run(v_engine.check_injects, "http://e", session, pathlib.Path("/comp"))
+
+    def test_held_clock_skips_without_gating(self):
+        (relevant, ok, note), out = self._check(False, [])
+        self.assertFalse(relevant)
+        self.assertIn("not started", note)
+        self.assertIn("SKIP", out)
+
+    def test_started_clock_with_no_injects_still_fails(self):
+        # the fallback must not excuse an engine that simply never got its injects
+        (relevant, ok, note), out = self._check(True, [])
+        self.assertTrue(relevant)
+        self.assertFalse(ok)
+
+    def test_matching_counts_pass_untouched(self):
+        (relevant, ok, note), out = self._check(True, [{"Title": "01-welcome"}])
+        self.assertTrue(relevant)
+        self.assertTrue(ok)
+        self.assertIsNone(note)
 
 
 class StrictServices(unittest.TestCase):
@@ -657,7 +688,7 @@ class MainSummaryWiring(unittest.TestCase):
             patch.object(v_isolation, "check_isolation", return_value=v_model.gate_skip("isolation")),
             patch.object(v_misconfig, "check_misconfig",
                          return_value=v_model.gate_pass("misconfig")),
-            patch.object(v_engine, "check_injects", return_value=(False, True)),
+            patch.object(v_engine, "check_injects", return_value=(False, True, None)),
             patch.object(v_engine, "check_round_loop", return_value=v_model.gate_pass("round_loop")),
             patch.object(v_state_gates, "check_plant_coverage",
                          return_value=v_model.gate_skip("plant_coverage")),

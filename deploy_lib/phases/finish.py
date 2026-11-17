@@ -69,7 +69,10 @@ def print_live_summary(ctx):
         print(f"Scoring login: scoring / {ctx.scoring_password}   (automation; separate "
               f"session from admin)")
     if ctx.inject_password:
-        print(f"Inject login:  inject / {ctx.inject_password}   ({len(ctx.injects)} inject(s) loaded)")
+        # the count is local either way; "loaded" was a claim about the engine the deploy never
+        # checked, and on a held start it was false — seed.py defers create_injects to `start`
+        print(f"Inject login:  inject / {ctx.inject_password}   ({len(ctx.injects)} inject(s) "
+              f"{'created at start' if ctx.state.get('hold_start') else 'loaded'})")
     print("\nTeam logins:")
     for team_name, team_data in ctx.teams.items():
         print(f"  {team_name} / {team_data['password']}  (subnet 192.168.{team_data['identifier']}.0/24)")

@@ -15,21 +15,35 @@ def check_injects(base_url, admin_session, comp_dir):
     expected = count_local_injects(comp_dir)
     if expected is None:
         print("  SKIP  — competition ships no injects/ dir.")
-        return False, True
+        return False, True, None
     if admin_session is None:
         print("  FAIL  — no admin session to query /api/injects.")
-        return True, False
+        return True, False, None
     try:
         r = admin_session.get(f"{base_url}/api/injects", timeout=10)
         r.raise_for_status()
         injects = r.json() or []
     except (requests.RequestException, json.JSONDecodeError) as e:
         print(f"  FAIL  — could not fetch /api/injects: {e}")
-        return True, False
+        return True, False, None
     for inj in injects:
         title = inj.get("Title") or "?"
         print(f"      - {title}")
     ok = len(injects) == expected
+    if not ok and not injects:
+        # --hold-start defers create_injects to the start (deploy_lib/phases/seed.py), so a
+        # range whose clock has never run legitimately has none yet. cde-2026 run-8b3462ff
+        # was refused at pre-T0 over exactly this on a healthy estate, and the advice to
+        # name the gate acceptable with --allow-gate-fail put engine state in a CLI flag.
+        try:
+            started = admin_session.get(f"{base_url}/api/engine",
+                                        timeout=10).json().get("competition_started", True)
+        except (requests.RequestException, json.JSONDecodeError, AttributeError, ValueError):
+            started = True                                    # undecidable — keep grading
+        if not started:
+            print(f"  SKIP  — the clock has not started; its {expected} inject(s) are created "
+                  "by `start`. Re-verify after T0 for a real count.")
+            return False, True, "clock not started — injects are created at start"
     print(f"  {'PASS' if ok else 'FAIL'}  engine has {len(injects)} inject(s), "
           f"expected {expected} from injects/ dir")
     closed = closed_injects(injects)
@@ -37,7 +51,7 @@ def check_injects(base_url, admin_session, comp_dir):
         print(f"  WARN  {len(closed)} inject(s) already CLOSED — submissions return 'Inject is closed'. "
               "Offsets are anchored at the phase-7 deploy time, so a reset/rerun long after "
               f"deploy finds them expired: {', '.join(t for t, _ in closed)}")
-    return True, ok
+    return True, ok, None
 
 
 def check_round_loop(base_url, admin_session, fix=False):
