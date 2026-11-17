@@ -26,6 +26,11 @@ def blue_cycle_prompt(n, creds, args, elapsed, remain, delta_text, inject_text, 
         rest = ", ".join(win[1:]) or "none"
         reach.append(f"  Windows (Administrator, same password):"
                      f"  ./mybox {win[0]} \"<cmd>\"   (also: {rest})")
+        # run7: blue team1 spent a whole cycle on `Where-Object {\$_.Name ...}` — through
+        # mybox the backslash reaches PowerShell literally, so `$` is never escaped that way.
+        reach.append(f"  Windows PowerShell: pass it with SINGLE quotes and no backslashes, "
+                     f"e.g. ./mybox {win[0]} 'powershell -Command \"Get-Service *ldap*\"' "
+                     f"— use wildcard -Name, not Where-Object {{$_}}.")
     reach.append("  ./mybox runs one command through the gateway and prints output — prefer it over hand-building ssh.")
     scoring = ["HOW THE SCORER SEES YOUR BOXES — check with ./scorch after ANY change to sshd, a firewall, or a scored service:",
                "  ./scorch runs every scored check from the engine's vantage. The ssh pins log in as a credlist",
