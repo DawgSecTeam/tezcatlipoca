@@ -23,7 +23,11 @@ actions change what red does next and vice versa.
 **Red.** `takedowns` — sustained pressure across the window, not one sweep; service stops only,
 since `block_port` is firewall tamper and counts under `distinct_tactics`. Capped at one per scored
 service the lineup affords: a hardcoded count above that is passable only through re-kills, which
-need blue to restore first. `restore_reactions` — red punishing blue's restores, which is the
+need blue to restore first. `min_team_takedowns` — balance: the least-pressured team must still
+feel at least half a fair split of the pressure red actually applied (the threshold is derived
+per run from the takedown total and the fielded teams; the static 1 covers small runs). An
+aggregate alone let run-84c0e45d pass every red gate while one team absorbed 37 takedowns and the
+other took 3 — `takedowns` asks "did red work", this asks "against whom". `restore_reactions` — red punishing blue's restores, which is the
 tug-of-war itself. `distinct_tactics` — breadth: masking, firewall tamper, credential rotation,
 persistence. `windows_footholds` — the DC is the CCDC heart. `max_simultaneous_down` — depth,
 floored by the two-standing-services rule and capped at what red may legitimately take down: SSH
@@ -32,8 +36,9 @@ count. `stalls` — an idle gap of ten minutes or more, opening included: red at
 of T0.
 
 **Blue.** `cycles_rc0` — completed agent cycles per team, a cadence floor and not a target: a
-cycle carrying real incident work costs 20–30 min wall clock on the club's endpoint and the two
-teams serialise on one shared LLM lock, so a short scrim affords about one per team.
+cycle carrying real incident work costs 20–30 min wall clock on the club's endpoint and teams
+sharing one (endpoint, model) serialise on one LLM lock, so a short scrim affords about one per
+team unless they are spread across distinct models (which run concurrently — see below).
 `restorations` — blue answering red's takedowns. `injects` — the paperwork layer, which is real
 points, counted only for injects whose window opened inside the run. `notebook_entries` — working
 memory, not a write-only diary. `timeouts` — cycles cut at the per-cycle cap
@@ -53,8 +58,11 @@ separately as blue activity, never as red evidence. Time-to-restore is reported 
 `RESTORE_TTR_GATE_MIN` but does not gate the run on its own.
 
 Per-team LLM endpoints exist but are opt-in and per-team (`--blue2-base-url`/`--blue2-model`
-only; every other team shares the default). Blue serialises on one lock per base URL
-(`stage_run` builds one lock per distinct endpoint), so this splits load rather than adding it.
+only; every other team shares the default). Blue serialises on one lock per (endpoint, model):
+`stage_run` keys each lane's lock by both, so two teams on the same gateway host but DIFFERENT
+models run concurrently, while the same model on one URL still queues (a llama.cpp endpoint is
+one model per URL, so its semantics are unchanged). Spreading teams across models therefore
+splits load rather than adding it.
 
 A gate whose underlying data the run dir lacks prints `n/a` and does not fail the run — everything
 scoreboard-derived needs `scoreboard-state.jsonl` — so the honest red-side numbers carry the

@@ -49,11 +49,22 @@ def takedown_fields(ev):
     return ip, svc, mode or ("firewall" if action_effect(ev) == "impact_firewall" else "stop")
 
 
+def _team_of(ip, teams):
+    # The third octet of a box IP is its team's subnet identifier, and `teams` maps
+    # identifier -> team key, so a takedown's owner is one lookup — the same attribution
+    # host_label uses, kept whole so a per-team count never depends on parsing a label string.
+    octets = (ip or "").split(".")
+    return (teams or {}).get(octets[2]) if len(octets) == 4 else None
+
+
 def red_metrics(events, t0, world, labels=None, win_octets=("2", "3"), teams=None):
     m = {"takedowns": 0, "timeline": [], "distinct_tactics": set(), "initial_access": set(),
          "targets": set(), "stalls": [], "restore_reactions": 0, "blue_restore_events": 0,
          "blue_restore_list": [], "windows_footholds": 0, "actions_ok": 0,
-         "actions_failed": 0, "evictions": 0}
+         "actions_failed": 0, "evictions": 0,
+         # seeded to zero for every team the comp fielded: a starved team must show as 0
+         # here, not be absent, or the balance gate can't see the silence it exists to catch
+         "takedowns_by_team": {k: 0 for k in (teams or {}).values()}}
     takes, ok_stamps = [], []
     prev_evicted = 0
     for ev in events:
@@ -100,6 +111,9 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3"), teams=Non
             dip, svc, mode = takedown_fields(ev)
             dip = dip or ip
             m["takedowns"] += 1
+            tk = _team_of(dip, teams)
+            if tk is not None:
+                m["takedowns_by_team"][tk] = m["takedowns_by_team"].get(tk, 0) + 1
             m["timeline"].append((tp, host_labels.host_label(dip, labels, teams), svc, mode))
             takes.append((tp, dip))
     per_ip = {}
@@ -152,4 +166,6 @@ def red_metrics(events, t0, world, labels=None, win_octets=("2", "3"), teams=Non
     m["distinct_tactics"] = sorted(m["distinct_tactics"])
     m["initial_access"] = sorted({t for t, _ in m["initial_access"]})
     m["targets"] = sorted(host_labels.host_label(ip, labels, teams) for ip in m["targets"])
+    m["min_team_takedowns"] = (min(m["takedowns_by_team"].values())
+                               if m["takedowns_by_team"] else None)
     return m
