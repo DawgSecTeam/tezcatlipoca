@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from config.config_ops import write_state
+from quotient.lifecycle_ops import start_engine_clock
 from scrim import blue_agent
 from scrim import blue_watchdog
 from scrim import core
@@ -227,7 +228,6 @@ def main():
     # The engine must start scoring at the same instant the event clock does — its preflight
     # loop checks the same pins but records nothing, and on a held deploy nothing else ever
     # flips it (cde-2026 run-7998e766 played the whole event against preflight rounds).
-    from quotient.lifecycle_ops import start_engine_clock
     if start_engine_clock(comp, getattr(args, "engine_ip", None)):
         raise RuntimeError("the scoring engine's clock did not start — nothing would score")
     write_state(run_dir / "T0.txt", {"t0": t0, "duration_min": args.duration_min})

@@ -76,6 +76,7 @@ def test_the_cli_follows_the_folder_the_deploy_renamed(tmp_path, monkeypatch):
     monkeypatch.setattr(blue_agent, "stage_blues", lambda *a: None)
     monkeypatch.setattr(red_stage, "stage_red", lambda *a: None)
     monkeypatch.setattr(red_link, "start_red_director", lambda *a: None)
+    monkeypatch.setattr(cli, "start_engine_clock", lambda *a: 0)
     monkeypatch.setattr(inject_sync, "reanchor_injects", lambda *a: None)
     monkeypatch.setattr(event_run, "run_event_and_finish", lambda *a: None)
     monkeypatch.setattr(sys, "argv", ["run-agent-scrim.py", "--competition", "c1",
