@@ -49,11 +49,15 @@ class PreparedReset(unittest.TestCase):
                 mock.patch.object(ro, "rollback_snapshot") as rollback, \
                 mock.patch.object(ro.pipeline_api, "wait_for_boxes_ssh"), \
                 mock.patch.object(ro, "wait_for_http"), \
+                mock.patch("red.tlaloc_ops.hold_unit") as hold, \
                 mock.patch.object(ro.estate_state, "write_flat"):
             done, _levels = ro.mode_prepared([BOX], rctx)
         self.assertEqual(sorted(c.args[1] for c in rollback.call_args_list),
                          [1000, 1690, 2001])
         self.assertEqual(done, [BOX])
+        # The rollback reboots red01: the reset holds the loop itself instead of trusting
+        # whatever enablement the restore point carries (a prepared range is an unarmed one).
+        hold.assert_called_once_with("/k", "10.0.0.241")
         # The rollback took the inject windows with it: start must recreate them at now.
         self.assertNotIn("injects_created", state)
         self.assertNotIn("injects_fingerprint", state)

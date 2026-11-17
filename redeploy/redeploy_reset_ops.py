@@ -172,6 +172,13 @@ def mode_prepared(targets, rctx):
 
     pipeline_api.wait_for_boxes_ssh(ctx, targets, timeout=900)
     wait_for_http(f"http://{ctx['scoring_engine_ip']}/api/login", timeout=180)
+    if red.get("red_ip"):
+        # The rollback restored whatever unit enablement that snapshot carried. A prepared
+        # range is unarmed by contract, so the reset holds red itself — otherwise the reboot it
+        # just caused starts the loop, and the range attacks with no event open.
+        from red import tlaloc_ops
+        tlaloc_ops.hold_unit(ctx["ssh_key_path"], red["red_ip"])
+        print(f"  red01       : {tlaloc_ops.UNIT} stopped and disabled — the range is held")
     print(f"\n  Prepared: {len(vms)} VM(s) reset to the built-but-unarmed state. Re-arm with:")
     print(f"      python3 competition-ops.py start --comp-dir {comp_dir}")
     return targets, {}

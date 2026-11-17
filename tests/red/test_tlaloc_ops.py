@@ -210,9 +210,12 @@ class ConfigAndCommandTests(unittest.TestCase):
             to.install_unit("/k", "10.0.0.241", enable=False)
             to.install_unit("/k", "10.0.0.241")
             to.start_unit("/k", "10.0.0.241")
+            to.hold_unit("/k", "10.0.0.241")
         self.assertIn("systemctl disable tlaloc.service", seen[0])
         self.assertIn("systemctl enable tlaloc.service", seen[1])
         self.assertIn("systemctl enable --now tlaloc.service", seen[2])
+        self.assertIn(f"systemctl stop {to.UNIT}; sudo -n systemctl disable {to.UNIT}",
+                      seen[3])
 
 
 

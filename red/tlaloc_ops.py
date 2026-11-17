@@ -503,6 +503,20 @@ def seed_via_red01(ssh_key, red_ip, *, runner=None, timeout=5400):
     return {"ok": True}
 
 
+def hold_unit(ssh_key, red_ip, *, runner=None, timeout=180):
+    """Stop red01's loop AND take it out of the boot sequence.
+
+    A reset's contract is an unarmed range, and it cannot entrust that to whatever enablement
+    the restore point happens to carry: an enabled unit answers the reset's own reboot by arming
+    the range with no event to belong to.
+    """
+    remote = f"sudo -n systemctl stop {UNIT}; sudo -n systemctl disable {UNIT}"
+    proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout)
+    if getattr(proc, "returncode", 1) != 0:
+        raise RuntimeError(f"holding {UNIT} on {red_ip} failed: {_tail(proc)}")
+    return {"ok": True}
+
+
 def start_unit(ssh_key, red_ip, *, runner=None, timeout=60):
     """Open the event: start the loop and let it come back on its own if red01 reboots.
 
