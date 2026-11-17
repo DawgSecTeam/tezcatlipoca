@@ -416,11 +416,14 @@ def plant(ssh_key, red_ip, token, team_nums, *, comp_dir=None, runner=None):
             time.sleep(10)
     per = Counter(r.get("box_ip") for r in rows if r.get("status") == "active")
     planted = sum(per.values())
-    # Catalog size is legitimately per-box-type (linux 31, windows 24-27): an
-    # absolute floor mis-grades a small-but-complete box. Relative test —
-    # healthy means within 80% of the estate's own median, at least 12 rows.
+    # Catalog size is legitimately per-box-type (a DC carries 24 where a linux db01
+    # carries 35 — cde-2026 run-84c0e45d). Grading the small box against the estate's
+    # MEDIAN refused a fully-planted estate: int(0.8*35) = 28 > 24, so two complete
+    # DCs read as "not planted" and the gate said 6/8. The median may only ever LOOSEN
+    # the test (a tiny-but-complete estate), never tighten it past the floor. What this
+    # is for is a box whose deploys all died — run-3f39134d, 0 active rows.
     _med = sorted(per.values())[len(per) // 2] if per else 0
-    healthy_boxes = sum(1 for n in per.values() if n >= max(12, int(0.8 * _med)))
+    healthy_boxes = sum(1 for n in per.values() if n >= 12 or n >= int(0.5 * _med))
     want = 2 * len(_boxes(comp_dir)) if comp_dir else 8
     print(f"  c3rberus    : deploy-all-iocs {status}; {planted} active rows, "
           f"{healthy_boxes}/{want} boxes carry a catalog")

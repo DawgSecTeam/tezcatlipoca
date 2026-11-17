@@ -237,6 +237,49 @@ def test_plant_counts_dict_rows_and_tolerates_stragglers(tmp_path, monkeypatch, 
         assert "catalog-carrying boxes" in str(e)
 
 
+def _plant_fixture(tmp_path, monkeypatch, counts, status="failed"):
+    """plant() over a per-box active-row histogram, with the settle sleeps cut."""
+    import json as _json
+    (tmp_path / "boxes.json").write_text(_json.dumps(
+        {f"b{i}": {"name": f"b{i}"} for i in range(4)}))
+    m = c3rberus_ops
+    monkeypatch.setattr(m, "_wait_task", lambda *a, **k: status)
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    rows = [{"box_ip": ip, "status": "active"}
+            for ip, n in counts.items() for _ in range(n)]
+
+    def api(ssh_key, red_ip, token, method, path, **kw):
+        return {"task_id": 7} if method == "POST" else {"deployed": rows}
+    monkeypatch.setattr(m, "_api", api)
+    return m.plant("k", "10.0.0.247", "t", [127, 128], comp_dir=str(tmp_path))
+
+
+def test_plant_grades_each_box_not_the_estate_median(tmp_path, monkeypatch, capsys):
+    # cde-2026 run-84c0e45d: 8/8 boxes planted (DCs 24 rows, member boxes 31-35), yet
+    # the median-anchored threshold (int(0.8*35) = 28) graded both complete domain
+    # controllers as catalog-less and raised "only 6/8 catalog-carrying boxes".
+    counts = {"192.168.127.2": 24, "192.168.127.3": 31, "192.168.127.4": 35,
+              "192.168.127.5": 35, "192.168.128.2": 24, "192.168.128.3": 31,
+              "192.168.128.4": 35, "192.168.128.5": 35}
+    assert _plant_fixture(tmp_path, monkeypatch, counts) == sum(counts.values())
+    out = capsys.readouterr().out
+    assert "8/8 boxes carry a catalog" in out
+    assert "WARNING tolerating" in out
+
+
+def test_plant_still_refuses_a_box_whose_deploys_all_died(tmp_path, monkeypatch, capsys):
+    # the reason the gate exists (run-3f39134d): a box with no working deploy must
+    # never be stamped as a planted day-0 baseline, whatever its neighbours carry.
+    counts = {"192.168.127.2": 3, "192.168.127.3": 31, "192.168.127.4": 35,
+              "192.168.127.5": 35, "192.168.128.2": 24, "192.168.128.3": 31,
+              "192.168.128.4": 35, "192.168.128.5": 35}
+    try:
+        _plant_fixture(tmp_path, monkeypatch, counts)
+        assert False, "must raise on a box that never took its catalog"
+    except RuntimeError as e:
+        assert "catalog-carrying boxes" in str(e)
+
+
 def _bootstrap_fakes(monkeypatch, m, accept):
     """Stateful fake DB: `accept` is the live password set; change_password
     mutates it exactly like a rotation does — nothing the code believes can
