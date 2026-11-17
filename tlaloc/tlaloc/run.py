@@ -9,7 +9,8 @@ from pathlib import Path
 from . import decide as decide_mod
 from . import report as report_mod
 from . import seed as seed_mod
-from .c2 import FakeMythic, FakeSliver, MythicClient, SliverClient
+from .c2 import (FakeMythic, FakeSliver, MythicClient, SliverClient,
+                 build_server_client)
 from .ctx import Ctx
 from .effects import execute, get as get_effect, reload_registry
 from .errors import (EffectParamError, GuardrailError, PolicyError,
@@ -513,12 +514,7 @@ def build_context(cfg, *, comp_dir=None, dry_run=None, clef=None, llm=None, c2=N
     ctx.c2_builders = [c2_client] if c2_client is not None else []
     if c2_client is not None and c2 is None and engine == "sliver":
         for spec in cfg["c2"].get("build_servers") or []:
-            sub = dict(cfg)
-            sub["c2"] = dict(cfg["c2"])
-            sub["c2"]["operator_config"] = (spec.get("operator_config")
-                                            or sub["c2"]["operator_config"])
-            sub["c2"]["base_url"] = spec.get("base_url") or sub["c2"].get("base_url")
-            ctx.c2_builders.append(SliverClient(sub, log=log))
+            ctx.c2_builders.append(build_server_client(cfg, spec, log=log))
     policy = Policy(cfg, world, intel, sensors=sensors_client, rng=ctx.rng)
     ctx.policy = policy
     decider = decider or decide_mod.Decider(cfg, world, log, clef=clef,

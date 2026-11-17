@@ -61,9 +61,10 @@ def engine_status(session, base_url):
     return r.json()
 
 
-# a --hold-start deploy leaves tlaloc enabled-but-stopped (a held range must sleep —
-# run-14ac7f14's held deploy had red stripping freshly-provisioned forwarders hours
-# before T0); releasing the hold is the moment red begins. Returns 1 when red did NOT
+# a --hold-start deploy leaves tlaloc installed and DISABLED (a held range must sleep —
+# run-14ac7f14's held deploy had red stripping freshly-provisioned forwarders hours before
+# T0, and an enabled unit would also arm itself on the next reboot, which a prepared reset is
+# one of); releasing the hold is the moment red begins. Returns 1 when red did NOT
 # come up, so `start` tells the operator to intervene rather than open red-less.
 def release_held_red(state):
     if not state.get("red_loop_held"):

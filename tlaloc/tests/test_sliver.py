@@ -190,3 +190,51 @@ def test_mythic_transports_are_validated_against_mythics_list():
     assert cli._transports_arg("all", "mythic") == ["http", "webhook"]
     with pytest.raises(ConfigError):
         cli._transports_arg("http,webhook", "sliver")
+
+
+def test_release_listeners_gives_up_only_the_transport_jobs():
+    calls = []
+
+    def fake_call(method, request, response_type, timeout=None):
+        calls.append((method, getattr(request, "ID", None)))
+        if method == "GetJobs":
+            return SimpleNamespace(Active=[SimpleNamespace(Name="mtls", ID=7),
+                                           SimpleNamespace(Name="socks", ID=8)])
+        return SimpleNamespace()
+
+    client = SliverClient(_cfg())
+    client._call = fake_call
+    assert client.release_listeners() == ["mtls"]
+    assert calls == [("GetJobs", None), ("KillJob", 7)]
+
+
+def test_the_main_server_reclaims_the_listeners_before_reconciling(monkeypatch):
+    """Build-only servers share the server database, so after a reboot one of them can
+    restore the persisted listeners before the main daemon does — and the implants that dial
+    it check in where nothing reads them. Reconciling has to take the ports back first."""
+    from tlaloc.c2 import sliver as sl
+
+    class Builder:
+        def __init__(self):
+            self.released = False
+
+        def release_listeners(self):
+            self.released = True
+            return ["mtls"]
+
+    builder = Builder()
+    monkeypatch.setattr(sl, "build_server_client", lambda cfg, spec, log=None: builder)
+    calls = []
+
+    def fake_call(method, request, response_type, timeout=None):
+        calls.append(method)
+        return SimpleNamespace(Active=[]) if method == "GetJobs" else SimpleNamespace()
+
+    client = SliverClient(_cfg(build_servers=[{"base_url": "https://10.0.0.50:31338",
+                                              "operator_config": "/etc/tlaloc/b1.cfg"}]))
+    client._call = fake_call
+    result = client.ensure_listeners()
+    assert builder.released is True
+    assert calls[0] == "GetJobs"
+    assert sorted(result["started"]) == ["dns", "http", "https", "mtls", "wg"]
+    assert result["released"] == ["mtls"]

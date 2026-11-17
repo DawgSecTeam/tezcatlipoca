@@ -15,7 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
-from red import gaia_ops, red01_ops, tlaloc_ops as to  # noqa: E402
+from red import gaia_ops, red01_ops, sliver_ops, tlaloc_ops as to  # noqa: E402
 
 
 class Completed:
@@ -196,6 +196,24 @@ class ConfigAndCommandTests(unittest.TestCase):
         self.assertIn(str(comp.resolve() / ".tlaloc-state"), argv)
         self.assertIn(str(comp.resolve() / ".tlaloc-config.yaml"), argv)
 
+    def test_a_held_unit_is_installed_disabled_and_reopening_enables_it(self):
+        # An enabled-but-stopped unit is not a hold: the next boot starts red by itself, and a
+        # prepared reset is a boot. So the held state is a disabled unit, and the release has
+        # to make it boot-live as it starts it.
+        seen = []
+
+        def fake_ssh(key, ip, remote, **kw):
+            seen.append(remote)
+            return Completed(0, "", "")
+
+        with mock.patch.object(to, "_ssh_run", fake_ssh):
+            to.install_unit("/k", "10.0.0.241", enable=False)
+            to.install_unit("/k", "10.0.0.241")
+            to.start_unit("/k", "10.0.0.241")
+        self.assertIn("systemctl disable tlaloc.service", seen[0])
+        self.assertIn("systemctl enable tlaloc.service", seen[1])
+        self.assertIn("systemctl enable --now tlaloc.service", seen[2])
+
 
 
 class FakeCtx:
@@ -241,6 +259,7 @@ class PlantTests(unittest.TestCase):
             "seed_via_red01": seed_via_red01 or {"return_value": {"ok": True}},
             "pull_manifest": {"return_value": {
                 "path": str(self.comp / "red" / "manifest.json")}},
+            "bring_up_listeners": {"return_value": Completed(0, "")},
             "push_llm_env": {"return_value": {"ok": True}},
             "comp_prep_command": {"return_value": ["tlaloc", "c2-prep"]},
         }
@@ -408,6 +427,32 @@ class PlantTests(unittest.TestCase):
         self.assertIsNone(out["manifest"])
         self.assertTrue(self.ctx.state["red_staged"])
         self.assertNotIn("red_deployed", self.ctx.state)
+        # The unit goes in disabled: these restore points are rebooted on every reset, and a
+        # unit enabled at boot would arm the range before the event does.
+        self.assertIs(to.install_unit.call_args.kwargs["enable"], False)
+
+    def test_a_reused_matrix_still_brings_the_listeners_up(self):
+        # A prepared reset rolls red01 back and reboots it. The payloads survive on disk;
+        # what answers them does not — a Sliver server restores its listeners at daemon
+        # start, on whichever of the box's servers got there first. Skipping the freeze
+        # cannot mean skipping the listeners the freeze would have created.
+        self._patch()
+        self.comp = compfile(self.tmp.name + "slv", "red.clef_url http://10.0.0.9:8080\n")
+        self.ctx = FakeCtx(self.comp)
+        manifest = self.comp / "red" / "manifest.json"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps(
+            {"boxes": {"192.168.101.2": {"stages": ["access", "channel"]}}}))
+        with mock.patch.object(sliver_ops, "sliver_enabled", return_value=True), \
+             mock.patch.object(sliver_ops, "c2_plan", return_value={
+                 "box": "10.0.0.241", "ports": {}, "domain": "c2.demo."}), \
+             mock.patch.object(sliver_ops, "prepare_sliver",
+                               return_value={"ok": True, "c2": {}}), \
+             mock.patch.object(to, "payloads_ready", return_value=True), \
+             mock.patch.object(to, "pull_payload_manifest",
+                               return_value={"path": "m", "payloads": 3}):
+            to.plant_assume_breach(self.ctx, ssh_key="/k", runner=self.runner)
+        to.bring_up_listeners.assert_called_once()
 
 
 class DeployImplantsTests(unittest.TestCase):
@@ -468,6 +513,61 @@ class DeployImplantsTests(unittest.TestCase):
         self.assertIsNone(to.deploy_implants(off, {"red": {"red_ip": "10.0.0.241"}},
                                              ssh_key="/k"))
         to.seed_via_red01.assert_not_called()
+
+    def _sliver_arm(self, comp, order):
+        def note(key):
+            def call(*_args, **_kwargs):
+                order.append(key)
+            return call
+        (comp / "red").mkdir(parents=True, exist_ok=True)
+        manifest = comp / "red" / "manifest.json"
+        manifest.write_text(json.dumps(
+            {"boxes": {"192.168.101.2": {"stages": ["access", "channel"]}}}))
+        for name, key in (("install_red_rules", "rules"), ("bring_up_listeners", "listen"),
+                          ("seed_via_red01", "seed")):
+            patcher = mock.patch.object(to, name, side_effect=note(key))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for name, kw in (("pull_manifest", {"return_value": {"path": str(manifest)}}),
+                         ("_replay_account_modes", {}), ("_wipe_arming_traces", {})):
+            patcher = mock.patch.object(to, name, **kw)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_the_sliver_arm_listens_on_red01_before_it_seeds(self):
+        # Rules first (a rebooted engine drops them), then the listeners, then the payloads:
+        # a callback that is expected before either exists is a failed channel gate.
+        comp = compfile(self.tmp.name + "arm", "red.assume_breach full\n"
+                                              "red.clef_url http://10.0.0.9:8080\n")
+        order = []
+        self._sliver_arm(comp, order)
+        with mock.patch.object(to, "payloads_ready", return_value=True):
+            to.deploy_implants(comp, {"red": {"red_ip": "10.0.0.241"},
+                                      "teams": {"team1": {"identifier": "101"}}},
+                               ssh_key="/k")
+        self.assertEqual(order, ["rules", "listen", "seed"])
+
+    def test_the_sliver_arm_refuses_a_range_with_no_frozen_matrix(self):
+        # The arm never compiles: a range whose snapshots predate the freeze has nothing to
+        # plant, and that has to be said plainly instead of failing 400 payloads later.
+        comp = compfile(self.tmp.name + "none", "red.assume_breach full\n"
+                                               "red.clef_url http://10.0.0.9:8080\n")
+        with mock.patch.object(to, "install_red_rules"), \
+             mock.patch.object(to, "payloads_ready", return_value=False), \
+             mock.patch.object(to, "bring_up_listeners") as up:
+            with self.assertRaises(RuntimeError) as cm:
+                to.deploy_implants(comp, {"red": {"red_ip": "10.0.0.241"}}, ssh_key="/k")
+        self.assertIn("no frozen payload matrix", str(cm.exception))
+        up.assert_not_called()
+
+    def test_the_listener_call_never_touches_the_frozen_matrix(self):
+        # comp_prep_remote_command is the same job with a build behind it, and that build
+        # starts by deleting /root/.sliver/slivers — mid-event, that is the payload store.
+        listeners = to.listeners_command()
+        prep = to.comp_prep_remote_command()
+        self.assertIn("c2-prep --listeners-only", listeners)
+        self.assertNotIn("rm -rf", listeners)
+        self.assertIn("rm -rf", prep)
 
 
 class PayloadManifestGuardTests(unittest.TestCase):

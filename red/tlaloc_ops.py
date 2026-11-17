@@ -260,6 +260,31 @@ def comp_prep_remote_command(transports="all"):
             f"--comp {INTEL_DIR} c2-prep --transports {transports}")
 
 
+def listeners_command():
+    """The same listener bring-up c2-prep does, with no build behind it.
+
+    `comp_prep_remote_command` is not reusable here: it wipes /root/.sliver/slivers, and an
+    arm that wiped the matrix mid-event would destroy the very payloads it is about to plant.
+    """
+    return (f"cd {INSTALL_DIR} && sudo -n python3 -m tlaloc --config {CONFIG_PATH} "
+            f"--comp {INTEL_DIR} c2-prep --listeners-only")
+
+
+def bring_up_listeners(ssh_key, red_ip, *, runner=None):
+    """Every transport listener must be live on red01's main daemon before a callback is due.
+
+    A prepared reset reboots red01, and a Sliver server restores its persisted listeners when
+    the daemon starts — so a reused matrix says nothing about whether anything is listening.
+    """
+    proc = _ssh_run(ssh_key, red_ip, listeners_command(), runner=runner, timeout=600)
+    if getattr(proc, "returncode", 1) != 0:
+        raise RuntimeError(
+            f"the C2 listeners could not be brought up on red01 ({_tail(proc, 900)}) — no "
+            f"implant can check in. A range prepared by older code fails exactly here: "
+            f"prepare it again with a deploy.")
+    return proc
+
+
 def payloads_ready(ssh_key, red_ip, *, runner=None):
     """A resume/scrim reuses the matrix already built on red01; rebuilding 30 implants is hours."""
     remote = (f"cd {INTEL_DIR}/red/payloads 2>/dev/null && sudo -n python3 -c "
@@ -456,10 +481,15 @@ def push_llm_env(ssh_key, red_ip, api_key, *, runner=None, timeout=120):
     return {"ok": True}
 
 
-def install_unit(ssh_key, red_ip, *, runner=None, timeout=180):
+def install_unit(ssh_key, red_ip, *, runner=None, timeout=180, enable=True):
+    # An enabled-but-stopped unit is not a hold: the next boot starts red on its own. A
+    # prepared range carries a snapshot of this disk, so the held state has to be disabled —
+    # and whoever opens the event enables it as it starts (round 2 of a kept range: the reset
+    # reboot ran the day-0 seed before the arm did).
+    state = "enable" if enable else "disable"
     remote = (f"sudo -n tee /etc/systemd/system/{UNIT} < {INSTALL_DIR}/systemd/"
               f"{UNIT_SRC.name} >/dev/null && sudo -n systemctl daemon-reload && "
-              f"sudo -n systemctl enable {UNIT}")
+              f"sudo -n systemctl {state} {UNIT}")
     proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout)
     if getattr(proc, "returncode", 1) != 0:
         raise RuntimeError(f"installing {UNIT} failed: {_tail(proc)}")
@@ -474,8 +504,13 @@ def seed_via_red01(ssh_key, red_ip, *, runner=None, timeout=5400):
 
 
 def start_unit(ssh_key, red_ip, *, runner=None, timeout=60):
-    """Start it after the seed: enable-only leaves the loop stopped until someone logs in."""
-    remote = f"sudo -n systemctl start {UNIT} && sudo -n systemctl is-active {UNIT}"
+    """Open the event: start the loop and let it come back on its own if red01 reboots.
+
+    Enabling here is what pairs with a disabled install — the hold is a disabled unit, so the
+    release has to make it live for future boots too, not just for this one.
+    """
+    remote = (f"sudo -n systemctl enable --now {UNIT} && "
+              f"sudo -n systemctl is-active {UNIT}")
     proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout)
     if getattr(proc, "returncode", 1) != 0:
         raise RuntimeError(f"starting {UNIT} on {red_ip} failed: {_tail(proc)}")
@@ -541,8 +576,9 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
                         deploy_implants_now=True):
     """[7/8] Deploy red01, install the C2, seed, prove the config — every step raises.
 
-    `start_loop=False` leaves the unit enabled but stopped, for a caller that has more work
-    to do on the boxes before T0 (the scrim harness always stops before the fire test).
+    `start_loop=False` leaves the unit installed and disabled, for a caller that has more work
+    to do on the boxes before T0 (the scrim harness always stops before the fire test). The
+    hold is a disabled unit rather than a stopped one: an enabled unit arms itself on boot.
 
     `deploy_implants_now=False` stops once the C2 and its payload matrix exist on red01 —
     the range is built and armed but no implant has touched a box. The prepared restore
@@ -692,6 +728,10 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         if payloads_ready(ssh_key, red_ip, runner=runner):
             payload_manifest = pull_payload_manifest(ssh_key, red_ip, comp_dir,
                                                      runner=runner)
+            # A frozen matrix says nothing about the daemon that has to answer it: red01 may
+            # have rebooted since the freeze (a prepared reset does), and its listeners come
+            # back only if something asks for them.
+            bring_up_listeners(ssh_key, red_ip, runner=runner)
             print(f"  sliver      : reusing {payload_manifest['payloads']} frozen "
                   f"payload(s) already on red01")
         else:
@@ -719,7 +759,7 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     llm_key = llm_key or (os.environ.get("TEZ_LITELLM_API_KEY") or "").strip()
     if llm_key:
         push_llm_env(ssh_key, red_ip, llm_key, runner=runner)
-    install_unit(ssh_key, red_ip, runner=runner)
+    install_unit(ssh_key, red_ip, runner=runner, enable=(deploy_implants_now and start_loop))
     manifest = None
     if not deploy_implants_now:
         print(f"  tlaloc      : staged on red01 ({red_ip}) — no implant deployed, so the "
@@ -741,7 +781,8 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         start_unit(ssh_key, red_ip, runner=runner)
         print(f"  tlaloc      : loop started on red01 ({UNIT})")
     else:
-        print(f"  tlaloc      : unit installed on red01 ({UNIT}); NOT started")
+        print(f"  tlaloc      : unit installed on red01 ({UNIT}); NOT started, and NOT "
+              f"enabled — a held range stays quiet through a reboot")
     summary = {"engine": "tlaloc", "vmid": red_vmid, "red_ip": red_ip,
                "node": identity["node"], "config": str(cfg_path),
                "manifest": manifest.get("path") if manifest else None,
@@ -811,6 +852,14 @@ def deploy_implants(comp_dir, state, *, ssh_key, runner=None):
                                   comp_id=competition_name(comp_dir))
         install_red_rules(comp_dir, state.get("engine_mgmt_ip", ""), ssh_key,
                           team_identifiers=ids, callback_ports=plan["ports"], runner=runner)
+        # The arm plants what the rollback rolled back with the disk, so it must also check
+        # the daemon that answers it: a rebooted red01 restores its listeners on whichever
+        # of its Sliver servers gets there first, and a matrix is not a callback path.
+        if not payloads_ready(ssh_key, red_ip, runner=runner):
+            raise RuntimeError(
+                f"red01 ({red_ip}) carries no frozen payload matrix — this range's prepared "
+                f"snapshots predate the C2 freeze; prepare it again with a deploy")
+        bring_up_listeners(ssh_key, red_ip, runner=runner)
     elif use_mythic:
         plan = gaia_ops.c2_plan(comp_dir, red_ip=red_ip,
                                 comp_id=competition_name(comp_dir))

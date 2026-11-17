@@ -265,6 +265,13 @@ def cmd_c2_prep(args):
     ctx, _, _ = run_mod.build_context(cfg, comp_dir=comp_dir)
     client = ctx.c2
     engine = str(cfg["c2"].get("engine") or "sliver").lower()
+    if getattr(args, "listeners_only", False):
+        if engine != "sliver":
+            print(json.dumps({"ok": False, "error": "--listeners-only is the Sliver path; "
+                                                    "Mythic owns its own callbacks"}))
+            return 2
+        print(json.dumps({"ok": True, **client.ensure_listeners()}, indent=2))
+        return 0
     out_dir = comp_dir / "red" / "payloads"
     out_dir.mkdir(parents=True, exist_ok=True)
     transports = _transports_arg(args.transports, engine)
@@ -413,6 +420,9 @@ def build_parser():
     prep_p.add_argument("--transports", default="all",
                         help="comma list, or all (every Sliver transport)")
     prep_p.add_argument("--no-download", action="store_true")
+    prep_p.add_argument("--listeners-only", action="store_true",
+                        help="bring the transport listeners up and build nothing — the "
+                             "arm of a range whose matrix is already frozen")
     prep_p.set_defaults(func=cmd_c2_prep)
     return parser
 
