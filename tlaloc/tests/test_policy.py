@@ -525,3 +525,34 @@ def test_breadth_skips_a_rehit_while_the_concurrent_cap_has_room(tmp_path):
     assert "nginx" not in takes, takes
     assert "mysql" in takes and takes["mysql"]["score"] >= 95
     assert takes["mysql"]["reason"].startswith("breadth:")
+
+
+def test_breadth_still_owed_when_there_is_no_concurrent_cap(tmp_path):
+    # live: cde-2026 run-84c0e45d — breadth was gated on max_down, and the DEFAULTS
+    # max_down is 0 (no cap), so it never fired: the 40-point re-hit bias ran
+    # unopposed, one blue team got taken down 37 times, the other 3.
+    from types import SimpleNamespace
+    ctx, policy = policy_for(tmp_path)
+    ctx.cfg["red"]["caps"]["max_down"] = 0
+    ctx.world.meta["event_start"] = policy._now() - 20 * 60
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    ctx.world.add_impact("192.168.1.10", "nginx", "stop")
+    policy.sensors = None
+    policy.intel = SimpleNamespace(
+        boxes=lambda: [{"ip": "192.168.1.10", "team": "Blue1", "windows": False}],
+        services_for=lambda ip: ["nginx", "mysql"],
+        team_of=lambda ip: "Blue1",
+        box_by_ip=lambda ip: {"box": "web01", "identifier": "105", "ip": ip},
+        teams=lambda: [{"team": "Blue1"}])
+    policy.update_counts({"Blue1": (6, 2)})
+    takes = {c["params"]["service"]: c for c in policy.candidates(ctx)
+             if c["effect"] == "takedown"}
+    assert "nginx" not in takes, takes        # re-hit skipped: mysql is still fresh
+    assert "mysql" in takes and takes["mysql"]["score"] >= 95
+    assert takes["mysql"]["reason"].startswith("breadth:")
+    # once NOTHING on the team is fresh, pressure returns — breadth cannot starve it
+    ctx.world.add_impact("192.168.1.10", "mysql", "stop")
+    takes = {c["params"]["service"]: c for c in policy.candidates(ctx)
+             if c["effect"] == "takedown"}
+    assert "nginx" in takes and not takes["nginx"]["reason"].startswith("breadth:")
