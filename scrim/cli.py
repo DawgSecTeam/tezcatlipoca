@@ -224,6 +224,12 @@ def main():
     # that never fired — b2d runs 7-10 caught it live.)
     red_link.start_red_director(args)
     t0 = time.time()
+    # The engine must start scoring at the same instant the event clock does — its preflight
+    # loop checks the same pins but records nothing, and on a held deploy nothing else ever
+    # flips it (cde-2026 run-7998e766 played the whole event against preflight rounds).
+    from quotient.lifecycle_ops import start_engine_clock
+    if start_engine_clock(comp, getattr(args, "engine_ip", None)):
+        raise RuntimeError("the scoring engine's clock did not start — nothing would score")
     write_state(run_dir / "T0.txt", {"t0": t0, "duration_min": args.duration_min})
     run_manifest.record_phase(run_dir, args, "event", t0=t0)
     log(f"T0 — event clock starts now (red setup took {(t0 - red_setup_started) / 60:.0f} min, "
