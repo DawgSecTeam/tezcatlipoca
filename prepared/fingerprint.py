@@ -49,8 +49,9 @@ def spec(comp_dir):
     from estate import config, state
     comp_dir = Path(comp_dir)
     st = state.read_flat(comp_dir) or {}
-    ident = st.get("identity") or {}
-    node = ident.get("node") or ""
+    # The flat view is what every other redeploy path reads: `node` and `scoring_vm_id` come out
+    # of the identity section, red01 out of whatever the deploy merged into the run section.
+    node = st.get("node") or ""
     windows = set()
     boxes_path = comp_dir / "boxes.json"
     if boxes_path.exists():
@@ -60,7 +61,7 @@ def spec(comp_dir):
     boxes = [(f"{t['team_key']}-{t['box_name']}", t["vmid"], t.get("node") or node, t["ip"],
               t["box_name"] in windows) for _k, t in sorted(targets.items())]
     red = st.get("red") or {}
-    engine_vmid = ident.get("scoring_vm_id")
+    engine_vmid = st.get("scoring_vm_id")
     ports = None
     if red.get("red_ip") or red.get("ip"):
         from red import sliver_ops

@@ -145,5 +145,38 @@ class CaptureAndCompare(unittest.TestCase):
             self.assertEqual(fp.check(tmp.name), [])
 
 
+
+class Spec(unittest.TestCase):
+    """The inventory is read out of the range's own state document, in the shape the deploy
+    writes — a spec built from the wrong section silently fingerprints nothing."""
+
+    def test_the_flat_view_names_every_vm_class(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        comp = Path(tmp.name)
+        (comp / "estate-state.json").write_text(json.dumps({
+            "schema_version": 2,
+            "identity": {"comp_name": "c", "run_id": "run-1", "node": "proxmox",
+                         "scoring_vm_id": 3300},
+            "roster": {"box_order": ["web01", "win02"], "targets": {
+                "152-web01": {"team_key": "team1", "box_name": "web01", "identifier": "152",
+                              "vmid": 1721, "ip": "192.168.152.4", "node": "proxmox", "slot": 0},
+                "153-win02": {"team_key": "team2", "box_name": "win02", "identifier": "153",
+                              "vmid": 1730, "ip": "192.168.153.5", "node": "proxmox",
+                              "slot": 1}}},
+            "run": {"red": {"vmid": 3460, "node": "proxmox", "red_ip": "10.0.0.245"}}}))
+        (comp / "boxes.json").write_text(json.dumps(
+            [{"name": "web01", "template": "tez-debian13-web01"},
+             {"name": "win02", "template": "tez-win11-win02"}]))
+        s = fp.spec(comp)
+        self.assertEqual(s["engine"], (3300, "proxmox"))
+        self.assertEqual(s["boxes"], [("team1-web01", 1721, "proxmox", "192.168.152.4", False),
+                                      ("team2-win02", 1730, "proxmox", "192.168.153.5", True)])
+        self.assertEqual([v[0] for v in s["vms"]],
+                         ["team1-web01", "team2-win02", "engine", "red01"])
+        self.assertEqual(s["red"]["ip"], "10.0.0.245")
+        self.assertEqual(s["red"]["ports"]["daemon_port"], "31337")
+
+
 if __name__ == "__main__":
     unittest.main()
