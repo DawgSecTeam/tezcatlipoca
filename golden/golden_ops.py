@@ -309,7 +309,10 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     # A booted-but-unconverted golden is reused as-is unless its stamped provenance says it
     # came from a DIFFERENT base than the name resolves to now — a full clone of the wrong
     # twin is unfixable by config PUTs (live 2026-11-13: fedora 109 planted while preflight
-    # verified 1016). Re-clone those; cold targets already rebuild themselves.
+    # verified 1016). And it is not a golden at all without its pre-plant point: a build an
+    # earlier attempt left half-finished boots, answers the guest agent and still has no
+    # working plant target (live 2026-11-17, run-f49df7ec cancelled at phase 4 → vmid 3450
+    # reused → "Unable to connect to port 22" 20 minutes into the next deploy). Re-clone both.
     for t in list(planted):
         try:
             cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
@@ -317,10 +320,14 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
             continue                                        # the clone path's own guards decide
         want = template_vmid(templates, t["box"]["template"])
         got = golden_source_of(cfg)
+        why = None
         if got != want:
-            print(f"  Golden {t['vm_name']} (vmid {t['vmid']}): cloned from "
-                  f"{got if got is not None else 'unrecorded'}, "
-                  f"'{t['box']['template']}' resolves to {want} — re-cloning")
+            why = (f"cloned from {got if got is not None else 'unrecorded'}, "
+                   f"'{t['box']['template']}' resolves to {want}")
+        elif SNAP_BASE not in list_snapshots(node, t["vmid"]):
+            why = f"no '{SNAP_BASE}' pre-plant point — a build left half-finished"
+        if why:
+            print(f"  Golden {t['vm_name']} (vmid {t['vmid']}): {why} — re-cloning")
             destroy_vm_if_exists(node, t["vmid"], expect_tags=own_set)
             planted.remove(t)
             missing.append(t)
