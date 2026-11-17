@@ -376,6 +376,15 @@ class TestReportAndSeal(unittest.TestCase):
         ao.write_report_skeleton(self.path)
         self.assertEqual(report.read_text(), "# my careful write-up\n")
 
+    def test_a_report_filed_after_collection_reads_as_present(self):
+    # red_link files a late report into the folder after the collector wrote collection.json;
+    #         asking the collection alone told the operator "RED-TEAM.md (absent)" beside afile
+        ao.update_manifest(self.path, agents={"red": {"present": True},
+                                              "blue": {"present": False}})
+        (self.path / "RED-TEAM.md").write_text("# red after-action\n")
+        ao.write_report_skeleton(self.path, force=True)
+        self.assertIn("`RED-TEAM.md` (present)", (self.path / "REPORT.md").read_text())
+
 class TestIndexAndArchive(unittest.TestCase):
 
     def test_archive_copies_and_verifies_every_byte(self):
