@@ -45,7 +45,7 @@ def _red_ssh_ctx(args):
     return f"{spec['user']}@{spec['host']}", common, spec["jump"]
 
 
-def _pull_red_files(args, files, tag=None):
+def _pull_red_files(args, files, tag=None, only_missing=False):
     """Best-effort scp of red01 files — a flaky scp must not take down a fine run."""
     ev = Path(args.run_dir) / "evidence" / "red"
     ev.mkdir(parents=True, exist_ok=True)
@@ -53,6 +53,12 @@ def _pull_red_files(args, files, tag=None):
     got = []
     for remote, local in files:
         dest = ev / local
+        if only_missing and dest.exists():
+            # The teardown pull is a safety net for a FAILED first pull. Re-fetching a file the
+            # collector already hashed changes the evidence after collection: the seal then
+            # reports hash drift on files nobody touched (live: run-4c4a9507-run2, red
+            # events.jsonl + world.json).
+            continue
         for extra in ([], (["-o", jump] if jump else [])):
             try:
                 r = procs.run_tree(["scp"] + common + extra + [f"{target}:{remote}", str(dest)],
@@ -169,7 +175,7 @@ def _staged_report_names(args):
     return []
 
 
-def pull_red_state(args):
+def pull_red_state(args, only_missing=False):
     """Stage world-readable copies under /tmp/ba first: the collector treats red01 as ONE target and one scp failure marks every later file "skipped"."""
     target, common, jump = _red_ssh_ctx(args)
     await_red_report(args)
@@ -192,7 +198,7 @@ def pull_red_state(args):
         ("/tmp/ba/report-secrets.md", "report-secrets.md"),
     ] + [(f"/tmp/ba/{name}", name) for name in red_artifact_names(args)
          if name not in ("world.json", "events.jsonl", "report-secrets.md")]
-      + [(f"/tmp/ba/{name}", name) for name in staged])
+      + [(f"/tmp/ba/{name}", name) for name in staged], only_missing=only_missing)
     log(f"red state pulled before teardown: {got or 'nothing (see collection.json)'}")
     _land_canonical_red_report(args, got)
     _c3rberus_harvest(args)
