@@ -28,7 +28,7 @@ REFERENCE = ".prepared-fingerprint.json"
 # rollback to compare against, so the runtime answer is dropped rather than normalised.
 _VOLATILE_VM_KEYS = ("digest", "status", "lock", "agent", "uptime", "template", "id", "name")
 
-_BOX_LINUX = "ss -H -ltn | awk '{print $5}' | sed 's/.*://' | sort -n -u"
+_BOX_LINUX = "ss -H -ltn | awk '{print $4}' | sed 's/.*://' | sort -n -u"
 _BOX_WINDOWS = ("(Get-NetTCPConnection -State Listen | ForEach-Object LocalPort "
                 "| Sort-Object -Unique)")
 _ENGINE_RULES = ("; ".join(f"iptables -S {c} 2>/dev/null"
