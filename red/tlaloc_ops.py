@@ -992,7 +992,8 @@ def _seed_and_prove(comp_dir, ssh_key, red_ip, block, c2_on, runner):
             raise RuntimeError(
                 f"the day-0 seed did not plant a checked-in C2 channel on "
                 f"{', '.join(no_channel)} — the payloads ran but their "
-                f"callbacks never landed (full spread proves every transport)")
+                f"callbacks never landed — one channel per box, every transport when "
+                f"red.c2_implant_spread is full")
     return manifest
 
 
