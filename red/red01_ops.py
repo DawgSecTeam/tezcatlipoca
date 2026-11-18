@@ -154,6 +154,16 @@ def _default_runner(cmd, **kwargs):
     return subprocess.run(cmd, **kwargs)
 
 
+def _wait_ssh(ssh_key, ip, timeout):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _run(ssh_argv(ssh_key, ip, "true", timeout=10), timeout=25).returncode == 0:
+            return True
+        time.sleep(5)
+    return False
+
+
 def _config(node, vmid, data):
     """Retry the brief post-clone window where Proxmox refuses a config PUT."""
     import time
@@ -313,6 +323,18 @@ def deploy(comp_dir, *, engine_vmid, ssh_key, ownership, placement=None, node=No
             if "lost exec pid" not in str(e) or attempt == 2:
                 raise
             wait_for_guest_agent(node, vmid, timeout=300)
+    # cloud-init's boot-time package_upgrade bounces sshd, and when its apt upgrade then
+    # fails on the lock the socket is left stopped for good — every later step of this
+    # deploy speaks ssh, so the first dial reported it as "red01's disk could not grow"
+    # (live 2026-11-17: 314 s upgrade, "Could not get APT lock", port 22 refused while the
+    # guest agent still answered). The agent is the channel that outlives the bounce.
+    if not _wait_ssh(ssh_key, ip, timeout=90):
+        _exec(node, vmid, "systemctl start ssh.socket 2>/dev/null || true; "
+                          "systemctl start ssh 2>/dev/null || true")
+        if not _wait_ssh(ssh_key, ip, timeout=180):
+            raise RuntimeError(f"red01 vmid {vmid} never accepted SSH at {ip} — cloud-init's "
+                               f"package_upgrade can leave ssh.socket stopped, and the agent "
+                               f"could not start it")
 
     # Pin the network ourselves: cloud-init re-applying lost IPv4 entirely on a
     # kernel-upgrade reboot. Match the mgmt NIC by MAC — the default route can be a docker bridge's.

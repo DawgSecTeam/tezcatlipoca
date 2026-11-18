@@ -121,6 +121,14 @@ class Rules(unittest.TestCase):
         self.assertIn("OnUnitActiveSec=30", r._RED_TIMER)
 
 
+def _ifaces(node, vmid, script, timeout=300):
+    if script.startswith("ls /sys/class/net/"):
+        return "eth0\nens19\n"
+    if "route show default" in script:
+        return "default via 10.0.0.1 dev eth0\n"
+    return ""
+
+
 class Deploy(unittest.TestCase):
     def test_a_foreign_occupant_is_refused_not_reconfigured(self):
         from infra.ownership import Ownership
@@ -171,6 +179,7 @@ class Deploy(unittest.TestCase):
                     mock.patch.object(r, "start_vm"), \
                     mock.patch.object(r, "wait_for_guest_agent", return_value=True), \
                     mock.patch.object(r, "_exec", side_effect=fake_exec), \
+                    mock.patch.object(r, "_wait_ssh", return_value=True), \
                     mock.patch.object(r, "_write",
                                       side_effect=lambda n, v, p, c, m: written.__setitem__(p, c)), \
                     mock.patch.object(r, "proxmox_api",
@@ -221,6 +230,7 @@ class Deploy(unittest.TestCase):
                     mock.patch.object(r, "start_vm"), \
                     mock.patch.object(r, "wait_for_guest_agent", return_value=True) as wait, \
                     mock.patch.object(r, "_exec", side_effect=fake_exec), \
+                    mock.patch.object(r, "_wait_ssh", return_value=True), \
                     mock.patch.object(r, "_write"), \
                     mock.patch.object(r, "proxmox_api"):
                 identity = r.deploy(comp, engine_vmid=1300, ssh_key=str(key),
@@ -233,6 +243,78 @@ class Deploy(unittest.TestCase):
         self.assertEqual(pushed["cores"], r.RED01_CORES)
         self.assertEqual(pushed["memory"], r.RED01_MEMORY_MB)
         self.assertEqual(pushed["balloon"], 0)
+
+    def test_ssh_is_established_before_the_deploy_returns(self):
+        # cloud-init's package_upgrade bounces sshd; every later step speaks ssh, so the
+        # deploy must prove the channel before handing red01 on (run-2cd2e47c died there).
+        from infra.ownership import Ownership
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = _comp(tmp, "red01_vmid 1777\nred01_ip 10.0.0.241\n")
+            key = Path(tmp) / "key"
+            key.write_text("k")
+            (Path(tmp) / "key.pub").write_text("ssh-rsa AAAA test")
+            with mock.patch.object(r, "_live", return_value={"vmid": 1777}), \
+                    mock.patch.object(r, "_config"), \
+                    mock.patch.object(r, "start_vm"), \
+                    mock.patch.object(r, "wait_for_guest_agent", return_value=True), \
+                    mock.patch.object(r, "_exec", side_effect=_ifaces), \
+                    mock.patch.object(r, "_write"), \
+                    mock.patch.object(r, "_wait_ssh", return_value=True) as ssh, \
+                    mock.patch.object(r, "proxmox_api"):
+                r.deploy(comp, engine_vmid=1300, ssh_key=str(key),
+                         ownership=Ownership("demo", "run-test"), node="pve")
+        self.assertEqual(ssh.call_count, 1)
+        self.assertEqual(ssh.call_args.args[1], "10.0.0.241")
+
+    def test_a_stopped_ssh_socket_is_started_through_the_guest_agent(self):
+        # The exact 2026-11-17 failure: apt's upgrade "Could not get APT lock" left
+        # ssh.socket dead. Waiting alone just burns the bound, so the agent kicks it.
+        from infra.ownership import Ownership
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = _comp(tmp, "red01_vmid 1777\nred01_ip 10.0.0.241\n")
+            key = Path(tmp) / "key"
+            key.write_text("k")
+            (Path(tmp) / "key.pub").write_text("ssh-rsa AAAA test")
+            kicked = []
+
+            def fake_exec(node, vmid, script, timeout=300):
+                if "systemctl start ssh.socket" in script:
+                    kicked.append(script)
+                return _ifaces(node, vmid, script)
+
+            with mock.patch.object(r, "_live", return_value={"vmid": 1777}), \
+                    mock.patch.object(r, "_config"), \
+                    mock.patch.object(r, "start_vm"), \
+                    mock.patch.object(r, "wait_for_guest_agent", return_value=True), \
+                    mock.patch.object(r, "_exec", side_effect=fake_exec), \
+                    mock.patch.object(r, "_write"), \
+                    mock.patch.object(r, "_wait_ssh", side_effect=[False, True]), \
+                    mock.patch.object(r, "proxmox_api"):
+                r.deploy(comp, engine_vmid=1300, ssh_key=str(key),
+                         ownership=Ownership("demo", "run-test"), node="pve")
+        self.assertEqual(len(kicked), 1)
+        self.assertIn("ssh.socket", kicked[0])
+
+    def test_an_ssh_that_never_comes_up_names_ssh_not_the_disk(self):
+        from infra.ownership import Ownership
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = _comp(tmp, "red01_vmid 1777\nred01_ip 10.0.0.241\n")
+            key = Path(tmp) / "key"
+            key.write_text("k")
+            (Path(tmp) / "key.pub").write_text("ssh-rsa AAAA test")
+            with mock.patch.object(r, "_live", return_value={"vmid": 1777}), \
+                    mock.patch.object(r, "_config"), \
+                    mock.patch.object(r, "start_vm"), \
+                    mock.patch.object(r, "wait_for_guest_agent", return_value=True), \
+                    mock.patch.object(r, "_exec", side_effect=_ifaces), \
+                    mock.patch.object(r, "_write"), \
+                    mock.patch.object(r, "_wait_ssh", return_value=False), \
+                    mock.patch.object(r, "proxmox_api"):
+                with self.assertRaises(RuntimeError) as cm:
+                    r.deploy(comp, engine_vmid=1300, ssh_key=str(key),
+                             ownership=Ownership("demo", "run-test"), node="pve")
+        self.assertIn("never accepted SSH", str(cm.exception))
+        self.assertNotIn("disk", str(cm.exception))
 
 
 class Destroy(unittest.TestCase):
