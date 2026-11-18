@@ -127,9 +127,9 @@ def check_collisions(share, plan, vms):
         if slot.template_slot and not vm.get("template") and not any(
                 t.startswith("comp-") and t != own_tag for t in tags):
             # Own build slot holding an unconverted VM (clone failed before the tag PUT, so it
-            # wears the base image's tags); phase 2 reclaims it.
+            # wears the base image's tags); the build phase that owns the slot reclaims it.
             print(f"  Preflight{share.label}: {slot.label} holds an unconverted leftover of "
-                  f"this competition's own build (vmid {slot.vmid}) — phase 2 reclaims it")
+                  f"this competition's own build (vmid {slot.vmid}) — the build reclaims it")
             continue
         if own_tag in tags:
             leftovers.append(slot.label)

@@ -257,6 +257,10 @@ class Phase4GoldenCoverage(unittest.TestCase):
 
 
 class Phase7Seed(unittest.TestCase):
+    def setUp(self):
+        # The fingerprint belongs to the restore point, not to the seed's ordering under test here.
+        self.enterContext(dpatch("record_fingerprint", return_value={"boxes": []}))
+
     def _run(self, ctx):
         order = []
         with dpatch("wait_for_http",
@@ -271,6 +275,7 @@ class Phase7Seed(unittest.TestCase):
                 dpatch("create_injects",
                              side_effect=lambda *a: order.append("injects")
                              or ([], [])), \
+                dpatch("record_fingerprint", return_value={"boxes": []}), \
                 contextlib.redirect_stdout(io.StringIO()):
             dl_seed.phase8_seed(ctx)
         return order

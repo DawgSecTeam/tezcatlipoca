@@ -237,8 +237,11 @@ def start_red_director(args):
                  "d=json.load(open(p)); d.get(\"meta\", {}).pop(\"event_start\", None); "
                  "open(p, \"w\").write(json.dumps(d))' 2>/dev/null || true; ")
     # RESTART, not start: a re-stage pushes new code onto red01, and `systemctl
-    # start` on a running unit is a no-op that keeps the old loop alive.
-    cmd = (f"{reset}sudo -n systemctl restart {unit}; sleep 3; "
+    # start` on a running unit is a no-op that keeps the old loop alive. Enabling with it:
+    # a staged range carries the unit disabled (a held range must survive a reboot asleep),
+    # and from T0 on red belongs in the boot sequence.
+    cmd = (f"{reset}sudo -n systemctl enable {unit} >/dev/null 2>&1; "
+           f"sudo -n systemctl restart {unit}; sleep 3; "
            f"systemctl is-active {unit}")
     for extra in ([], (["-o", jump] if jump else [])):
         try:

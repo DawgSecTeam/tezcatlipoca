@@ -138,7 +138,7 @@ MySQL grant.
 
 ## Recovering boxes mid-event
 
-Every box has two disk-only snapshots: `tz-base` (after boot, DNS and login, before post-clone planting; end of phase 4) and `tz-ready` (end of phase 7, as delivered) — `SNAP_BASE`/`SNAP_READY` in `common/constants.py`. Modes: [usage-agents.md](usage-agents.md#redeploy-modes).
+Every box has two disk-only snapshots: `tz-base` (after boot, DNS and login, before post-clone planting; end of phase 4) and `tz-ready` (phase 8, on a built but **uncompromised** range — the point a round resets to and re-arms from). red01 and the scoring engine carry `tz-ready` too, taken at the same moment — `SNAP_BASE`/`SNAP_READY` in `common/constants.py`. Modes: [usage-agents.md](usage-agents.md#redeploy-modes).
 
 ```bash
 python3 redeploy-competition.py --competition <id> --teams 3 --dry-run   # always first

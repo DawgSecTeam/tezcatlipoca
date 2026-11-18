@@ -110,8 +110,12 @@ class GoldenBuildHarness:
         if method == "GET" and path.endswith("/qemu"):
             return {"data": []}
         if method == "GET" and path.endswith("/config"):
-            # planted-VM reads: every fake clone came from base-linux, vmid 900 in the map
-            return {"data": {"description": "tezcatlipoca-clone comp from-template=900"}}
+            # planted-VM reads: every fake clone came from base-linux, vmid 900 in the map —
+            # and it was placed, so reuse is judged on provenance and snapshots alone here
+            idx = self.vmids.index(int(vmid)) if vmid.isdigit() and int(vmid) in self.vmids else 0
+            return {"data": {"description": "tezcatlipoca-clone comp from-template=900",
+                             "net0": "virtio=AA:BB,bridge=vmbr104",
+                             "ipconfig0": f"ip={self.ips[idx]}/24,gw=192.168.104.1"}}
         return {"data": {}}
 
     def _snapshot(self, node, vmid, name, description="", timeout=900):

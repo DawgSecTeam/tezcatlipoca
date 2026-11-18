@@ -81,6 +81,23 @@ def test_build_servers_are_separate_ports_homes_and_profiles():
     assert block["build_servers"][0]["base_url"] == "https://10.0.0.198:31338"
 
 
+def test_a_build_server_runs_on_demand_and_never_at_boot():
+    # A build-only Sliver server shares the main server's database, and a server restores its
+    # persisted listeners when it starts: enabled at boot, it wins the race for the transport
+    # ports and the implants that dial them check in nowhere the seed reads (kept range,
+    # round 2 — mTLS was live on the wrong process).
+    with tempfile.TemporaryDirectory() as tmp:
+        specs = s.build_server_specs(comp(tmp, "red.c2_build_servers 2\n"))
+    script = s.install_script("10.0.0.198", specs)
+    assert "systemctl enable sliver.service\n" in script
+    assert "systemctl disable sliver-build-1.service sliver-build-2.service" in script
+    assert "systemctl restart sliver.service sliver-build-1.service " \
+           "sliver-build-2.service" in script
+    again = s.build_servers_script("10.0.0.198", specs)
+    assert "systemctl disable sliver-build-1.service sliver-build-2.service" in again
+    assert "enable --now" not in again
+
+
 def test_build_server_count_defaults_to_one_and_caps_at_the_limit():
     with tempfile.TemporaryDirectory() as tmp:
         path = comp(tmp)

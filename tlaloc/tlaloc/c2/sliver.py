@@ -36,6 +36,7 @@ TERMINAL_BAD = ("canceled", "cancelled")
 class SliverClient:
     def __init__(self, cfg, channel=None, now=None, log=None, password=None):
         c2 = cfg.get("c2") or {}
+        self._c2 = c2
         self.base_url = (c2.get("base_url") or "").rstrip("/")
         self.operator_config = str(c2.get("operator_config")
                                    or DEFAULT_OPERATOR_CONFIG)
@@ -93,7 +94,28 @@ class SliverClient:
 
     # -- listeners ----------------------------------------------------------
 
+    def release_build_server_listeners(self):
+        """Take the transport ports back from the build-only servers.
+
+        They share this server's database, so after a reboot whichever process reaches
+        `daemon` start first restores the persisted listeners — and an implant dialling a
+        build server checks in where nothing reads it. Round 2 of a kept range lost four
+        boxes' channels exactly this way: mTLS was live, on the wrong process.
+        """
+        released, silent = [], []
+        for spec in self._c2.get("build_servers") or []:
+            try:
+                released += build_server_client({"c2": self._c2},
+                                                 spec).release_listeners()
+            except Exception as exc:                       # noqa: BLE001 - a build
+                # A build server that is down owns no port; say so in the result rather than
+                # in a log call this class does not have (that TypeError failed a reset).
+                silent.append(f"{spec.get('base_url')}: {type(exc).__name__}")
+        self._silent_build_servers = silent
+        return released
+
     def ensure_listeners(self):
+        released = self.release_build_server_listeners()
         jobs = {job.Name: job for job in self._call(
             "GetJobs", common_pb2.Empty(), clientpb.Jobs).Active}
         wanted = [
@@ -141,7 +163,17 @@ class SliverClient:
             start()
             started.append(name)
         self._started.update(started)
-        return {"started": started, "jobs": sorted(jobs) + started}
+        return {"started": started, "jobs": sorted(jobs) + started, "released": released,
+                "build_servers_silent": getattr(self, "_silent_build_servers", [])}
+
+    def release_listeners(self):
+        """Kill this endpoint's transport listeners and return their names."""
+        killed = []
+        for job in self._call("GetJobs", common_pb2.Empty(), clientpb.Jobs).Active:
+            if str(job.Name) in NETWORK_TRANSPORTS:
+                self._call("KillJob", clientpb.KillJobReq(ID=job.ID), clientpb.KillJob)
+                killed.append(str(job.Name))
+        return killed
 
     # -- callbacks and tasking ---------------------------------------------
 
@@ -353,6 +385,16 @@ class SliverClient:
     def operation(self):
         return {"name": "sliver", "callbacks": len(self.callbacks()),
                 "transports": list(TRANSPORTS)}
+
+
+def build_server_client(cfg, spec, log=None):
+    """A client for one build-only Sliver server: its own port, the same server database."""
+    sub = dict(cfg)
+    sub["c2"] = dict(cfg.get("c2") or {})
+    sub["c2"]["operator_config"] = (spec.get("operator_config")
+                                    or sub["c2"].get("operator_config"))
+    sub["c2"]["base_url"] = spec.get("base_url") or sub["c2"].get("base_url")
+    return SliverClient(sub, log=log)
 
 
 class FakeSliver:

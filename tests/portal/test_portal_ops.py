@@ -294,6 +294,11 @@ class VpnEnrollment(unittest.TestCase):
 
 # deploy_portal is opt-in and must never fail the deploy
 class DeployHook(unittest.TestCase):
+    def setUp(self):
+        # Phase 8 fingerprints the restore point it just took; that is not what the hook is under
+        # test for, and the probes reach the hypervisor.
+        self.enterContext(patch("deploy_lib.phases._snapshots.record_fingerprint"))
+
     def _ctx(self, d, compfile):
         (d / "Compfile").write_text(compfile)
         saved = []
@@ -336,12 +341,14 @@ class DeployHook(unittest.TestCase):
             from_phase, comp_dir, scoring_ip = 1, Path("/nonexistent"), "10.0.0.9"
             teams, admin_password, injects = {}, "a", []
             boxes, box_creds = [], {}  # falsy: the event.conf drift branch is not under test here
+            all_targets, engine_vmid, node = [], 1000, "pve"
             state = {"seeded": True, "engine_unpaused": True}
 
             def save_state(self):
                 pass
 
         with dpatch("wait_for_http"), dpatch("engine_paused", return_value=False), \
+                dpatch("snap_engine"), \
                 dpatch("timed", side_effect=lambda *a, **k: contextlib.nullcontext()), \
                 dpatch("deploy_portal", side_effect=lambda ctx: order.append("portal")), \
                 contextlib.redirect_stdout(io.StringIO()):

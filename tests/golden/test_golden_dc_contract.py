@@ -73,13 +73,33 @@ class GenerateStageConfigsTests(unittest.TestCase):
 
 class BuildGoldenSetTests(unittest.TestCase):
     def _build(self, vm_exists, is_template, hashes, unbooted, boxes=BOXES,
-               template_map=None):
+               template_map=None, snapshots=None, source=None, placed=True):
         template_map = template_map or {"windows-server-2022": 955,
                                         "ubuntu-2204-web": 956}
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             comp_dir = Path(tmp)
             (comp_dir / "nakon-golden.json").write_text(json.dumps({"machines": []}))
-            p_api = stack.enter_context(patch.object(golden_ops, "proxmox_api"))
+            def _api(method, path, **kw):
+                if path.endswith("/config") and method == "GET":
+                    vmid = int(path.split("/")[-2])
+                    where = {t["vmid"]: t for t in golden_ops.golden_targets(
+                        1000, TEAMS, boxes)}[vmid]
+                    cfg = {"description": "tezcatlipoca-clone comp-%s"
+                                          % golden_ops.competition_name(comp_dir)}
+                    if not placed:
+                        # an interrupted clone: base image's NIC, our marker, no placement PUT
+                        return {"data": {**cfg, "net0": "e1000=AA:BB,bridge=vmbr0"}}
+                    return {"data": {**cfg, "net0": f"virtio=AA:BB,bridge={where['bridge']}",
+                                     "ipconfig0": f"ip={where['ip']}/24,gw={where['gateway']}"}}
+                return {"data": "upid" if method == "POST" else []}
+
+            p_api = stack.enter_context(patch.object(golden_ops, "proxmox_api",
+                                                     side_effect=_api))
+            if source is not None:
+                # What the reused golden's stamp reports; the default (unset) leaves it a mock,
+                # which reads as provenance-never-recorded.
+                stack.enter_context(patch.object(golden_ops, "golden_source_of",
+                                                 return_value=source))
             stack.enter_context(patch.object(
                 golden_ops, "_vm_exists",
                 side_effect=lambda n, v: vm_exists.get(v, False)))
@@ -100,6 +120,11 @@ class BuildGoldenSetTests(unittest.TestCase):
             p_start = stack.enter_context(patch.object(golden_ops, "start_vm"))
             stack.enter_context(patch.object(golden_ops, "stop_vm"))
             p_snap = stack.enter_context(patch.object(golden_ops, "take_snapshot"))
+            stack.enter_context(patch.object(golden_ops, "delete_snapshot"))
+            stack.enter_context(patch.object(golden_ops, "rollback_snapshot"))
+            stack.enter_context(patch.object(
+                golden_ops, "list_snapshots",
+                side_effect=lambda n, v: (snapshots or {}).get(v, set())))
             p_nakon = stack.enter_context(patch.object(golden_ops, "run_nakon"))
             stack.enter_context(patch.object(golden_ops, "build_nakon_bundle"))
             stack.enter_context(patch.object(golden_ops, "prep_apt_on_boxes"))
@@ -154,6 +179,39 @@ class BuildGoldenSetTests(unittest.TestCase):
         ctx.nakon.assert_not_called()
 
 
+
+    def test_a_booted_golden_with_no_pre_plant_point_is_not_a_golden(self):
+        # Cancelled mid-bootstrap (run-f49df7ec): the VM exists, answers the guest agent and
+        # carries the right base — and has no `tz-base`, so its plant never ran. Reusing it
+        # bought a connectivity failure 20 minutes into the next deploy.
+        web_only = [BOXES[1]]
+        result, ctx = self._build({1150: True}, {}, {"web01": "h-web01"}, set(),
+                                  boxes=web_only, snapshots={1150: set()}, source=956)
+        self.assertEqual(result, {"web01": 1150})
+        ctx.destroy.assert_called_once()
+        self.assertIn(1150, ctx.destroy.call_args.args)
+        self.assertEqual([c for c in ctx.api.call_args_list
+                          if c.args[0] == "POST" and c.args[1].endswith("/clone")][0]
+                         .kwargs["data"]["newid"], 1150)
+
+    def test_a_booted_golden_that_reached_its_pre_plant_point_is_reused(self):
+        web_only = [BOXES[1]]
+        _result, ctx = self._build({1150: True}, {}, {"web01": "h-web01"}, set(),
+                                   boxes=web_only, snapshots={1150: {golden_ops.SNAP_BASE}},
+                                   source=956)
+        ctx.destroy.assert_not_called()
+
+    def test_a_golden_never_placed_on_the_range_bridge_is_recloned(self):
+        # A clone that died before the placement PUT keeps the base image's NIC on vmbr0, so the
+        # in-guest bootstrap addresses a NIC in the wrong L2 and port 22 stays unreachable.
+        web_only = [BOXES[1]]
+        _result, ctx = self._build({1150: True}, {}, {"web01": "h-web01"}, set(),
+                                   boxes=web_only, snapshots={1150: {golden_ops.SNAP_BASE}},
+                                   source=956, placed=False)
+        ctx.destroy.assert_called_once()
+        self.assertIn(1150, ctx.destroy.call_args.args)
+        self.assertIsNone(ctx.destroy.call_args.kwargs.get("expect_tags"),
+                          "an unplaced leftover wears the base image's tags — its clone marker is the proof")
 
     def test_box_ssh_gets_more_than_thirty_seconds(self):
         """A jump-hosted SSH to a freshly booted golden outlasted 30 s and aborted the

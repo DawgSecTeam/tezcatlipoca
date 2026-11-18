@@ -149,6 +149,10 @@ def post_base_converge(targets, rctx, *, take_base=False):
     for t in targets:
         pipeline_api.take_snapshot(t.get("node") or node, t["vmid"], SNAP_READY,
                                    description="tezcatlipoca: as delivered (re-taken by redeploy)")
+    # The reference describes the restore point, so a re-taken point needs a fresh reading —
+    # a stale one would make every later `--mode prepared` report deltas that are only age.
+    from prepared import fingerprint
+    fingerprint.record(comp_dir)
     return True
 
 

@@ -196,10 +196,18 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 EOF
 {extras}systemctl daemon-reload
-systemctl enable {" ".join(units)}
-systemctl restart {" ".join(units)}
+systemctl enable sliver.service
+{_boot_off(units[1:])}systemctl restart {" ".join(units)}
 {wait}exit 0
 """
+
+
+def _boot_off(units):
+    """Build servers run on demand, never at boot: they share the main server's database, so
+    one enabled at boot restores the transport listeners beside it and wins the ports."""
+    if not units:
+        return ""
+    return ("systemctl disable " + " ".join(units) + " >/dev/null 2>&1 || true\n")
 
 
 def build_servers_script(box_ip, specs):
@@ -218,7 +226,8 @@ def build_servers_script(box_ip, specs):
         f"ss -ltn | grep -q ':{port} ' || {{ journalctl -u {unit} -n 30 --no-pager >&2 || true; exit 1; }}\n"
         for unit, port in zip(units, ports))
     return (f"set -e\n{writes}systemctl daemon-reload\n"
-            f"systemctl enable --now {' '.join(units)}\n{wait}exit 0\n")
+            f"{_boot_off(units)}systemctl restart {' '.join(units)}\n"
+            f"{wait}exit 0\n")
 
 
 def operator_script(box_ip, specs=()):

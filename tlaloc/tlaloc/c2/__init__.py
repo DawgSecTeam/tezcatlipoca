@@ -2,12 +2,12 @@
 
 from ..errors import C2Error
 from .mythic import DEFAULT_TRANSPORTS, MythicClient  # noqa: F401
-from .sliver import (DEFAULT_PORTS, PIVOT_TRANSPORTS, TRANSPORTS,
-                     FakeSliver, SliverClient)
+from .sliver import (DEFAULT_PORTS, PIVOT_TRANSPORTS, TRANSPORTS, FakeSliver,
+                     SliverClient, build_server_client)
 
 __all__ = ["SliverClient", "MythicClient", "C2Error", "DEFAULT_TRANSPORTS",
            "TRANSPORTS", "PIVOT_TRANSPORTS", "DEFAULT_PORTS", "FakeSliver",
-           "FakeMythic"]
+           "FakeMythic", "build_server_client"]
 
 
 class FakeMythic(FakeSliver):

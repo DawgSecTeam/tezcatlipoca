@@ -131,6 +131,7 @@ class ModeRebuildTests(unittest.TestCase):
                  patch.object(pipeline_api, "prep_apt_on_boxes"), \
                  patch.object(pipeline_api, "ensure_nat_forwarding"), \
                  patch.object(pipeline_api, "take_snapshot") as p_snap, \
+                 patch("prepared.fingerprint.record"), \
                  patch.object(converge_ops, "build_nakon_bundle", return_value="bundle"), \
                  patch.object(converge_ops, "run_nakon",
                               side_effect=lambda *a, **k: (

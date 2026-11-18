@@ -103,17 +103,22 @@ the earlier phases complete (`--force-from-phase` overrides).
 6. **Pre-domain pass** — plant the pre-domain stage (sshd/sudoers touchers) on every team box
    (lenient, `--jobs`), then `fix_services_on_boxes` on Linux boxes only. Failures are recorded per
    machine. `.postclone-swept` lets a resume skip it.
-7. **Domains → final pass → red → account-file modes → `tz-ready`** — per-team AD forests
-   concurrently (serial within a
+7. **Domains → final pass → red staging → account-file modes → trail wipe** — per-team AD
+   forests concurrently (serial within a
    team), then the final stage (disruptive DNS/apt and boot-hostile configs) after the joins. Then
-   red is planted before the snapshot (`red/tlaloc_ops.py`: red01, its C2, the day-0 seed; every
-   step is fatal), so the restore point every box carries is already compromised. Then the last
+   red is **staged, not deployed** (`tlaloc_ops.plant_assume_breach(deploy_implants_now=False)`:
+   red01, its C2 and the whole frozen payload matrix, every step fatal) — the decide point is
+   [Snapshots](#snapshots): the restore point must be a range nobody has compromised. Then the last
    pass for account-file mode pins (they must follow every account writer — see
-   `constants.ACCOUNT_FILE_MODE_CONFIGS`), and the `tz-ready` snapshot (pool of 4). A Compfile that
+   `constants.ACCOUNT_FILE_MODE_CONFIGS`), and the trail wipe. A Compfile that
    still says `team_beacons` is refused: that option belonged to the earlier agent and no longer
    exists. The firewall's `tz-base` lands at the end of phase 5, after cutover.
-8. **Seed** — poll Quotient, `seed_teams`, `unpause_engine`, `create_injects`, each gated on
-   state-document flags. Opt-in (Compfile `portal 1`): the student portal ([portal.md](portal.md)).
+8. **Prepared point → arm → seed** — poll Quotient, re-ensure scored services, `seed_teams` (clock
+   held), then one `tz-ready` snapshot per VM class at the same moment: boxes, red01, engine. Then
+   either the deploy **arms** the range (`tlaloc_ops.deploy_implants`: day-0 seed, C2-channel proof,
+   trail wipe, red loop) and starts the clock, or `--hold-start` leaves it prepared and
+   `competition-ops.py start` arms it. Opt-in (Compfile `portal 1`): the student portal
+   ([portal.md](portal.md)).
 
 ## Data flow
 
@@ -204,7 +209,14 @@ reachable.
 | Snapshot | When | Scope |
 |---|---|---|
 | `tz-base` | After boot/auth/DNS/apt prep, before plant (golden boxes) or before the post-clone sweep (team boxes) | Per VM |
-| `tz-ready` | End of phase 7, after domains, red, the account-file mode pass and the trail wipe | Per VM |
+| `tz-ready` | Phase 8, after every box-touching prep step: one moment for boxes, red01 and the engine | Per VM |
+
+`tz-ready` is the **prepared** point, and it is deliberately uncompromised: boxes are built,
+hardened and planted but carry no implant, red01 holds the C2 and its frozen payload matrix with
+no `/var/lib/tlaloc` state, and the engine holds event.conf, the credlist and the seeded teams with
+the clock stopped and no inject. Arming the range — the day-0 seed and the red loop — happens after
+the snapshot, so a round can reset everything and re-arm. `redeploy-competition.py --mode prepared`
+does that whole-range reset; `competition-ops.py start` re-arms it.
 
 Disk-only (`vmstate 0`, fsfreeze via guest agent); constants `SNAP_BASE`/`SNAP_READY`. The golden `tz-base` guards a failed golden plant (pre-conversion only; templates cannot roll back). Needs ZFS, LVM-thin, Ceph, or qcow2 on file storage; thick LVM falls back to `reconfigure`/`rebuild`. Redeploy modes: [usage-agents.md](usage-agents.md#redeploy-modes).
 

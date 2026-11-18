@@ -114,14 +114,19 @@ def engine_recovery(name, comp_dir, teams, boxes, state, assume_yes=False):
                                          if stages_red(comp_dir) else None),
                             macs=estate_apply.engine_nic_macs(node, engine_vmid))
         if stages_red(comp_dir) and state.get("red"):
-            # The re-cloned engine has no red rules; without them red01 cannot reach a team.
-            from red import red01_ops
-            red01_ops.install_engine_rules(
-                ctx["scoring_engine_ip"], ctx["ssh_key_path"],
+            # The re-cloned engine has no red rules; without them red01 cannot reach a team — and
+            # the timer rewrites the whole rule set from the transport map, so a sliver range
+            # recovers with every C2 port, not just the mythic callback.
+            from red import sliver_ops, tlaloc_ops
+            ports = (sliver_ops.c2_plan(comp_dir, red_ip=state["red"].get("red_ip"))["ports"]
+                     if sliver_ops.sliver_enabled(comp_dir) else None)
+            tlaloc_ops.install_red_rules(
+                comp_dir, ctx["scoring_engine_ip"], ctx["ssh_key_path"],
                 engine_user=ctx["vm_username"],
                 team_identifiers=[teams[k]["identifier"] for k in sorted(teams)],
                 callback_port=state["red"].get("callback_port"),
-                callback_host=state["red"].get("callback_host") or "")
+                callback_host=state["red"].get("callback_host") or "",
+                callback_ports=ports)
         with timed(comp_dir, "recovery", "engine_from_template"):
             prepare_engine_from_template(ctx, state["postgres_password"],
                                          state["redis_password"])

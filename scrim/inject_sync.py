@@ -172,3 +172,40 @@ def inject_brief(creds, team):
         lines.append(f"  #{i.get('ID')} {i.get('Title')} — {when} — {state}"
                      + ("  << TASK #1: submit before close" if urgent else ""))
     return "\n".join(lines)
+
+
+def ensure_injects_created(args, comp, creds):
+    """Publish the comp's injects before the pre-T0 verify, so the gate can judge them.
+
+    A --hold-start deploy defers inject creation to competition-ops.py start, and a scrim
+    never walks that door: it starts the clock itself. Creating them here (windows resolved
+    at staging, re-anchored at T0 by reanchor_injects) is what makes a prepared range
+    drivable by a scrim at all — otherwise the authoritative gate FAILs on `injects`.
+    """
+    from config.injects_config import load_injects, resolve_inject_times
+
+    injects = load_injects(comp)
+    if not injects:
+        return
+    jar = str(Path(args.run_dir) / ".jar-injects")
+    quotient_api._qlogin(creds, "admin", jar)
+    r = quotient_api.qget(creds, "admin", jar, "/api/injects")
+    try:
+        remote = json.loads(r.stdout)
+        if not isinstance(remote, list):
+            raise ValueError(str(remote)[:80])
+    except Exception:
+        log(f"WARNING: inject pre-create skipped — /api/injects unreadable: "
+            f"{(r.stdout or '')[:120]}")
+        return
+    resolve_inject_times(injects)
+    _updates, missing = _inject_reanchor_plan(injects, remote)
+    if not missing:
+        return
+    by_title = {inj["title"]: inj for inj in injects}
+    created = [t for t in missing if _create_inject(creds, jar, by_title[t])]
+    if len(created) != len(missing):
+        log(f"WARNING: {len(missing) - len(created)} inject(s) could not be created "
+            f"before T0: {', '.join(missing)}")
+    else:
+        log(f"published {len(created)} inject(s) before T0 (prepared range)")

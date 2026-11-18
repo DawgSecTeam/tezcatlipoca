@@ -306,10 +306,13 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
     planted = [t for t in planted if t in booted]
     targets_all, targets = targets, booted
 
-    # A booted-but-unconverted golden is reused as-is unless its stamped provenance says it
-    # came from a DIFFERENT base than the name resolves to now — a full clone of the wrong
-    # twin is unfixable by config PUTs (live 2026-11-13: fedora 109 planted while preflight
-    # verified 1016). Re-clone those; cold targets already rebuild themselves.
+    # A booted-but-unconverted golden is reused as-is only when the clone it came from was
+    # FINISHED: right base, placed on this range's bridge, and holding its pre-plant point.
+    # Each missing piece was a live failure — a full clone of the wrong twin is unfixable by
+    # config PUTs (2026-11-13: fedora 109 planted while preflight verified 1016); a clone
+    # interrupted before the placement PUT keeps the base image's e1000 on the mgmt bridge, so
+    # bootstrap re-addresses a NIC on the wrong L2 and nakon cannot reach port 22 (2026-11-17,
+    # vmid 3450, twice); a build with no `tz-base` never finished its plant. Re-clone all three.
     for t in list(planted):
         try:
             cfg = proxmox_api("GET", f"/nodes/{node}/qemu/{t['vmid']}/config")["data"]
@@ -317,11 +320,24 @@ def build_golden_set(node, teams, boxes, ctx, comp_dir, engine_vmid, box_passwor
             continue                                        # the clone path's own guards decide
         want = template_vmid(templates, t["box"]["template"])
         got = golden_source_of(cfg)
+        why = None
         if got != want:
-            print(f"  Golden {t['vm_name']} (vmid {t['vmid']}): cloned from "
-                  f"{got if got is not None else 'unrecorded'}, "
-                  f"'{t['box']['template']}' resolves to {want} — re-cloning")
-            destroy_vm_if_exists(node, t["vmid"], expect_tags=own_set)
+            why = (f"cloned from {got if got is not None else 'unrecorded'}, "
+                   f"'{t['box']['template']}' resolves to {want}")
+        elif (f"bridge={t['bridge']}" not in str(cfg.get("net0") or "")
+              or not str(cfg.get("ipconfig0") or "").startswith(f"ip={t['ip']}/")):
+            why = (f"never placed on {t['bridge']} as {t['ip']} "
+                   f"(net0={cfg.get('net0')}, ipconfig0={cfg.get('ipconfig0')})")
+        elif SNAP_BASE not in list_snapshots(node, t["vmid"]):
+            why = f"no '{SNAP_BASE}' pre-plant point — a build left half-finished"
+        if why:
+            print(f"  Golden {t['vm_name']} (vmid {t['vmid']}): {why} — re-cloning")
+            # A clone that died before the tag PUT wears the base image's tags, which the strict
+            # guard refuses forever; there the clone marker in its description is the only proof.
+            marker = clone_marker(competition_name(comp_dir))
+            destroy_vm_if_exists(node, t["vmid"],
+                                 expect_tags=None
+                                 if marker in str(cfg.get("description") or "") else own_set)
             planted.remove(t)
             missing.append(t)
 

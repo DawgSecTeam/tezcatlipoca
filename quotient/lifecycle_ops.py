@@ -62,9 +62,10 @@ def engine_status(session, base_url):
     return r.json()
 
 
-# a --hold-start deploy leaves tlaloc enabled-but-stopped (a held range must sleep —
-# run-14ac7f14's held deploy had red stripping freshly-provisioned forwarders hours
-# before T0); releasing the hold is the moment red begins. Returns 1 when red did NOT
+# a --hold-start deploy leaves tlaloc installed and DISABLED (a held range must sleep —
+# run-14ac7f14's held deploy had red stripping freshly-provisioned forwarders hours before
+# T0, and an enabled unit would also arm itself on the next reboot, which a prepared reset is
+# one of); releasing the hold is the moment red begins. Returns 1 when red did NOT
 # come up, so `start` tells the operator to intervene rather than open red-less.
 def release_held_red(state):
     if not state.get("red_loop_held"):
@@ -104,6 +105,20 @@ def cmd_start(args, comp_dir):
     session = login(base_url, password)
     eng = engine_status(session, base_url)
     rc = 0
+
+    # Implants deploy with the event: the deploy left the range prepared but not armed, so
+    # nothing is compromised and no beacon exists until here. Before the clock, so T0 opens
+    # on a range red already owns.
+    if state.get("red_staged") and not state.get("red_deployed"):
+        from estate.config import ssh_key_path
+        from red import tlaloc_ops
+        print("  START: deploying the staged implants onto the range...")
+        summary = tlaloc_ops.deploy_implants(comp_dir, state,
+                                             ssh_key=str(ssh_key_path()))
+        if summary:
+            state["red_deployed"] = True
+            state.pop("red_staged", None)
+            print(f"  START: implants deployed on {summary['red_ip']} — red is in the range")
 
     if eng.get("competition_started"):
         print("  Competition clock already started.")

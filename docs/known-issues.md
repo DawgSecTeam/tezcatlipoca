@@ -70,15 +70,3 @@ mgmt address as EPHEMERAL at create and records the realized IP in the state doc
 range never outlives its own instances, and a resume reuses the same engine. Revisit a static
 pin only if the API starts accepting its own reservations.
 
-### A Linux box's mtls/wg implants can be planted and never check in
-
-`run-4c4a9507-run2` (sliver-practice-4box, 1 team, all five transports): the WG build-pinning fix
-made dc01/win01/web01's WG beacons call back, but `db01-165:mtls` and `db01-165:wg` were planted
-on 192.168.165.6 and **never** checked in, while that box's dns/http/https did (C2 implant matrix
-in the run's `RED-TEAM.md`; the box is torn down, so the next live observation must capture the
-seed's `implant_channel` detail for db01 plus the implant's start log before teardown). Theory to
-test first: on Linux the two failing transports are the ones whose persistence unit and cron entry
-are the same shape as the working ones, so compare the seeded unit's ExecStart and the sliver
-build's own transport against a box where both work — a certificate (mtls) and a WG key-exchange
-(wg) failure share the handshake path, and the seed reports `ok` from the start, not from a
-callback. Do not treat a killed implant as this bug: only a never-callback is.

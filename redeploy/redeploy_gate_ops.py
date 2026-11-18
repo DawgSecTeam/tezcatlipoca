@@ -28,3 +28,11 @@ def load_deployed_range(comp_dir):
             f"v{PIPELINE_VERSION}, with run ids) — redeploy can't safely drive that range. "
             f"Tear it down by hand and deploy fresh.")
     return teams, boxes, state, state_path
+
+
+def range_identity(state, node=""):
+# The banner describes THIS range: the ambient profile is not the range's identity, and it
+#     printed a different engine address than the one the run then operated on.
+    return (f"endpoint={state.get('endpoint') or '?'} node={state.get('node') or node or '?'} "
+            f"datastore={state.get('datastore') or '?'} "
+            f"engine-mgmt={state.get('engine_mgmt_ip') or '?'}")

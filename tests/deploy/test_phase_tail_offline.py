@@ -67,22 +67,25 @@ class Tail(unittest.TestCase):
                 patch.object(final, "reensure_mysql_credlist_users") as mocks["mysql"], \
                 patch.object(final.tlaloc_ops, "plant_assume_breach",
                              return_value={"red_ip": "10.0.0.240"}) as mocks["red"], \
-                patch.object(final.tlaloc_ops, "start_director") as mocks["red_start"], \
-                patch.object(final, "run_concurrent") as mocks["snap"], \
                 patch.object(final, "record_stage") as mocks["cov"]:
             final.phase7_domains_and_final(ctx)
         return ctx, mocks
 
 
 
-    def test_phase7_plants_account_file_modes_after_the_seed(self):
-        # the last pass must be the phase's LAST nakon call: fix_services (phase 6) and the
-        # assume-breach seed both useradd, resetting account files to default modes over any earlier plant
+    def test_phase7_stages_red_without_deploying_it(self):
+        # The restore points are taken on a prepared range: phase 7 builds the C2 and its
+        # payload matrix on red01, and never puts an implant on a box (phase 8 arms it).
+        ctx, m = self._p7([])
+        m["red"].assert_called_once()
+        self.assertFalse(m["red"].call_args.kwargs["deploy_implants_now"])
+
+    def test_phase7_replays_the_late_pass_last(self):
+        # the last pass must be the phase's LAST nakon call: fix_services (phase 6) and any
+        # account writer before it reset account files to default modes over an earlier plant
         ctx, m = self._p7([{"name": "web01-team101"}], late=[{"name": "web01-team101"}])
         self.assertEqual(m["nakon"].call_count, 2)
         self.assertEqual(m["cov"].call_count, 2)
-        # The loop starts only after the last stage, the wipe and the snapshot.
-        m["red_start"].assert_called_once()
         # run_stage(ssh_key, user, ip, bundle, path, ...): args[4] is the stage file.
         self.assertEqual([c.args[4] for c in m["nakon"].call_args_list],
                          [ctx.final_config_path, ctx.late_config_path])
@@ -113,7 +116,6 @@ class Tail(unittest.TestCase):
         ctx = _ctx(self.comp)
         with patch.object(final, "deploy_domain_configs"), \
                 patch.object(final, "reensure_mysql_credlist_users"), \
-                patch.object(final, "run_concurrent"), \
                 patch.object(final.tlaloc_ops, "plant_assume_breach",
                              side_effect=RuntimeError("no red01")):
             with self.assertRaises(RuntimeError) as cm:

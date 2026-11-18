@@ -27,20 +27,29 @@ def _ctx(tmp, hold):
 
 
 class HoldKeepsRedSleeping(unittest.TestCase):
-    def test_held_deploy_defers_the_loop_and_marks_state(self):
+    def test_held_deploy_defers_arming_and_the_loop(self):
+        # A held range is prepared, not armed: no implant is on a box, so nothing is
+        # compromised and competition-ops.py start is what deploys them.
         with tempfile.TemporaryDirectory() as tmp:
             ctx = _ctx(tmp, hold=True)
-            with mock.patch("red.tlaloc_ops.start_director") as sd:
+            with mock.patch("red.tlaloc_ops.deploy_implants") as di, \
+                 mock.patch("red.tlaloc_ops.start_director") as sd:
                 final.begin_red_after_delivery(ctx, {"red_ip": "10.0.0.242"})
+            di.assert_not_called()
             sd.assert_not_called()
             self.assertTrue(ctx.state["red_loop_held"])
 
-    def test_unheld_deploy_starts_the_loop_as_before(self):
+    def test_unheld_deploy_arms_then_starts_the_loop(self):
         with tempfile.TemporaryDirectory() as tmp:
             ctx = _ctx(tmp, hold=False)
-            with mock.patch("red.tlaloc_ops.start_director") as sd:
+            order = []
+            with mock.patch("red.tlaloc_ops.deploy_implants",
+                            side_effect=lambda *a, **k: order.append("implants")), \
+                 mock.patch("red.tlaloc_ops.start_director",
+                            side_effect=lambda *a: order.append("loop")):
                 final.begin_red_after_delivery(ctx, {"red_ip": "10.0.0.242"})
-            sd.assert_called_once_with("/k", "10.0.0.242")
+            self.assertEqual(order, ["implants", "loop"])
+            self.assertTrue(ctx.state["red_deployed"])
             self.assertNotIn("red_loop_held", ctx.state)
 
     def test_no_red_summary_changes_nothing(self):

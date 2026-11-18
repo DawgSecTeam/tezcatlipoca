@@ -260,6 +260,31 @@ def comp_prep_remote_command(transports="all"):
             f"--comp {INTEL_DIR} c2-prep --transports {transports}")
 
 
+def listeners_command():
+    """The same listener bring-up c2-prep does, with no build behind it.
+
+    `comp_prep_remote_command` is not reusable here: it wipes /root/.sliver/slivers, and an
+    arm that wiped the matrix mid-event would destroy the very payloads it is about to plant.
+    """
+    return (f"cd {INSTALL_DIR} && sudo -n python3 -m tlaloc --config {CONFIG_PATH} "
+            f"--comp {INTEL_DIR} c2-prep --listeners-only")
+
+
+def bring_up_listeners(ssh_key, red_ip, *, runner=None):
+    """Every transport listener must be live on red01's main daemon before a callback is due.
+
+    A prepared reset reboots red01, and a Sliver server restores its persisted listeners when
+    the daemon starts — so a reused matrix says nothing about whether anything is listening.
+    """
+    proc = _ssh_run(ssh_key, red_ip, listeners_command(), runner=runner, timeout=600)
+    if getattr(proc, "returncode", 1) != 0:
+        raise RuntimeError(
+            f"the C2 listeners could not be brought up on red01 ({_tail(proc, 900)}) — no "
+            f"implant can check in. A range prepared by older code fails exactly here: "
+            f"prepare it again with a deploy.")
+    return proc
+
+
 def payloads_ready(ssh_key, red_ip, *, runner=None):
     """A resume/scrim reuses the matrix already built on red01; rebuilding 30 implants is hours."""
     remote = (f"cd {INTEL_DIR}/red/payloads 2>/dev/null && sudo -n python3 -c "
@@ -456,10 +481,15 @@ def push_llm_env(ssh_key, red_ip, api_key, *, runner=None, timeout=120):
     return {"ok": True}
 
 
-def install_unit(ssh_key, red_ip, *, runner=None, timeout=180):
+def install_unit(ssh_key, red_ip, *, runner=None, timeout=180, enable=True):
+    # An enabled-but-stopped unit is not a hold: the next boot starts red on its own. A
+    # prepared range carries a snapshot of this disk, so the held state has to be disabled —
+    # and whoever opens the event enables it as it starts (round 2 of a kept range: the reset
+    # reboot ran the day-0 seed before the arm did).
+    state = "enable" if enable else "disable"
     remote = (f"sudo -n tee /etc/systemd/system/{UNIT} < {INSTALL_DIR}/systemd/"
               f"{UNIT_SRC.name} >/dev/null && sudo -n systemctl daemon-reload && "
-              f"sudo -n systemctl enable {UNIT}")
+              f"sudo -n systemctl {state} {UNIT}")
     proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout)
     if getattr(proc, "returncode", 1) != 0:
         raise RuntimeError(f"installing {UNIT} failed: {_tail(proc)}")
@@ -473,9 +503,28 @@ def seed_via_red01(ssh_key, red_ip, *, runner=None, timeout=5400):
     return {"ok": True}
 
 
+def hold_unit(ssh_key, red_ip, *, runner=None, timeout=180):
+    """Stop red01's loop AND take it out of the boot sequence.
+
+    A reset's contract is an unarmed range, and it cannot entrust that to whatever enablement
+    the restore point happens to carry: an enabled unit answers the reset's own reboot by arming
+    the range with no event to belong to.
+    """
+    remote = f"sudo -n systemctl stop {UNIT}; sudo -n systemctl disable {UNIT}"
+    proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout)
+    if getattr(proc, "returncode", 1) != 0:
+        raise RuntimeError(f"holding {UNIT} on {red_ip} failed: {_tail(proc)}")
+    return {"ok": True}
+
+
 def start_unit(ssh_key, red_ip, *, runner=None, timeout=60):
-    """Start it after the seed: enable-only leaves the loop stopped until someone logs in."""
-    remote = f"sudo -n systemctl start {UNIT} && sudo -n systemctl is-active {UNIT}"
+    """Open the event: start the loop and let it come back on its own if red01 reboots.
+
+    Enabling here is what pairs with a disabled install — the hold is a disabled unit, so the
+    release has to make it live for future boots too, not just for this one.
+    """
+    remote = (f"sudo -n systemctl enable --now {UNIT} && "
+              f"sudo -n systemctl is-active {UNIT}")
     proc = _ssh_run(ssh_key, red_ip, remote, runner=runner, timeout=timeout)
     if getattr(proc, "returncode", 1) != 0:
         raise RuntimeError(f"starting {UNIT} on {red_ip} failed: {_tail(proc)}")
@@ -537,11 +586,17 @@ def start_director(ssh_key, red_ip, *, runner=None):
 
 
 def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
-                        mythic_runner=None, llm=None, llm_key=None, start_loop=True):
+                        mythic_runner=None, llm=None, llm_key=None, start_loop=True,
+                        deploy_implants_now=True):
     """[7/8] Deploy red01, install the C2, seed, prove the config — every step raises.
 
-    `start_loop=False` leaves the unit enabled but stopped, for a caller that has more work
-    to do on the boxes before T0 (the scrim harness always stops before the fire test).
+    `start_loop=False` leaves the unit installed and disabled, for a caller that has more work
+    to do on the boxes before T0 (the scrim harness always stops before the fire test). The
+    hold is a disabled unit rather than a stopped one: an enabled unit arms itself on boot.
+
+    `deploy_implants_now=False` stops once the C2 and its payload matrix exist on red01 —
+    the range is built and armed but no implant has touched a box. The prepared restore
+    points are taken there, and `deploy_implants` arms the range at event start.
     """
     from infra.ownership import Ownership
     from red import gaia_ops, red01_ops, sliver_ops
@@ -664,19 +719,12 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
 
     # Without a C2 the DNAT is skipped but not the FORWARD trio: red01 must still reach teams.
     print("  red rules   : installing the red-segment rules on the engine...")
-    # c3rberus runs its OWN sliver listeners on offset ports beside tlaloc's — the timer
-    # rewrites the whole rule set from this transport map, so they must be entries here
-    # or the platform's implants can never beacon back from the team LANs. Deferred
-    # import: c3rberus_ops imports this module at load time.
-    from red import c3rberus_ops
-    if c3rberus_ops.selected(comp_dir):
-        callback_ports = c3rberus_ops.extend_transport_map(callback_ports)
-    red01_ops.install_engine_rules(
-        getattr(ctx, "scoring_ip", "") or "", ssh_key,
-        engine_user=getattr(ctx, "scoring_user", "sysadmin"),
+    install_red_rules(
+        comp_dir, getattr(ctx, "scoring_ip", "") or "", ssh_key,
         team_identifiers=team_identifiers,
         callback_port=callback_port, callback_host=callback_host or "",
         callback_ports=callback_ports,
+        engine_user=getattr(ctx, "scoring_user", "sysadmin"),
         # on gcp the engine's team-NIC is .2 (each subnet's .1 is the VCP gateway)
         platform=getattr(ctx, "platform", "") or "proxmox",
         runner=runner)
@@ -694,6 +742,10 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
         if payloads_ready(ssh_key, red_ip, runner=runner):
             payload_manifest = pull_payload_manifest(ssh_key, red_ip, comp_dir,
                                                      runner=runner)
+            # A frozen matrix says nothing about the daemon that has to answer it: red01 may
+            # have rebooted since the freeze (a prepared reset does), and its listeners come
+            # back only if something asks for them.
+            bring_up_listeners(ssh_key, red_ip, runner=runner)
             print(f"  sliver      : reusing {payload_manifest['payloads']} frozen "
                   f"payload(s) already on red01")
         else:
@@ -721,50 +773,164 @@ def plant_assume_breach(ctx, *, runner=None, ssh_key=None, mythic=None,
     llm_key = llm_key or (os.environ.get("TEZ_LITELLM_API_KEY") or "").strip()
     if llm_key:
         push_llm_env(ssh_key, red_ip, llm_key, runner=runner)
-    install_unit(ssh_key, red_ip, runner=runner)
+    install_unit(ssh_key, red_ip, runner=runner, enable=(deploy_implants_now and start_loop))
     manifest = None
-    if block.get("assume_breach") != "off":
-        seed_via_red01(ssh_key, red_ip, runner=runner)
-        manifest = pull_manifest(ssh_key, red_ip, comp_dir, runner=runner)
-        seeded = _seeded_boxes(manifest["path"])
-        if not seeded:
-            raise RuntimeError(
-                f"the day-0 seed left no planted box: the manifest at {manifest['path']} "
-                f"lists none (tlaloc's seed exits 0 even when every box fails)")
-        print(f"  tlaloc      : seed manifest proves {seeded} box(es) planted")
-        if (use_mythic or use_sliver) and int(block.get("depth", 3)) >= 2:
-            try:
-                seeded_boxes = (json.loads(Path(manifest["path"]).read_text())
-                                .get("boxes") or {})
-            except (OSError, ValueError):
-                seeded_boxes = {}
-            no_channel = [ip for ip, rec in seeded_boxes.items()
-                          if "channel" not in (rec.get("stages") or [])]
-            if no_channel:
-                raise RuntimeError(
-                    f"the day-0 seed did not plant a checked-in C2 channel on "
-                    f"{', '.join(no_channel)} — the payloads ran but their "
-                    f"callbacks never landed (full spread proves every transport)")
+    if not deploy_implants_now:
+        print(f"  tlaloc      : staged on red01 ({red_ip}) — no implant deployed, so the "
+              f"range is prepared but not compromised")
+    elif block.get("assume_breach") != "off":
+        manifest = _seed_and_prove(comp_dir, ssh_key, red_ip, block,
+                                   (use_mythic or use_sliver), runner)
+        # Same reason as the arm's: the seed's chpasswd rewrites /etc/shadow, so the
+        # packet's account-file modes must be re-pinned after it.
+        _replay_account_modes(comp_dir,
+                              {**ctx.state,
+                               "engine_mgmt_ip": (getattr(ctx, "engine_mgmt_ip", "")
+                                                  or getattr(ctx, "scoring_ip", "")
+                                                  or ctx.state.get("engine_mgmt_ip", ""))},
+                              ssh_key, runner)
     else:
         print("  tlaloc      : assume_breach off — no day-0 seed or manifest")
-    if start_loop:
+    if start_loop and deploy_implants_now:
         start_unit(ssh_key, red_ip, runner=runner)
         print(f"  tlaloc      : loop started on red01 ({UNIT})")
     else:
-        print(f"  tlaloc      : unit installed on red01 ({UNIT}); NOT started")
+        print(f"  tlaloc      : unit installed on red01 ({UNIT}); NOT started, and NOT "
+              f"enabled — a held range stays quiet through a reboot")
     summary = {"engine": "tlaloc", "vmid": red_vmid, "red_ip": red_ip,
                "node": identity["node"], "config": str(cfg_path),
                "manifest": manifest.get("path") if manifest else None,
                "c2": c2_summary, "at": _now()}
     ctx.state["red"] = summary
+    if deploy_implants_now:
+        ctx.state["red_deployed"] = True
+        ctx.state.pop("red_staged", None)
+    else:
+        # A re-prepare is on a rebuilt disk, so nothing of the last arming survives it.
+        ctx.state["red_staged"] = True
+        ctx.state.pop("red_deployed", None)
     ctx.save_state()
     if manifest:
         print(f"  tlaloc      : seeded on red01 {red_ip} — the range is owned before T0 "
               f"(unit {UNIT}, state {STATE_DIR})")
-    else:
+    elif deploy_implants_now:
         print(f"  tlaloc      : red01 ready on {red_ip} (assume_breach off — no seed; "
               f"unit {UNIT} started)")
+    else:
+        print(f"  tlaloc      : red01 prepared on {red_ip} — competition-ops.py start "
+              f"deploys the implants")
     return summary
+
+def install_red_rules(comp_dir, engine_ip, ssh_key, *, team_identifiers,
+                      callback_port=None, callback_host="", callback_ports=None,
+                      engine_user="sysadmin", platform="proxmox", runner=None):
+    """Idempotent: the engine's DNAT/FORWARD rules are runtime state, so a reboot drops them.
+
+    A prepared reset reboots the engine, and the arm then needs those rules to exist before
+    the seed's callbacks can land — re-asserting here is what makes the arm independent of
+    whatever timer restores them.
+
+    c3rberus runs its own sliver listeners on offset ports beside tlaloc's, and the rule set is
+    rewritten whole from this map — so the extension belongs here, where both the deploy and the
+    arm pass through.
+    """
+    from red import c3rberus_ops, red01_ops
+    if c3rberus_ops.selected(comp_dir):
+        callback_ports = c3rberus_ops.extend_transport_map(callback_ports)
+    red01_ops.install_engine_rules(
+        engine_ip, ssh_key, engine_user=engine_user, team_identifiers=team_identifiers,
+        callback_port=callback_port, callback_host=callback_host or "",
+        callback_ports=callback_ports, platform=platform, runner=runner)
+
+
+def deploy_implants(comp_dir, state, *, ssh_key, runner=None):
+    """Event-start half of the plant: seed the frozen matrix, prove the channels, wipe the traces.
+
+    Split from `plant_assume_breach` so the prepared restore points can hold a range that is
+    built and armed but not compromised; every round re-arms through this after its reset.
+    """
+    from red import gaia_ops, red01_ops, sliver_ops
+    comp_dir = Path(comp_dir)
+    block = red_block(comp_dir)
+    if block.get("assume_breach") == "off":
+        print("  tlaloc      : assume_breach off — nothing to deploy")
+        return None
+    red_ip = ((state.get("red") or {}).get("red_ip")
+              or (red01_ops.recorded_identity(comp_dir) or {}).get("ip"))
+    if not red_ip:
+        raise RuntimeError(f"no red01 ip recorded for {comp_dir} — it was never staged")
+    engine = str(block.get("c2_engine") or "sliver").lower()
+    use_mythic = engine == "mythic" and gaia_ops.mythic_enabled(comp_dir)
+    use_sliver = (engine == "sliver" and not use_mythic
+                  and sliver_ops.sliver_enabled(comp_dir))
+    # The engine rebooted with the reset; its rules are runtime state, so put them back
+    # before any callback is expected (round 2 of a kept range failed exactly here).
+    ids = [int(t["identifier"]) for t in (state.get("teams") or {}).values()
+           if str(t.get("identifier", "")).isdigit()]
+    if use_sliver:
+        plan = sliver_ops.c2_plan(comp_dir, red_ip=red_ip,
+                                  comp_id=competition_name(comp_dir))
+        install_red_rules(comp_dir, state.get("engine_mgmt_ip", ""), ssh_key,
+                          team_identifiers=ids, callback_ports=plan["ports"], runner=runner)
+        # The arm plants what the rollback rolled back with the disk, so it must also check
+        # the daemon that answers it: a rebooted red01 restores its listeners on whichever
+        # of its Sliver servers gets there first, and a matrix is not a callback path.
+        if not payloads_ready(ssh_key, red_ip, runner=runner):
+            raise RuntimeError(
+                f"red01 ({red_ip}) carries no frozen payload matrix — this range's prepared "
+                f"snapshots predate the C2 freeze; prepare it again with a deploy")
+        bring_up_listeners(ssh_key, red_ip, runner=runner)
+    elif use_mythic:
+        plan = gaia_ops.c2_plan(comp_dir, red_ip=red_ip,
+                                comp_id=competition_name(comp_dir))
+        install_red_rules(comp_dir, state.get("engine_mgmt_ip", ""), ssh_key,
+                          team_identifiers=ids, callback_port=plan["callback_port"],
+                          callback_host=plan["callback_host"], runner=runner)
+    manifest = _seed_and_prove(comp_dir, ssh_key, red_ip, block,
+                               (use_mythic or use_sliver), runner)
+    # The seed rotates the box credentials it escalates through (chpasswd rewrites
+    # /etc/shadow), which resets the account-file modes the packet promises. The deploy
+    # replays that pass after its own writers; the arm is one more writer, so it replays
+    # again — otherwise a reset range verifies with a misconfig missing.
+    _replay_account_modes(comp_dir, state, ssh_key, runner)
+    _wipe_arming_traces(comp_dir, state, ssh_key)
+    return {"manifest": manifest.get("path") if manifest else None, "red_ip": red_ip}
+
+
+def _replay_account_modes(comp_dir, state, ssh_key, runner=None):
+    from common.utils import compfile_flag
+    from guests import converge_ops
+    path = Path(comp_dir) / ".nakon-late.json"
+    if not path.exists():
+        return
+    machines = converge_ops.stage_machines(path)
+    if not machines:
+        return
+    from estate import config as estate_config
+    print(f"  account modes: replaying the late pass on {len(machines)} machine(s) "
+          f"after the seed")
+    converge_ops.run_stage(
+        path, machines, ssh_key=Path(ssh_key),
+        scoring_user=estate_config.active().engine.username,
+        scoring_ip=state.get("engine_mgmt_ip", ""),
+        jobs=max(1, compfile_flag(Path(comp_dir) / "Compfile", "nakon_jobs", 4)),
+        strict=False, label="late-arm", comp_dir=Path(comp_dir))
+
+
+def _wipe_arming_traces(comp_dir, state, ssh_key):
+    # The seed is event-start work now, so its logs need the wipe the deploy's used to get:
+    # without it blue reads the implant deployment straight out of auth.log.
+    from common.utils import load_users_config
+    from guests import clean_trails
+    box_username, _credlist = load_users_config(comp_dir)
+    creds = clean_trails.creds_for(ssh_key, state.get("engine_mgmt_ip", ""),
+                                   box_username, state.get("box_password", ""))
+    try:
+        clean_trails.clean_trails(comp_dir, creds)
+    except Exception as e:                                   # noqa: BLE001 - never fatal
+        print(f"  WARNING: trail wipe failed ({type(e).__name__}: {e}) — box logs still "
+              f"hold the implant deployment")
+
 
 def destroy_tlaloc_red(comp_dir, *, ownership, engine_ip="", engine_user="sysadmin",
                        env=None, runner=None, ssh_key=None, red_ip=None, vmid=None):
@@ -823,6 +989,32 @@ def pull_manifest(ssh_key, red_ip, comp_dir, *, runner=None):
         return {"path": str(target)}
     raise RuntimeError(f"the agent wrote no seed manifest at {INTEL_DIR}/red/manifest.json "
                        f"({_tail(proc)})")
+
+
+def _seed_and_prove(comp_dir, ssh_key, red_ip, block, c2_on, runner):
+    seed_via_red01(ssh_key, red_ip, runner=runner)
+    manifest = pull_manifest(ssh_key, red_ip, comp_dir, runner=runner)
+    seeded = _seeded_boxes(manifest["path"])
+    if not seeded:
+        raise RuntimeError(
+            f"the day-0 seed left no planted box: the manifest at {manifest['path']} "
+            f"lists none (tlaloc's seed exits 0 even when every box fails)")
+    print(f"  tlaloc      : seed manifest proves {seeded} box(es) planted")
+    if c2_on and int(block.get("depth", 3)) >= 2:
+        try:
+            seeded_boxes = (json.loads(Path(manifest["path"]).read_text())
+                            .get("boxes") or {})
+        except (OSError, ValueError):
+            seeded_boxes = {}
+        no_channel = [ip for ip, rec in seeded_boxes.items()
+                      if "channel" not in (rec.get("stages") or [])]
+        if no_channel:
+            raise RuntimeError(
+                f"the day-0 seed did not plant a checked-in C2 channel on "
+                f"{', '.join(no_channel)} — the payloads ran but their "
+                f"callbacks never landed — one channel per box, every transport when "
+                f"red.c2_implant_spread is full")
+    return manifest
 
 
 def pull_evidence(ssh_key, red_ip, dest, *, runner=None, timeout=300):
