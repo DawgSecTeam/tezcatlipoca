@@ -179,7 +179,7 @@ def _agent_exec(node, vmid, script, windows=False):
 
 def _boxes(s):
     out = {}
-    for name, vmid, node, windows in s["boxes"]:
+    for name, vmid, node, _ip, windows in s["boxes"]:
         raw = _agent_exec(node, vmid, _BOX_WINDOWS if windows else _BOX_LINUX, windows)
         out[name] = raw if raw.startswith("unreachable:") else parse_ports(raw)
     return out

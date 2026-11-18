@@ -43,7 +43,8 @@ CLEAN_BOOT = SPLIT_BOOT.replace("pid=775", "pid=777") + \
 
 def _spec(comp):
     return {"engine": (3300, "pve"),
-            "boxes": [("team1-web01", 1721, "pve", False), ("team1-win02", 1720, "pve", True)],
+            "boxes": [("team1-web01", 1721, "pve", "192.168.152.4", False),
+                      ("team1-win02", 1720, "pve", "192.168.152.5", True)],
             "vms": [("team1-web01", 1721, "pve"), ("team1-win02", 1720, "pve"),
                     ("engine", 3300, "pve"), ("red01", 3460, "pve")],
             "red": {"ip": "10.0.0.245", "ports": PORTS, "ssh_key": "/k"}}
@@ -254,6 +255,14 @@ class Spec(unittest.TestCase):
                          ["team1-web01", "team2-win02", "engine", "red01"])
         self.assertEqual(s["red"]["ip"], "10.0.0.245")
         self.assertEqual(s["red"]["ports"]["daemon_port"], "31337")
+        # The probes consume this spec, so the fake above is not the only shape they must take:
+        # a capture over the REAL spec is what pins the box tuple's arity (a deploy died on it).
+        with mock.patch.object(fp, "_agent_exec", lambda *a, **k: "22\n80\n"), \
+                mock.patch.object(fp, "_vms", lambda spec: {}), \
+                mock.patch.object(fp, "_red01", lambda spec: {"units": {}}):
+            cap = fp.capture(s)
+        self.assertEqual(cap["boxes"], {"team1-web01": [22, 80],
+                                        "team2-win02": [22, 80]})
 
 
 if __name__ == "__main__":
