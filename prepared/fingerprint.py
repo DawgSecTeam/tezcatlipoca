@@ -149,8 +149,18 @@ def capture(s):
 
 
 def compare(reference, now):
-    reference = {k: v for k, v in reference.items() if k != "probe"}
-    return [d[1:] if d.startswith(".") else d for d in _walk(reference, now, "")]
+    return [d[1:] if d.startswith(".") else d for d in _walk(_measured(reference), now, "")]
+
+
+def _measured(fp):
+    """A reference read by an older probe still carries fields this one does not measure (it
+    filed `vmgenid` before that was understood as per-start); dropping them here compares both
+    sides by the same rule instead of reporting the reference's own history as a delta."""
+    out = {k: v for k, v in (fp or {}).items() if k != "probe"}
+    for vm in (out.get("vms") or {}).values():
+        for key in _VOLATILE_VM_KEYS:
+            (vm.get("config") or {}).pop(key, None)
+    return out
 
 
 # --- probes -----------------------------------------------------------------------------

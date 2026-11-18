@@ -143,6 +143,17 @@ class CaptureAndCompare(unittest.TestCase):
             state = fp.capture(_spec("/c"))
         self.assertTrue(state["boxes"]["team1-web01"].startswith("unreachable:"))
 
+    def test_a_reference_filed_with_vmgenid_still_compares_clean(self):
+        ref = {"probe": fp.PROBE,
+               "vms": {"engine": {"config": {"cores": 2, "vmid": 3300,
+                                             "vmgenid": "old-uuid"},
+                                  "snapshots": ["tz-ready"]}},
+               "boxes": {}, "engine": {"rules": []}, "red01": {}}
+        now = {"vms": {"engine": {"config": {"cores": 2, "vmid": 3300},
+                                  "snapshots": ["tz-ready"]}},
+               "boxes": {}, "engine": {"rules": []}, "red01": {}}
+        self.assertEqual(fp.compare(ref, now), [])
+
     def test_a_vm_definition_keeps_only_what_the_range_is(self):
         # `vmgenid` moves on every start by design, so a reset's reboot changes it — reporting
         # it as a range that moved is how the first reset of a clean range refused.
