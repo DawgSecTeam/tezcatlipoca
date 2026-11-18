@@ -187,17 +187,17 @@ def mode_prepared(targets, rctx):
             # below honestly say "restored".
             tlaloc_ops.bring_up_listeners(ctx["ssh_key_path"], red["red_ip"])
             print("  red01       : C2 listeners reconciled onto the main server")
-        # The engine's red DNAT rules are NOT reinstalled here, deliberately: the restore point
-        # has no `range-red-firewall` units and no chains (measured), because the arm is what
-        # installs them at event start. Re-asserting them from the reset would be the reset
-        # arming part of the range, and the comparison below would then pass for the wrong reason.
+        # The engine's red DNAT rules are NOT reinstalled here: the restore point carries the
+        # `range-red-firewall` script and its enabled timer, and the timer re-asserts the kernel
+        # chains within 35 s of this boot. Installing them from the reset as well would hide a
+        # broken timer behind the reset's own work — the comparison below is what has to hold.
     # The claim itself, measured rather than asserted: what the range was at the snapshot,
     # against what this rollback produced.
     from prepared import fingerprint
     diffs = fingerprint.check(comp_dir)
     for line in diffs:
         print(f"    {line}")
-    if [d for d in diffs if not d.startswith("no reference")]:
+    if [d for d in diffs if not d.startswith("note:")]:
         raise SystemExit("  ERROR: the rollback did not restore the prepared point (fields "
                          "above). This range is not a clean start — investigate before arming.")
     print(f"\n  Prepared: {len(vms)} VM(s) reset to the built-but-unarmed state. Re-arm with:")

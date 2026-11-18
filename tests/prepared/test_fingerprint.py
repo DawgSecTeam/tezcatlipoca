@@ -142,15 +142,84 @@ class CaptureAndCompare(unittest.TestCase):
             state = fp.capture(_spec("/c"))
         self.assertTrue(state["boxes"]["team1-web01"].startswith("unreachable:"))
 
+    def test_the_engine_probe_asks_each_chain_in_its_own_table(self):
+        # `iptables -S RANGE-RED-DNAT` without `-t nat` answers "no chain": the nat rules read
+        # as absent while installed, which is how a reset would refuse a clean range.
+        self.assertIn("iptables -t nat -S RANGE-RED-DNAT", fp._ENGINE_RULES)
+        self.assertIn("iptables -t nat -S RANGE-RED-SNAT", fp._ENGINE_RULES)
+        self.assertIn("iptables -t filter -S RANGE-RED-FWD", fp._ENGINE_RULES)
+        self.assertNotIn("iptables -S RANGE-RED-DNAT", fp._ENGINE_RULES)
+
+    def test_check_waits_for_the_engines_timer_to_reassert_the_rules(self):
+        # Kernel chains are rebuilt by the on-disk timer 35 s after the reset's boot: a read
+        # taken before it fires is not a delta, it is early.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        rules = {"RANGE-RED-DNAT": True}
+        seen = []
+
+        def _engine(s):
+            seen.append(1)
+            return {"rules": ["-N RANGE-RED-DNAT"] if len(seen) > 1 else []}
+
+        ref = {"engine": {"rules": ["-N RANGE-RED-DNAT"]}, "vms": {}, "boxes": {},
+               "red01": {}, "probe": fp.PROBE}
+        (Path(tmp.name) / fp.REFERENCE).write_text(json.dumps(ref))
+        with mock.patch.object(fp, "spec", lambda comp_dir: _spec(comp_dir)), \
+                mock.patch.object(fp, "_engine", _engine), \
+                mock.patch.object(fp, "_boxes", lambda s: {}), \
+                mock.patch.object(fp, "_vms", lambda s: {}), \
+                mock.patch.object(fp, "_red01", lambda s: {}), \
+                mock.patch.object(fp.time, "sleep", lambda _s: None):
+            self.assertEqual(fp.check(tmp.name), [])
+        self.assertGreater(len(seen), 1, "the engine must be re-read, not judged on one look")
+
+    def test_a_reference_from_an_older_probe_is_refiled_not_compared(self):
+        # Probe 1 asked for the DNAT chain in the filter table, so its reference has no nat
+        # rules. That is the instrument growing, not the range moving.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        ref = {"vms": {}, "boxes": {}, "engine": {"rules": []}, "red01": {}, "probe": 1}
+        (Path(tmp.name) / fp.REFERENCE).write_text(json.dumps(ref))
+        with mock.patch.object(fp, "spec", lambda comp_dir: _spec(comp_dir)), \
+                mock.patch.object(fp, "_engine", lambda s: {"rules": ["-N RANGE-RED-DNAT"]}), \
+                mock.patch.object(fp, "_boxes", lambda s: {}), \
+                mock.patch.object(fp, "_vms", lambda s: {}), \
+                mock.patch.object(fp, "_red01", lambda s: {}):
+            deltas = fp.check(tmp.name)
+            self.assertEqual(len(deltas), 1, deltas)
+            self.assertTrue(deltas[0].startswith("note: the engine-rules probe grew"), deltas)
+            self.assertEqual(json.loads((Path(tmp.name) / fp.REFERENCE).read_text())
+                             ["engine"]["rules"], ["-N RANGE-RED-DNAT"])
+            self.assertEqual(fp.check(tmp.name), [])
+
+    def test_an_old_probe_still_measures_every_other_class(self):
+        # Only the rules class is re-recorded: a box that came back with another port set is
+        # still a delta, however old the reference is.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        ref = {"vms": {}, "boxes": {"team1-web01": [22, 80]}, "engine": {"rules": []},
+               "red01": {}, "probe": 1}
+        (Path(tmp.name) / fp.REFERENCE).write_text(json.dumps(ref))
+        with mock.patch.object(fp, "spec", lambda comp_dir: _spec(comp_dir)), \
+                mock.patch.object(fp, "_engine", lambda s: {"rules": []}), \
+                mock.patch.object(fp, "_boxes", lambda s: {"team1-web01": [22, 80, 8888]}), \
+                mock.patch.object(fp, "_vms", lambda s: {}), \
+                mock.patch.object(fp, "_red01", lambda s: {}):
+            deltas = fp.check(tmp.name)
+        self.assertEqual(len(deltas), 2, deltas)
+        self.assertTrue(deltas[0].startswith("note: the engine-rules probe grew"), deltas)
+        self.assertIn("team1-web01", deltas[1], deltas)
+
     def test_check_records_a_range_that_has_no_reference_yet(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         with mock.patch.object(fp, "spec", lambda comp_dir: _spec(comp_dir)), \
                 mock.patch.object(fp, "capture", lambda s: {"vms": {}}):
             deltas = fp.check(tmp.name)
-            self.assertTrue(deltas[0].startswith("no reference"), deltas)
+            self.assertTrue(deltas[0].startswith("note: no reference"), deltas)
             self.assertEqual(json.loads((Path(tmp.name) / fp.REFERENCE).read_text()),
-                             {"vms": {}})
+                             {"vms": {}, "probe": fp.PROBE})
             self.assertEqual(fp.check(tmp.name), [])
 
 

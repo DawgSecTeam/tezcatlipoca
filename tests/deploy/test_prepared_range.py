@@ -92,15 +92,16 @@ class PreparedReset(unittest.TestCase):
         self._reset([], sliver=True).assert_called_once_with("/k", "10.0.0.241")
 
     def test_the_reset_leaves_the_engine_rules_to_the_arm(self):
-        # The restore point carries no red chains and no range-red-firewall units (measured on a
-        # rolled-back engine): the arm installs them at event start, and a reset that installed
-        # them would be arming part of the range while claiming only to restore it.
+        # The restore point carries the range-red-firewall script and its enabled timer, so the
+        # kernel chains come back from the timer, not from the reset — a reset that installed
+        # them too would hide a broken timer behind its own work.
         with mock.patch("red.tlaloc_ops.install_red_rules") as rules:
             self._reset([])
         rules.assert_not_called()
 
     def test_a_range_with_no_reference_is_told_about_and_still_reset(self):
-        self._reset(["no reference for this range's tz-ready — recorded this reset's state"])
+        self._reset(["note: no reference for this range's prepared point — recorded this "
+                     "reset's state as the reference"])
 
     def test_a_partial_selection_is_refused(self):
         rctx = _rctx(self.comp, {}, teams={"team1": {}, "team2": {}})

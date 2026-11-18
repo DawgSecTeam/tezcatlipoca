@@ -14,6 +14,7 @@ apart is what makes this testable offline against the transcripts of a real rang
 
 import json
 import re
+import time
 from pathlib import Path
 
 from config.config_ops import write_state
@@ -23,6 +24,9 @@ from infra.lifecycle import list_snapshots
 from red.red01_ops import DNAT_CHAIN, FORWARD_CHAIN, SNAT_CHAIN
 
 REFERENCE = ".prepared-fingerprint.json"
+# Bumped whenever a probe learns to read a field it could not see: a reference filed by an
+# earlier probe is re-recorded instead of compared (the growth is not a range that moved).
+PROBE = 2
 
 # `qm` puts a live view and a config digest in every GET; only the definition survives a
 # rollback to compare against, so the runtime answer is dropped rather than normalised.
@@ -31,11 +35,15 @@ _VOLATILE_VM_KEYS = ("digest", "status", "lock", "agent", "uptime", "template", 
 _BOX_LINUX = "ss -H -ltn | awk '{print $4}' | sed 's/.*://' | sort -n -u"
 _BOX_WINDOWS = ("(Get-NetTCPConnection -State Listen | ForEach-Object LocalPort "
                 "| Sort-Object -Unique)")
-_ENGINE_RULES = ("; ".join(f"iptables -S {c} 2>/dev/null"
-                           for c in (DNAT_CHAIN, FORWARD_CHAIN, SNAT_CHAIN))
-                 + "; iptables -S FORWARD 2>/dev/null | grep -F " + FORWARD_CHAIN
-                 + "; iptables -t nat -S PREROUTING 2>/dev/null | grep -F " + DNAT_CHAIN
-                 + "; iptables -t nat -S POSTROUTING 2>/dev/null | grep -F " + SNAT_CHAIN)
+# Each chain lives in ONE table and `iptables -S` defaults to filter: asking for the DNAT
+# chain there answers "no chain" and the rules read as absent when they are installed.
+_ENGINE_CHAINS = (("filter", FORWARD_CHAIN, "FORWARD"),
+                  ("nat", DNAT_CHAIN, "PREROUTING"),
+                  ("nat", SNAT_CHAIN, "POSTROUTING"))
+_ENGINE_RULES = "; ".join(
+    [f"iptables -t {table} -S {chain} 2>/dev/null" for table, chain, _ in _ENGINE_CHAINS]
+    + [f"iptables -t {table} -S {parent} 2>/dev/null | grep -F {chain}"
+       for table, chain, parent in _ENGINE_CHAINS])
 _RED_STATE = ("systemctl list-unit-files --no-legend --no-pager 'tlaloc*' 'sliver*'; "
               "echo '#active'; systemctl is-active tlaloc.service; echo '#daemons'; "
               "pgrep -af sliver-server; echo '#listeners'; sudo -n ss -H -ltunp")
@@ -89,21 +97,48 @@ def record(comp_dir):
 
 def check(comp_dir):
     """Re-read and compare. [] means the range came back as it was left; anything else is
-    field-by-field, in the form `path: at-snapshot=X after-rollback=Y`."""
+    field-by-field, in the form `path: at-snapshot=X after-rollback=Y`. Lines starting `note:`
+    report what the instrument could not measure and never refuse a reset."""
     path = Path(comp_dir) / REFERENCE
+    s = spec(comp_dir)
     if not path.exists():
         # A range prepared before this existed has no reference to lose: record what this
         # reset produced, so the NEXT one has something to be measured against.
-        _write(comp_dir, capture(spec(comp_dir)))
-        return ["no reference for this range's tz-ready — recorded this reset's state as the "
-                "reference; a deploy records it at the snapshot itself"]
-    return compare(json.loads(path.read_text()), capture(spec(comp_dir)))
+        _write(comp_dir, capture(s))
+        return ["note: no reference for this range's prepared point — recorded this reset's "
+                "state as the reference; a deploy records it at the snapshot itself"]
+    ref = json.loads(path.read_text())
+    _settle(s, ref)
+    now = capture(s)
+    if ref.get("probe") != PROBE:
+        # Every bump so far taught the engine-rules probe a table it was not reading; that one
+        # class is re-recorded, because comparing a partial read with a full one reports the
+        # instrument's own growth as a range that moved. The other classes were read the same
+        # way then and now, so they still have to match.
+        diffs = [d for d in compare(ref, now) if not d.startswith("engine.rules")]
+        _write(comp_dir, now)
+        return [f"note: the engine-rules probe grew (probe {ref.get('probe') or 'none'} → "
+                f"{PROBE}) — that class is re-recorded, the rest compared"] + diffs
+    return compare(ref, now)
+
+
+def _settle(s, ref, timeout=180):
+    """The engine's chains are kernel state: the on-disk timer re-asserts them 35 s after boot,
+    so reading them any earlier would refuse a reset that is in fact restoring the range."""
+    if not (ref.get("engine") or {}).get("rules"):
+        return
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        now = _engine(s)
+        if now.get("rules"):
+            return now
+        time.sleep(10)
 
 
 def _write(comp_dir, fp):
     # Atomic like every other per-run state document: a reset interrupted mid-write must not
     # leave a half file that the next one reads as the truth about the range.
-    write_state(Path(comp_dir) / REFERENCE, fp)
+    write_state(Path(comp_dir) / REFERENCE, {**fp, "probe": PROBE})
 
 
 def capture(s):
@@ -111,6 +146,7 @@ def capture(s):
 
 
 def compare(reference, now):
+    reference = {k: v for k, v in reference.items() if k != "probe"}
     return [d[1:] if d.startswith(".") else d for d in _walk(reference, now, "")]
 
 
