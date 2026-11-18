@@ -143,6 +143,18 @@ class CaptureAndCompare(unittest.TestCase):
             state = fp.capture(_spec("/c"))
         self.assertTrue(state["boxes"]["team1-web01"].startswith("unreachable:"))
 
+    def test_a_vm_definition_keeps_only_what_the_range_is(self):
+        # `vmgenid` moves on every start by design, so a reset's reboot changes it — reporting
+        # it as a range that moved is how the first reset of a clean range refused.
+        cfg = {"name": "c", "vmid": 1721, "cores": 2, "net0": "virtio,bridge=vmbr152",
+               "vmgenid": "11111111-2222-3333-4444-555555555555", "digest": "abc",
+               "lock": None, "template": 0}
+        with mock.patch.object(fp, "proxmox_api", lambda *a, **k: {"data": cfg}), \
+                mock.patch.object(fp, "list_snapshots", lambda n, v: {"tz-ready"}):
+            out = fp._vms({"vms": [("team1-web01", 1721, "pve")]})
+        self.assertEqual(out["team1-web01"]["config"],
+                         {"cores": 2, "net0": "virtio,bridge=vmbr152", "vmid": 1721})
+
     def test_the_engine_probe_asks_each_chain_in_its_own_table(self):
         # `iptables -S RANGE-RED-DNAT` without `-t nat` answers "no chain": the nat rules read
         # as absent while installed, which is how a reset would refuse a clean range.
