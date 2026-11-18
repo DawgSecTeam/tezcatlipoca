@@ -137,12 +137,19 @@ def begin_red_after_delivery(ctx, red_summary):
     # A --hold-start range is not delivered yet: run-14ac7f14 released the loop at deploy
     # end and tlaloc stripped freshly-provisioned forwarders 4.5 hours before T0. The unit
     # stays enabled-but-stopped; competition-ops.py start (or scrim's T0) begins play.
+    #
+    # A RESUME inherits the hold the range was deployed with: the flag rides the command
+    # line, but a resume re-enters from the state document and its caller has no reason to
+    # repeat it — run-2cd2e47c's resume therefore started the loop 12 minutes before T0 and
+    # tlaloc masked mysql on a box that was never scored for it, leaving 4 pins down when
+    # the scrim's pre-T0 gate read the estate. The document is the truth.
     if not red_summary:
         return
-    if ctx.state.get("hold_start"):
+    if ctx.state.get("hold_start") or ctx.state.get("red_loop_held"):
+        ctx.state["hold_start"] = True
         ctx.state["red_loop_held"] = True
         ctx.save_state()
-        print("  tlaloc      : loop HELD (--hold-start) — red starts with the event "
+        print("  tlaloc      : loop HELD — red starts with the event "
               "(competition-ops.py start releases it)")
         return
     with timed(ctx.comp_dir, 7, "red_start"):

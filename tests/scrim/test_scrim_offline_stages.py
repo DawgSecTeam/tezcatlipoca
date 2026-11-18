@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO))
 FIXTURE = REPO / "tests" / "scrim" / "fixtures" / "min-scrim-comp"
 
 from scrim import (blue_agent, blue_helpers, blue_prompt, blue_watchdog, core, evidence,  # noqa: E402
+                   staging,
                    quotient_api, red_tunnel, run_manifest, scoreboard_monitor, test_folder)
 from scrim.runfiles import FINAL_SCOREBOARD, SCOREBOARD_STATE  # noqa: E402
 from estate import state as estate_state  # noqa: E402
@@ -321,3 +322,28 @@ class StageManifest(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeployStagingHoldsRed(unittest.TestCase):
+    """The scrim owns T0, so its deploy child must pass --hold-start.
+
+    run-2cd2e47c: a scrim-with-deploy started tlaloc's loop at phase 8 (03:06:27), red
+    masked mysql at 03:11, and the pre-T0 gate then (correctly) refused a range whose pins
+    were already down — twelve minutes of unscored play.
+    """
+
+    def test_the_deploy_child_is_told_to_hold_the_red_loop(self):
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = [str(c) for c in cmd]
+            return Namespace(returncode=1, stdout="", stderr="refused")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp) / "comp"
+            comp.mkdir()
+            args = _args(Path(tmp))
+            with mock.patch.object(staging.procs, "run", side_effect=fake_run):
+                with self.assertRaises(RuntimeError):
+                    staging.stage_deploy(args, comp)
+        self.assertIn("--hold-start", seen["cmd"])
