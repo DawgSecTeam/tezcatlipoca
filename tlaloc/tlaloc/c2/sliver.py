@@ -102,15 +102,16 @@ class SliverClient:
         build server checks in where nothing reads it. Round 2 of a kept range lost four
         boxes' channels exactly this way: mTLS was live, on the wrong process.
         """
-        released = []
+        released, silent = [], []
         for spec in self._c2.get("build_servers") or []:
             try:
                 released += build_server_client({"c2": self._c2},
                                                  spec).release_listeners()
             except Exception as exc:                       # noqa: BLE001 - a build
-                if self.log:                               # server that is down owns none
-                    self.log(f"  c2          : build server {spec.get('base_url')} "
-                             f"released nothing ({type(exc).__name__})")
+                # A build server that is down owns no port; say so in the result rather than
+                # in a log call this class does not have (that TypeError failed a reset).
+                silent.append(f"{spec.get('base_url')}: {type(exc).__name__}")
+        self._silent_build_servers = silent
         return released
 
     def ensure_listeners(self):
@@ -162,7 +163,8 @@ class SliverClient:
             start()
             started.append(name)
         self._started.update(started)
-        return {"started": started, "jobs": sorted(jobs) + started, "released": released}
+        return {"started": started, "jobs": sorted(jobs) + started, "released": released,
+                "build_servers_silent": getattr(self, "_silent_build_servers", [])}
 
     def release_listeners(self):
         """Kill this endpoint's transport listeners and return their names."""

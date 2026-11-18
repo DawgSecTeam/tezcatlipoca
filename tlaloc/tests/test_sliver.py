@@ -257,3 +257,22 @@ def test_the_main_server_reclaims_the_listeners_before_reconciling(monkeypatch):
     assert calls[0] == "GetJobs"
     assert sorted(result["started"]) == ["dns", "http", "https", "mtls", "wg"]
     assert result["released"] == ["mtls"]
+
+def test_a_build_server_that_cannot_be_read_is_reported_not_logged(monkeypatch):
+    # The release path used to call `self.log(...)`, an EventLog object rather than a function:
+    # the first reset that hit a down build server died there instead of reconciling.
+    from tlaloc.c2 import sliver as sl
+
+    def boom(cfg, spec, log=None):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(sl, "build_server_client", boom)
+
+    def fake_call(method, request, response_type, timeout=None):
+        return SimpleNamespace(Active=[]) if method == "GetJobs" else SimpleNamespace()
+
+    client = SliverClient(_cfg(build_servers=[{"base_url": "https://10.0.0.50:31338"}]))
+    client._call = fake_call
+    result = client.ensure_listeners()
+    assert result["released"] == []
+    assert result["build_servers_silent"] == ["https://10.0.0.50:31338: OSError"], result
