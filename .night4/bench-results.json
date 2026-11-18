@@ -1,0 +1,12 @@
+{"tag": "serial", "model": "k2", "cap": 900, "t0": 1794948964.0881722, "rc": 0, "secs": 87.5, "done": true, "report": true, "err": ""}
+{"tag": "serial", "model": "qwen3.8-flash-next", "cap": 900, "t0": 1794949051.5405037, "rc": 0, "secs": 290.9, "done": true, "report": true, "err": ""}
+{"tag": "serial", "model": "qwen3.8-27b", "cap": 900, "t0": 1794949342.4212222, "rc": 0, "secs": 191.9, "done": true, "report": true, "err": ""}
+{"tag": "par1", "model": "k2", "cap": 900, "t0": 1794949534.2991488, "rc": 0, "secs": 53.4, "done": true, "report": true, "err": ""}
+{"tag": "par1", "model": "qwen3.8-27b", "cap": 900, "t0": 1794949534.299445, "rc": 0, "secs": 126.8, "done": true, "report": true, "err": ""}
+{"tag": "par1", "model": "qwen3.8-flash-next", "cap": 900, "t0": 1794949534.299571, "rc": 0, "secs": 401.7, "done": true, "report": true, "err": ""}
+{"tag": "par2b", "model": "k2", "cap": 900, "t0": 1794949936.0440862, "rc": 0, "secs": 92.5, "done": true, "report": true, "err": ""}
+{"tag": "par2a", "model": "k2", "cap": 900, "t0": 1794949936.0431828, "rc": 0, "secs": 165.7, "done": true, "report": true, "err": ""}
+{"tag": "par2b", "model": "qwen3.8-flash-next", "cap": 900, "t0": 1794949936.0443757, "rc": 0, "secs": 192.2, "done": true, "report": true, "err": ""}
+{"tag": "par2a", "model": "qwen3.8-27b", "cap": 900, "t0": 1794949936.0437763, "rc": 0, "secs": 210.9, "done": true, "report": true, "err": ""}
+{"tag": "par2b", "model": "qwen3.8-27b", "cap": 900, "t0": 1794949936.0444381, "rc": 0, "secs": 224.8, "done": true, "report": true, "err": ""}
+{"tag": "par2a", "model": "qwen3.8-flash-next", "cap": 900, "t0": 1794949936.0448937, "rc": 0, "secs": 226.3, "done": true, "report": true, "err": ""}
