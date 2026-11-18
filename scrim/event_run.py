@@ -16,26 +16,30 @@ from scrim.core import CYCLE_TIMEOUT, log
 
 def stage_run(args, creds, t0):
     stop = threading.Event()
-    # One lock per distinct LLM endpoint — teams sharing an endpoint share its
+    # One lock per distinct LLM endpoint MODEL — teams sharing an endpoint+model share its
     # concurrency cap; teams 3/4 used to silently inherit team1's endpoint + lock.
+    # Keyed by model as well as URL because a gateway multiplexes its models: two teams on
+    # two models of one gateway contend with each other's upstreams, not a llama.cpp slot
+    # (run-84c0e45d serialised both blues on one gateway lock, then both starved on one
+    # model's stream drops).
     endpoint_locks = {}
     shared = {}
     for n in range(1, args.teams + 1):
-        base_url, _ = endpoints.blue_ep(args, n)
-        endpoint_locks.setdefault(base_url, threading.Lock())
-        shared[base_url] = shared.get(base_url, 0) + 1
-    for url, count in shared.items():
+        key = endpoints.blue_ep(args, n)
+        endpoint_locks.setdefault(key, threading.Lock())
+        shared[key] = shared.get(key, 0) + 1
+    for (url, model), count in shared.items():
         if count > 1:
-            log(f"blue: {count} teams share {url} — one LLM lock serialises them; "
+            log(f"blue: {count} teams share {model} @ {url} — one LLM lock serialises them; "
                 f"TEZ_CYCLE_TIMEOUT={CYCLE_TIMEOUT}s over {args.duration_min} min gives "
-                f"each ~{args.duration_min // count} min. Give a team its own endpoint "
+                f"each ~{args.duration_min // count} min. Give a team its own model "
                 f"or a longer window for a full rehearsal.")
     threads = []
     for n in range(1, args.teams + 1):
-        base_url, _ = endpoints.blue_ep(args, n)
         threads.append(threading.Thread(target=blue_agent.blue_feed_loop, name=f"blue-feed-{n}",
                                         args=(n, args, creds, t0, stop,
-                                              endpoint_locks[base_url], 300.0 * (n - 1))))
+                                              endpoint_locks[endpoints.blue_ep(args, n)],
+                                              300.0 * (n - 1))))
     threads.append(threading.Thread(target=scoreboard_monitor.monitor_loop, name="monitor",
                                     args=(args, creds, t0, stop)))
     # The c3rberus operator: supervised like a blue team — its death IS a broken event

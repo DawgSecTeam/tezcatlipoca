@@ -38,6 +38,9 @@ INTERNAL_ENV = {
     "TEZ_SLOT_LEDGER": "infra/reservations.py ledger location override",
     # Standard XDG variable, read for the same default.
     "XDG_STATE_HOME": "infra/reservations.py ledger location default",
+    # A scratch bench harness kept with its findings, not a config surface: nobody deploys
+    # from it, and its cap is the run's own argument, not a range setting.
+    "BENCH_CAP": ".night4/cycle_bench.py cycle timeout",
     # tests/conftest.py sets it before any test import; drivers skip .env when it is set
     # so the offline suite cannot inherit the developer's live estate identity.
     "TEZ_TEST_OFFLINE": "tests/conftest.py -> driver .env guard",

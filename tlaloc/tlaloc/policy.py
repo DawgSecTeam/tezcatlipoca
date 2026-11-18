@@ -478,10 +478,13 @@ class Policy:
             strongest = self.strongest_impact_mode()
             # Re-hits score higher than fresh pressure (40 vs 6), so without this
             # switch red only ever re-kills the one service blue restored and the
-            # board never shows more than two down at once.
-            need_breadth = (bool(self.max_down_now())
-                            and len(self._killed_services(team)) < self.max_down_now()
-                            and self._fresh_pressure_exists(team))
+            # board never shows more than two down at once. Breadth is owed to every
+            # team capped or not: gated on max_down it went dead at max_down=0 and
+            # cde-2026 run-84c0e45d left one blue team in a revolving door (37 scored
+            # takedowns) while the other went untouched after T+13 (3).
+            need_breadth = (self._fresh_pressure_exists(team)
+                            and (not self.max_down_now()
+                                 or len(self._killed_services(team)) < self.max_down_now()))
             if ok and modes and not dead:
                 for service in self._pressure_targets(ctx, ip, up):
                     if service.get("down") or not service.get("scored"):

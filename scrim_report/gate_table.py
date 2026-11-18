@@ -6,13 +6,19 @@ TAKEDOWNS_GATE = 6
 
 
 GATES = {
-    "red": [("takedowns", TAKEDOWNS_GATE, ">="), ("restore_reactions", 3, ">="),
+    "red": [("takedowns", TAKEDOWNS_GATE, ">="), ("min_team_takedowns", 1, ">="),
+            ("restore_reactions", 3, ">="),
             ("distinct_tactics", 4, ">="), ("windows_footholds", 1, ">="),
             ("max_simultaneous_down", 4, ">="), ("stalls", 0, "==")],
+    # min_team_takedowns is the balance gate the 37-vs-3 run proved necessary: the aggregate
+    # takedowns gate can be satisfied by hammering one team, so it says nothing about whether
+    # every fielded team felt pressure. render.py raises the static 1 to half a fair split.
     # evictions is deliberately NOT a gate: red's health checks only see SSH-class
     # footholds, so zero is an observability gap, not a failed red.
-    # blue's cadence gates assume one shared LLM lock: a real cycle costs 20-30 min and the two
-    # teams serialise, so a short scrim affords about one cycle per team. Meaning: rehearsal-gates.md.
+    # blue's cadence gates assume lanes serialise per (endpoint, model): a real cycle costs
+    # 20-30 min and two teams on one gateway model share one lock (distinct models do NOT —
+    # event_run keys the locks by both), so a short scrim affords about one cycle per team.
+    # Meaning: rehearsal-gates.md.
     "blue": [("cycles_rc0", 2, ">="), ("restorations", 2, ">="),
              ("injects", 2, ">="), ("notebook_entries", 10, ">="),
              ("timeouts", 2, "<=")],

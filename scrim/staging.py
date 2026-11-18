@@ -134,8 +134,14 @@ def stage_deploy(args, comp):
     # (interactive prompt → EOFError). `--competition` carries the
     # run's real comp id when the caller gave one (the workspace dir is just "comp").
     name = getattr(args, "competition", None) or comp.name
+    # The scrim owns T0, so its deploy must HOLD red: without this the deploy's own
+    # delivery step starts tlaloc's loop the moment phase 8 ends, and the twelve minutes
+    # before stage_red stops it again are unscored play — run-2cd2e47c's mysql was
+    # stopped+masked at 03:11 and the pre-T0 gate then refused a range whose pins red had
+    # already taken down for nobody (scrim-with-deploy; a separate deploy row holds because
+    # the dashboard passes it). Red starts at T0 via start_red_director.
     cmd = [core.local_python(), "-u", "create-competition.py", "--competition", name,
-           "--comp-dir", str(comp), "--teams", str(args.teams), "--yes"]
+           "--comp-dir", str(comp), "--teams", str(args.teams), "--yes", "--hold-start"]
     if getattr(args, "nodes", None):
         # without this the deploy silently targets whatever TEZ_ENGINE_ENV_FILE points at
         cmd += ["--nodes", str(args.nodes)]

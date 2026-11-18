@@ -73,6 +73,11 @@ def build_report(run_dir):
     # for the same sustained pressure.
     takedowns_threshold = (min(gate_table.TAKEDOWNS_GATE, sum(downable))
                            if downable else gate_table.TAKEDOWNS_GATE)
+    # Balance: the least-pressured team must still feel half a fair split of the pressure
+    # red actually applied, so a one-team sweep can't ride the aggregate takedowns gate to
+    # PASS while another team sits untouched (run-84c0e45d: 37-vs-3, aggregate gate green).
+    n_teams = len(rm["takedowns_by_team"])
+    balance_threshold = max(1, int(rm["takedowns"] / (2 * n_teams))) if n_teams >= 1 else 1
     injects_published = len((final or {}).get("injects") or [])
     injects_threshold = min(2, injects_published) if injects_published else None
     # An inject cannot be answered before it opens, so a run that offered one and
@@ -89,7 +94,9 @@ def build_report(run_dir):
                  "blue": [k for k in gate_table.GATES["blue"]
                           if k[0] != "injects" or injects_threshold is not None]}
     gates = gate_table.evaluate(
-        {"takedowns": rm["takedowns"], "restore_reactions": rm["restore_reactions"],
+        {"takedowns": rm["takedowns"],
+         "min_team_takedowns": rm["min_team_takedowns"],
+         "restore_reactions": rm["restore_reactions"],
          "distinct_tactics": len(rm["distinct_tactics"]),
          "windows_footholds": rm["windows_footholds"], "max_simultaneous_down": max_sim,
          "stalls": len(rm["stalls"]), "evictions": evictions},
@@ -98,6 +105,7 @@ def build_report(run_dir):
          "timeouts": bm["timeouts"]},
         thresholds={"max_simultaneous_down": max_sim_threshold,
                     "takedowns": takedowns_threshold,
+                    "min_team_takedowns": balance_threshold,
                     **({"injects": injects_threshold} if injects_threshold else {})},
         gates=gate_rows)
     if injects_threshold is None:
@@ -139,6 +147,9 @@ def build_report(run_dir):
                  "below are raw addresses rather than box names (a fixed table would invent "
                  "the wrong names)._\n")
     L.append(f"- takedowns: **{rm['takedowns']}**")
+    if rm["takedowns_by_team"]:
+        dist = ", ".join(f"{t}: {n}" for t, n in sorted(rm["takedowns_by_team"].items()))
+        L.append(f"  - per team: {dist}")
     for tp, host, svc, mode in rm["timeline"]:
         L.append(f"  - {timefmt.fmt_t(tp)} {host} {svc} ({mode})")
     # Rotation health (informational, not gated — yet): the biggest single target's

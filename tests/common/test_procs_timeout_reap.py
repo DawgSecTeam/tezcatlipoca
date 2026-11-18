@@ -36,3 +36,20 @@ class TimeoutReap(unittest.TestCase):
         with self.assertRaises(procs.ScrimTimeout):
             procs.run_tree(["bash", "-c", "sleep 30"], stdin_text="x\n",
                            timeout=1, grace=1)
+
+
+class RunnerProtocol(unittest.TestCase):
+    """run_tree is passed AS a runner, so it must accept subprocess.run's kwargs.
+
+    c3rberus_ops._ssh calls its runner with capture_output/text, and red_link hands it
+    run_tree — so every teardown pull raised TypeError and the platform's end/harvest/
+    verdict silently never ran (run-be6e9f6f: "red state pulled before teardown: nothing")."""
+
+    def test_the_subprocess_run_protocol_is_accepted(self):
+        r = procs.run_tree(["/bin/echo", "ok"], capture_output=True, text=True, check=True)
+        self.assertEqual(r.stdout.strip(), "ok")
+        self.assertEqual(r.returncode, 0)
+
+    def test_an_unknown_keyword_is_still_refused(self):
+        with self.assertRaises(TypeError):
+            procs.run_tree(["/bin/true"], bogus_kw=1)

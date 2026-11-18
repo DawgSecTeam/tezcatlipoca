@@ -77,7 +77,20 @@ def _reap(proc):
 # Own session so a timeout reaps the whole tree: subprocess.run kills only the direct child,
 # leaving create-competition/nakon/ssh grandchildren alive and holding the deploy lock.
 def run_tree(cmd, cwd=None, env=None, timeout=None, check=True, tail=None,
-             stdin_text=None, grace=TREE_STOP_GRACE):
+             stdin_text=None, grace=TREE_STOP_GRACE, **subprocess_kw):
+    # run_tree is handed to helpers as a `runner`, and those helpers are written against
+    # subprocess.run's protocol. Honour it rather than dying inside a best-effort harvest:
+    # c3rberus_ops._ssh calls its runner with capture_output=True, so every teardown pull
+    # through red_link raised TypeError and the platform's own end/harvest/verdict never
+    # ran — reported as an empty red01 ("red state pulled before teardown: nothing",
+    # run-be6e9f6f). This tree is always captured and always text.
+    for meaningless in ("capture_output", "text", "universal_newlines"):
+        subprocess_kw.pop(meaningless, None)
+    if subprocess_kw.pop("input", None) is not None:
+        raise TypeError("run_tree takes stdin_text=, not input=")
+    if subprocess_kw:
+        raise TypeError("run_tree got unexpected keyword argument(s): "
+                        + ", ".join(sorted(subprocess_kw)))
     cmd = [str(c) for c in cmd]
     _log("$ " + " ".join(cmd[:6]) + (" ..." if len(cmd) > 6 else ""))
     proc = subprocess.Popen(cmd, cwd=cwd, env=env, text=True,
