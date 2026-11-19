@@ -261,6 +261,11 @@ class Lockout(Effect):
                 "absent": absent}
 
         if not locked:
+            if all(status.get(u, MISSING) == MISSING for u in users):
+                # The box has none of them (a Windows box carries only its box account,
+                # which is never a target): stop bidding for it, like rotate_credlist.
+                ctx.world.mark_effect_unavailable(
+                    ip, self.id, "no lockable account exists on the box")
             return Result(False, f"no account could be locked on {ip} "
                                  f"(requested {users})", data=data)
         ctx.world.note(ip, f"lockout: locked {locked} on {ip}")

@@ -241,3 +241,14 @@ def test_windows_leaves_the_ssh_account_alone_when_other_logins_exist(tmp_path):
     assert ssh.calls[0]["cmd"] == script
     assert "Administrator" not in ssh.calls[0]["cmd"]
     assert "do not exist on this box" in result.detail
+
+
+def test_a_box_with_no_lockable_account_stops_bidding_for_lockout(tmp_path):
+    """A Windows box carries only its box account (never a target), so every credlist
+    name is absent: one attempt must be the last one (same rule as rotate_credlist)."""
+    ssh = FakeSSH().on("net user", rc=0, out="N ubuntu\nN svc-backup\nN analyst\n")
+    ctx = late_ctx(tmp_path, ssh, windows=True)
+    result = execute("lockout", {"ip": WIN_IP}, ctx)
+    assert result.ok is False
+    assert ctx.world.effect_unavailable(WIN_IP, "lockout")
+    assert "Administrator" not in ssh.calls[0]["cmd"]
