@@ -232,3 +232,25 @@ def test_windows_rotation_uses_net_user(tmp_path):
     assert rotate[-1]["windows"] is True
     assert ctx.world.impacts()[0]["service"] == USER
     assert re.search(r"(?i)net user|chpasswd", " ".join(result.restore["recipe"]))
+
+
+def test_a_box_with_no_credlist_accounts_is_marked_and_never_retried(tmp_path):
+    """The issued credlist is a Debian account list; a Windows box has none of them.
+    Re-picking one spent 33-35 cycles per event (live, twice) — the box must say never."""
+    ssh = FakeSSH().on("net user", rc=1, out="",
+                       err="The user name could not be found")
+    ctx = rooted_ctx(tmp_path, ssh, windows=True)
+    result = execute("rotate_credlist", {"ip": WIN_IP}, ctx)
+    assert result.ok is False
+    assert "no credlist account exists" in result.detail
+    assert ctx.world.effect_unavailable(WIN_IP, "rotate_credlist")
+    assert ctx.world.impacts() == []
+
+
+def test_the_picked_account_is_skipped_when_the_box_lacks_it(tmp_path):
+    """Preferring a known-original name must not beat an account the box actually has."""
+    ssh = FakeSSH().on("id svc-backup", rc=1, out="", err="no such user")
+    ctx = rooted_ctx(tmp_path, ssh)
+    result = execute("rotate_credlist", dict(PARAMS), ctx)
+    assert result.data["user"] == "analyst"
+    assert any("analyst:" in call["cmd"] for call in ssh.calls)

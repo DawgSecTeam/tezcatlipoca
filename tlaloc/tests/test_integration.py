@@ -423,3 +423,30 @@ def test_an_impact_carries_the_team_the_report_groups_by(tmp_path):
     impact = ctx.world.impacts()[-1]
     assert impact["team"] == ctx.intel.team_of("192.168.1.10")
     assert impact["team"]
+
+
+def test_a_refused_pick_falls_through_to_the_next_candidate(tmp_path):
+    """A refused chosen candidate must not end the cycle with nothing executed: the
+    picker chose from the same list, so the refusal repeats forever otherwise
+    (live: 33 consecutive rotate_credlist picks, zero impacts, 49-minute stall)."""
+    from tlaloc.decide import Decision
+    from tlaloc.policy import make_candidate
+
+    ctx, policy, decider = live_ctx(tmp_path, ssh=scripted_takedown_ssh())
+    ctx.world.add_foothold("192.168.1.10", "ubuntu", "boxpw-1", "root",
+                           escalation="sudo")
+    refused = make_candidate("lockout", {"ip": "192.168.1.10"}, 99, "window shut")
+    legal = make_candidate("takedown", {"ip": "192.168.1.10", "service": "nginx",
+                                        "mode": "stop"}, 10, "a scored service")
+    policy.candidates = lambda _ctx: [refused, legal]
+    decider.next_effect = lambda *a, **k: Decision("next_effect", "A", chosen=refused)
+    decider.noul = lambda *a, **k: Decision("escalate_now", False)
+    decider.pressure_count = lambda *a, **k: Decision("pressure_count", 0)
+
+    loop = Loop(ctx, policy=policy, decider=decider, sensors=ctx.sensors,
+                sleeper=lambda _s: None)
+    outcome = loop.step()
+
+    executed = [e["effect"] for e in outcome["executed"] if e]
+    assert executed == ["takedown"], executed
+    assert [i["service"] for i in ctx.world.impacts()] == ["nginx"]

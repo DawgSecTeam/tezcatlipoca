@@ -556,3 +556,34 @@ def test_breadth_still_owed_when_there_is_no_concurrent_cap(tmp_path):
     takes = {c["params"]["service"]: c for c in policy.candidates(ctx)
              if c["effect"] == "takedown"}
     assert "nginx" in takes and not takes["nginx"]["reason"].startswith("breadth:")
+
+
+def test_a_box_that_cannot_rotate_credentials_stops_bidding_for_it(tmp_path):
+    """Live twice: 33 and 35 consecutive picks on a box whose credlist users do not
+    exist. Once the effect says the box has none, the candidate is gone."""
+    ctx, policy = policy_for(tmp_path, hours=8.0)
+    ip = "192.168.1.20"
+    ctx.world.add_foothold(ip, "Administrator", "boxpw-1", "root", windows=True)
+    assert any(c["effect"] == "rotate_credlist" and c["params"]["ip"] == ip
+               for c in policy.candidates(ctx))
+    ctx.world.mark_effect_unavailable(ip, "rotate_credlist", "no credlist account exists")
+    assert not any(c["effect"] == "rotate_credlist" for c in policy.candidates(ctx))
+
+
+def test_a_failed_rotation_decays_and_is_dropped_after_two(tmp_path):
+    """Same rule as takedown/block_port: one failure demotes, two take it off the list."""
+    ctx, policy = policy_for(tmp_path, hours=8.0)
+    ip = "192.168.1.10"
+    ctx.world.add_foothold(ip, "ubuntu", "boxpw-1", "root", escalation="sudo")
+
+    def score():
+        return next((c["score"] for c in policy.candidates(ctx)
+                     if c["effect"] == "rotate_credlist"
+                     and c["params"]["ip"] == ip), None)
+
+    fresh = score()
+    assert fresh is not None
+    ctx.world.tally_failure("rotate_credlist", ip)
+    assert score() == fresh - 20
+    ctx.world.tally_failure("rotate_credlist", ip)
+    assert score() is None

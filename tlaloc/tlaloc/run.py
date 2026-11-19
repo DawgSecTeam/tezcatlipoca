@@ -156,6 +156,18 @@ class Loop:
         executed = []
         if decision.chosen is not None:
             executed.append(self._run_candidate(decision, source=decision.source))
+            # A refused pick must not end the cycle with nothing executed: the picker
+            # chose from this same list, and a structural refusal repeats every cycle
+            # otherwise (live: 33 consecutive rotate_credlist picks, zero impacts).
+            if executed[-1] is None:
+                for fallback in candidates:
+                    if fallback is decision.chosen:
+                        continue
+                    result = self._run_candidate(decision, source="deterministic",
+                                                 candidate=fallback)
+                    if result is not None:
+                        executed.append(result)
+                        break
 
         # escalation re-derives the mode of an already-legal candidate — never invents an effect
         escalate = self.decider.noul("escalate_now", digest,
@@ -262,8 +274,8 @@ class Loop:
                     if chosen.answer in methods:
                         self.ctx.world.set_preferred_access(ip, chosen.answer)
 
-    def _run_candidate(self, decision, source):
-        candidate = decision.chosen
+    def _run_candidate(self, decision, source, candidate=None):
+        candidate = decision.chosen if candidate is None else candidate
         if candidate is None:
             return None
         try:

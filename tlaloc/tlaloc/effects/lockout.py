@@ -46,11 +46,10 @@ class Lockout(Effect):
         "Password-lock blue's login accounts on a box (Linux usermod -L, Windows "
         "net user /active:no) so they cannot log in to fix anything still standing. "
         "Endgame only: the ROE's lockout window is the gate, and a locked account's "
-        "undo is organizer-facing, so this is refused outside that window. Never "
-        "touches red's own access (the foothold user, root, planted accounts), and "
-        "on Windows refuses to disable the account our SSH path uses unless a live "
-        "C2 channel covers the box. Every lock is read back off the box before it "
-        "is claimed.")
+        "undone is organizer-facing, so this is refused outside that window. Never "
+        "touches red's own access (the foothold user, root, planted accounts) and never "
+        "the Windows box account — that is the defender's own way onto the box. Every "
+        "lock is read back off the box before it is claimed.")
     params = {
         "ip": {"type": "str", "required": True, "desc": "target box"},
         "users": {"type": "list",
@@ -95,20 +94,31 @@ class Lockout(Effect):
         if isinstance(requested, str):
             requested = [requested]
         fh = ctx.world.foothold(ip)
+        # On Windows the box account is the defender's ONLY path onto the box (the blue
+        # kit's ./mybox ssh runs as it), so disabling it ends the defence instead of
+        # pressuring it — a human team has console, the agent does not. On Linux
+        # `usermod -L` locks only the password and blue keeps its key path, so there the
+        # box account stays a target.
+        box_account = None if windows else ctx.intel.box_username()
         out = []
         if requested:
             for user in requested:
                 user = (user or "").strip()
                 if not _USER_RE.match(user):
                     return [], f"lockout: {user!r} is not a user name"
+                if windows and user.lower() == "administrator":
+                    return [], (f"refusing to lock {user!r} — on Windows the box account "
+                                "is the defender's only way onto the box")
                 if off_limits(user, fh, windows=windows):
                     return [], (f"refusing to lock {user!r} — root or one of red's "
                                 "own accounts")
                 if user not in out:
                     out.append(user)
             return out, ""
-        box_account = ("Administrator" if windows else ctx.intel.box_username())
-        for user in list(ctx.intel.credlist_users() or []) + [box_account]:
+        users = list(ctx.intel.credlist_users() or [])
+        if box_account:
+            users.append(box_account)
+        for user in users:
             user = (user or "").strip()
             if not user or not _USER_RE.match(user) or user in out:
                 continue
@@ -118,49 +128,16 @@ class Lockout(Effect):
         return out, ""
 
     def _plan(self, ctx, ip, params):
-        """Disabling the account red's own SSH path uses would cut red off; drop it
-        unless a live C2 channel covers the box."""
         fh = ctx.world.foothold(ip)
         windows = bool(fh and fh.get("windows"))
         users, why = self._targets(ctx, ip, params, windows)
         if why:
             return [], why
-        if windows and fh["user"] in users and not self._live_channel(ctx, ip):
-            users = [u for u in users if u != fh["user"]]
-            if not users:
-                return [], (f"the only blue login on {ip} is {fh['user']!r} — the "
-                            "account our own SSH path uses, so locking it needs a "
-                            "live C2 channel to keep red on the box")
         if not users:
             return [], (f"no blue login account on {ip} is safe to lock (every "
-                        "candidate is root, red's own foothold, or a plant)")
+                        "candidate is root, red's own foothold, a plant, or the box "
+                        "account on Windows)")
         return users, ""
-
-    @staticmethod
-    def _live_channel(ctx, ip):
-        """A callback fresher than `c2.callback_max_age_sec` for this box."""
-        from .implant_channel import box_id_for
-        key = box_id_for(ctx, ip)
-        max_age = float((ctx.cfg.get("c2") or {}).get("callback_max_age_sec", 120))
-        try:
-            callbacks = ctx.c2.callbacks() if ctx.c2 is not None else None
-        except Exception:
-            callbacks = None
-        record = (callbacks or {}).get(key) or (callbacks or {}).get(ip)
-        if record and record.get("seen_at"):
-            try:
-                return (ctx.now() - float(record["seen_at"])) <= max_age
-            except (TypeError, ValueError):
-                pass
-        # The loop also mirrors callbacks into world state.
-        try:
-            for candidate in (key, ip):
-                age = ctx.world.callback_age(candidate)
-                if age is not None and age <= max_age:
-                    return True
-        except Exception:
-            return False
-        return False
 
     # -- the body --------------------------------------------------------------
 

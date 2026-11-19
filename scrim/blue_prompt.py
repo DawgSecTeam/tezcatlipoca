@@ -113,11 +113,14 @@ this cycle babysitting a restart; spend it on the cause:
 1. If a service is DOWN and the watchdog has not fixed it in ~2 minutes: restore it NOW
    {restore_example} — and nothing else this cycle.
    If the SAME service goes down again after a restore, the attacker still has a way in —
-   make YOUR one change the ENTRY VECTOR (e.g. a harvested password over SSH: set
-   `PasswordAuthentication no` in sshd_config AND any sshd_config.d drop-in, reload ssh — your
-   own access is key-based; rotate/lock the abused account). Restoring the symptom alone gets
-   re-undone every minute.
-2. Else if an inject is due within 30 minutes and unsubmitted: your one change is the deliverable — investigate, write, ./submit-inject.
+   make YOUR one change EVICTING that persistence: the 15-minute SYSTEM scheduled task /
+   Run key / new service (Windows) or the cron job / systemd unit / profile hook (Linux)
+   that re-breaks it. Find it, remove it, log `EVICTED: <what> on <box>` in LOG.md.
+   Re-restoring the symptom is re-undone every minute and scores nothing.
+2. Else if any inject shows "CLOSES in" under 20 minutes: submit it FIRST, before anything
+   else this cycle — write and ./submit-inject within the first 3 minutes. A closed inject is
+   scored zero and cannot be recovered.
+   Otherwise, if an inject is due within 30 minutes and unsubmitted: your one change is the deliverable — investigate, write, ./submit-inject.
 3. Else if the scoreboard is green and an attacker has been active (any DOWN in CHANGES history, or red's name in a hunt finding): your one change is an EVICTION — hunt the foothold, not just the symptom: unknown services/listeners, new cron/systemd units/scheduled tasks/Run keys, rogue accounts or UID-0, unfamiliar active sessions (`w`, `ss -tnp`, Windows logged-on users). When you find attacker persistence, REMOVE it and log the line `EVICTED: <what> on <box>` in LOG.md — the report counts evictions.
 4. Else (everything green, no attacker trace, no inject due): your one change is hardening something REAL — a file backup of /etc plus a verify, a detection cron that logs new cron entries/units, package updates, password rotation on non-credlist accounts. Idling is not defending; leave the notebook a line saying what you hardened and why.
 5. By minute 5 of the cycle: re-check the scoreboard, leave the

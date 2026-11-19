@@ -417,6 +417,16 @@ class World:
     def reject_memory(self):
         return dict(self.meta.get("reject_memory") or {})
 
+    def mark_effect_unavailable(self, ip, effect, reason):
+        """A structural dead end (no such account exists, nothing to lock): stop offering
+        it. A plain failure is retried and decays; this is the box saying "never"."""
+        rec = self._d["targets"].setdefault(ip, {})
+        rec.setdefault("unavailable", {})[effect] = reason
+        self.save()
+
+    def effect_unavailable(self, ip, effect):
+        return effect in (((self._d["targets"].get(ip) or {}).get("unavailable")) or {})
+
     def seed_record(self, ip):
         return (self.meta.get("seed") or {}).get(ip)
 

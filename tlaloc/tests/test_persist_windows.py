@@ -610,3 +610,35 @@ def test_every_family_records_a_checkable_artifact_with_a_restore(tmp_path, fami
         name = re.search(r"id=(\S+)", artifact["detail"]).group(1)
         assert name in " ".join(recipe["recipe"]), \
             "the undo recipe must name the artifact it takes back"
+
+
+def test_timestomp_chunks_a_full_plant_under_the_command_line_cap(tmp_path,
+                                                                 pinned_names,
+                                                                 monkeypatch):
+    """A full plant is 40+ paths; one script carrying all of them crossed Windows'
+    8191-char command line (live twice: "The command line is too long")."""
+    paths = [f"C:\\ProgramData\\pkg{i}\\Run-{i:02d}.cmd" for i in range(45)]
+    ctx = win_ctx(tmp_path, FakeSSH(), seeded=True)
+    for i, path in enumerate(paths):
+        ctx.world.add_artifact(WIN_IP, "persist-seed", f"helper id=pkg{i}",
+                               check_cmd="if ($?) { exit 0 } else { exit 1 }",
+                               paths=[path])
+
+    sent = []
+
+    def fake_send(ctx_, ip, fh, script, timeout=None):
+        sent.append(script)
+        stamped = [x for x in re.findall(r"'([^']+)'", script) if x != "TS|"]
+        return 0, "".join(f"TS|{p}|{TICKS}|{TICKS}|{TICKS}\n" for p in stamped), ""
+
+    monkeypatch.setattr(pw, "_send", fake_send)
+    result = execute("persist", {"ip": WIN_IP, "family": "timestomp"}, ctx)
+    assert result.ok, result.detail
+
+    assert len(sent) == 5, len(sent)              # 46 paths / 10 per round trip
+    assert all(len(cmd) < 8191 for cmd in sent)
+    mine = [a for a in ctx.world.artifacts(WIN_IP)
+            if a["kind"] == "persist-timestomp"]
+    assert len(mine) == 1
+    assert set(mine[0]["paths"]) == set(paths) | {SCRIPT}
+    assert_checkable(mine[0])

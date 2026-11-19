@@ -121,6 +121,36 @@ def reanchor_injects(args, comp, creds):
         log("no engine injects matched competitions/%s/injects/ — nothing re-anchored" % comp.name)
 
 
+def _minutes_until(stamp, now=None):
+    try:
+        naive = time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
+    now = time.time() if now is None else now
+    # The engine writes UTC; a naive local timestamp is the only other reading.
+    # Taking the first plausible one read an inject 33 minutes overdue as
+    # "due in 207min" (the local reading, hours ahead) and hid the miss.
+    cands = [c for c in (calendar.timegm(naive) - now, time.mktime(naive) - now)
+             if -12 * 3600 <= c <= 12 * 3600]
+    return min(cands, key=abs) / 60 if cands else None
+
+
+def next_close_in_min(creds, team):
+    """Minutes until the nearest close among unsubmitted, still-open injects."""
+    jar = quotient_api.jar_path(creds["RUN_DIR"], team)
+    try:
+        r = quotient_api.qget(creds, team, jar, "/api/injects")
+        injects = json.loads(r.stdout)
+        if not isinstance(injects, list):
+            return None
+    except Exception:
+        return None
+    left = [_minutes_until(i.get("CloseTime") or "") for i in injects
+            if not i.get("Submissions")]
+    left = [x for x in left if x is not None and x >= 0]
+    return min(left) if left else None
+
+
 def inject_brief(creds, team):
     jar = quotient_api.jar_path(creds["RUN_DIR"], team)
     try:
@@ -135,22 +165,10 @@ def inject_brief(creds, team):
     now = time.time()
     lines = []
 
-    def minutes_until(stamp):
-        try:
-            naive = time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")
-        except ValueError:
-            return None
-        # The engine writes UTC; a naive local timestamp is the only other reading.
-        # Taking the first plausible one read an inject 33 minutes overdue as
-        # "due in 207min" (the local reading, hours ahead) and hid the miss.
-        cands = [c for c in (calendar.timegm(naive) - now, time.mktime(naive) - now)
-                 if -12 * 3600 <= c <= 12 * 3600]
-        return min(cands, key=abs) / 60 if cands else None
-
     for i in sorted(injects, key=lambda x: x.get("DueTime") or ""):
         subs = len(i.get("Submissions") or [])
-        due_in = minutes_until(i.get("DueTime") or "")
-        close_in = minutes_until(i.get("CloseTime") or "")
+        due_in = _minutes_until(i.get("DueTime") or "", now)
+        close_in = _minutes_until(i.get("CloseTime") or "", now)
         closed = close_in is not None and close_in < 0
         if subs:
             state = "submitted ✓"
@@ -168,9 +186,11 @@ def inject_brief(creds, team):
             when = f"OVERDUE by {-due_in:.0f}min"
         else:
             when = f"due in {due_in:.0f}min"
-        urgent = (not subs) and not closed and due_in is not None and due_in <= 30
+        if not closed and close_in is not None:
+            when += f", CLOSES in {close_in:.0f}min"
+        urgent = (not subs) and not closed and close_in is not None and close_in <= 30
         lines.append(f"  #{i.get('ID')} {i.get('Title')} — {when} — {state}"
-                     + ("  << TASK #1: submit before close" if urgent else ""))
+                     + ("  << TASK #1: submit THIS cycle" if urgent else ""))
     return "\n".join(lines)
 
 

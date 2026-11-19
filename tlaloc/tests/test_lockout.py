@@ -192,47 +192,46 @@ def test_root_and_reds_own_accounts_are_never_locked(tmp_path):
     assert result.ok is False and "precondition" in result.detail
 
 
-def test_windows_locks_administrator_only_with_a_live_channel(tmp_path):
-    ssh = FakeSSH().on("net user Administrator /active:no", rc=0,
-                       out="L Administrator\n")
+def test_windows_never_disables_the_boxes_own_account(tmp_path):
+    """The blue kit's only way onto a Windows box is its box account (./mybox runs as
+    Administrator): disabling it ends the defence instead of pressuring it, even with a
+    live C2 channel that would keep red on the box (live: team2 lost win02 for 58 min)."""
+    ssh = FakeSSH()
     ctx = late_ctx(tmp_path, ssh, windows=True)
     ctx.c2 = FakeMythic({"dc01-1": {"seen_at": ctx.now(), "agent": "poseidon"}})
     result = execute("lockout", {"ip": WIN_IP, "users": ["Administrator"]}, ctx)
 
-    assert result.ok, result.detail
-    assert ssh.calls[0]["cmd"] == windows_script(["Administrator"])
-    assert ssh.calls[0]["windows"] is True
-    assert result.impact["service"] == "logins"
-    assert result.restore["recipe"][1] == "net user Administrator /active:yes"
-    assert ctx.world.restore_table()[0]["recipe"] == result.restore["recipe"]
+    assert result.ok is False
+    assert "defender's only way onto the box" in result.detail
+    assert ssh.calls == []
 
 
 def test_windows_lockout_falls_back_to_the_channel_when_ssh_closed(tmp_path):
-    """The DC's Administrator can be disabled while the channel is live; the lock must
-    still land (live: scrim-one in-window lockout, SSH reset by peer)."""
-    ssh = FakeSSH().on("net user Administrator /active:no", rc="raise")
+    """SSH reset by peer must not lose the lock: the same command goes through the live
+    C2 channel (live: scrim-one in-window lockout, SSH reset by peer)."""
+    ssh = FakeSSH().on("net user ubuntu /active:no", rc="raise")
     ctx = late_ctx(tmp_path, ssh, windows=True)
     mythical = FakeMythic({"dc01-1": {"seen_at": ctx.now(), "agent": "apollo"}})
-    mythical.task_output = "L Administrator\n"
+    mythical.task_output = "L ubuntu\n"
     ctx.c2 = mythical
-    result = execute("lockout", {"ip": WIN_IP, "users": ["Administrator"]}, ctx)
+    result = execute("lockout", {"ip": WIN_IP, "users": ["ubuntu"]}, ctx)
     assert result.ok, result.detail
     assert mythical.tasks[0]["box"] == "dc01-1"
-    assert "net user Administrator /active:no" in mythical.tasks[0]["command"]
+    assert "net user ubuntu /active:no" in mythical.tasks[0]["command"]
 
 
-def test_windows_refuses_to_disable_our_own_ssh_path_without_a_channel(tmp_path):
+def test_windows_refuses_the_box_account_without_a_channel_too(tmp_path):
     ssh = FakeSSH()
     ctx = late_ctx(tmp_path, ssh, windows=True)
     result = execute("lockout", {"ip": WIN_IP, "users": ["Administrator"]}, ctx)
     assert result.ok is False
     assert "precondition" in result.detail
-    assert "live C2 channel" in result.detail
+    assert "defender's only way onto the box" in result.detail
     assert ssh.calls == []
 
 
 def test_windows_leaves_the_ssh_account_alone_when_other_logins_exist(tmp_path):
-    """Without a channel the box account is dropped from the plan; the rest is still locked."""
+    """The box account is never in the plan; the credlist logins are still locked."""
     ssh = FakeSSH().on("net user ubuntu /active:no", rc=0,
                        out="N ubuntu\nL svc-backup\nL analyst\n")
     ctx = late_ctx(tmp_path, ssh, windows=True)

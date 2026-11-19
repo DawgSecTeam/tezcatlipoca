@@ -185,7 +185,7 @@ class CycleTimeout(subprocess.TimeoutExpired):
         self.reason = reason
 
 
-def _opencode_run(args, prompt, wd, env, stop=None, ep=None):
+def _opencode_run(args, prompt, wd, env, stop=None, ep=None, cap=None):
     m = re.search(r"team(\d+)$", wd.name)
     n_team = int(m.group(1)) if m else 1
     # ep lets the red operator reuse this runner with the RED model on the same gateway
@@ -200,7 +200,7 @@ def _opencode_run(args, prompt, wd, env, stop=None, ep=None):
                             cwd=wd, env=child_env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
                             text=True, start_new_session=True)
-    cap = getattr(args, "cycle_timeout", None) or core.CYCLE_TIMEOUT
+    cap = cap or getattr(args, "cycle_timeout", None) or core.CYCLE_TIMEOUT
     deadline = time.time() + cap
     reason = "cap"
     while True:
@@ -212,7 +212,12 @@ def _opencode_run(args, prompt, wd, env, stop=None, ep=None):
             # a retried communicate loses no output (documented Popen behavior); the cycle
             # ends on its own budget OR on the event deadline, whichever comes first
             if time.time() >= deadline or (stop is not None and stop.is_set()):
-                reason = "cap" if time.time() >= deadline else "window"
+                if stop is not None and stop.is_set():
+                    reason = "window"
+                elif cap != (getattr(args, "cycle_timeout", None) or core.CYCLE_TIMEOUT):
+                    reason = "inject"
+                else:
+                    reason = "cap"
                 break
     # opencode leaves a server grandchild holding the pipes; killing only the direct child made
     # subprocess.run block for that grandchild's lifetime. bash is the session leader
@@ -329,7 +334,8 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
                                                    notebook, log_tail)
             cycles = wd / "cycles"
             cycles.mkdir(exist_ok=True)
-            r = run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=n)
+            r = run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=n,
+                                     cap=inject_deadline_cap(args, creds, n))
             out = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or ""))
             if r.returncode != 0:
                 out += _opencode_log_tail(wd)
@@ -339,10 +345,15 @@ def blue_feed_loop(n, args, creds, t0, stop, llm_lock, first_delay=0.0):
                 f.write(f"\n===== cycle T+{elapsed} rc={r.returncode} =====\n{out[-2000:]}\n")
             log(f"blue-team{n} cycle T+{elapsed} rc={r.returncode}")
         except subprocess.TimeoutExpired as exc:
-            window = getattr(exc, "reason", "") == "window"
+            reason = getattr(exc, "reason", "")
+            # An inject cut is a deadline, not a slow cycle: the gate reads "(window)"
+            # and must not count it against the timeout budget.
+            window = reason in ("window", "inject")
             write_cycle_timeout(wd, elapsed, window=window)
-            log(f"blue-team{n} cycle T+{elapsed} TIMED OUT"
-                f"{' at the event window' if window else ' at the cycle cap'}")
+            where = {"window": " at the event window",
+                     "inject": " at the inject close (cycle shortened to submit in time)",
+                     }.get(reason, " at the cycle cap")
+            log(f"blue-team{n} cycle T+{elapsed} TIMED OUT{where}")
         except Exception as e:
             log(f"blue-team{n} feed error: {e}")
         took = time.time() - started
@@ -416,10 +427,15 @@ def write_cycle_timeout(wd, elapsed, *, window=False):
 # One lock acquisition per attempt: wrapping the attempt AND its retry held the lock for up to
 # 2 x CYCLE_TIMEOUT and starved every other team of a whole cycle on the shared endpoint. The
 # retry is skipped once stop is set, so teardown is never held up by a doomed second attempt.
-def run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=None, ep=None):
+def run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=None, ep=None,
+                         cap=None):
     who = team if team is not None else "?"
-    # ep is only passed through when set: test doubles patch the four-arg signature
-    kw = {"ep": ep} if ep is not None else {}
+    # ep/cap are only passed through when set: test doubles patch the base signature
+    kw = {}
+    if ep is not None:
+        kw["ep"] = ep
+    if cap is not None:
+        kw["cap"] = cap
     with llm_lock:
         r = _opencode_run(args, prompt, wd, env, stop=stop, **kw)
     if r.returncode != 0 and not stop.is_set():
@@ -427,3 +443,19 @@ def run_cycle_with_retry(args, prompt, wd, env, llm_lock, stop, team=None, ep=No
         with llm_lock:
             r = _opencode_run(args, prompt, wd, env, stop=stop, **kw)
     return r
+
+
+def inject_deadline_cap(args, creds, n):
+    """Shrink this cycle so it ends early enough to write and submit a closing inject.
+
+    Two teams lost inject windows by starting a full-cap cycle minutes before the
+    close (51 s late once, never got a cycle the other time). The agent still has to
+    submit during the cycle; the cap only guarantees it is not still working when
+    the window shuts.
+    """
+    cap = getattr(args, "cycle_timeout", None) or core.CYCLE_TIMEOUT
+    close_in = inject_sync.next_close_in_min(creds, f"team{n}")
+    if close_in is None:
+        return None
+    budget = int(close_in * 60) - 150
+    return budget if 60 <= budget < cap else None

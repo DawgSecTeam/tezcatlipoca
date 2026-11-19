@@ -554,16 +554,23 @@ class Policy:
                         f"(CCDC-authentic failure mode)"
                         + (f"; {fails} failed attempt(s) — rotate" if fails else ""),
                         cost="low", high_stakes=True))
-                out.append(make_candidate(
-                    "rotate_credlist", {"ip": ip},
-                    BASE_SCORE["rotate_credlist"] + score_bonus,
-                    "rotate a credlist account so blue's own credential list fails",
-                    cost="low", high_stakes=True))
+                # Same failure-aware rule as takedown/block_port: the effect refuses
+                # after two failures, so re-offering it only spends the pick (live:
+                # 33 consecutive picks on a box whose credlist users do not exist).
+                rots = self.world.failure_count("rotate_credlist", ip)
+                if rots < 2 and not self.world.effect_unavailable(ip, "rotate_credlist"):
+                    out.append(make_candidate(
+                        "rotate_credlist", {"ip": ip},
+                        BASE_SCORE["rotate_credlist"] + score_bonus - 20 * rots,
+                        "rotate a credlist account so blue's own credential list fails"
+                        + (f"; {rots} failed attempt(s) — rotate" if rots else ""),
+                        cost="low", high_stakes=True))
             # One successful lockout per box is the whole effect: re-offering it spent a
             # cycle on an SSH call red's own lock had already closed (live: reset by peer).
             locked = any(i.get("ip") == ip and i.get("service") == "logins"
                          for i in self.world.impacts())
-            if self.window_open("lockout") and not locked:
+            if (self.window_open("lockout") and not locked
+                    and not self.world.effect_unavailable(ip, "lockout")):
                 out.append(make_candidate(
                     "lockout", {"ip": ip},
                     BASE_SCORE["lockout"] + 30 + score_bonus,

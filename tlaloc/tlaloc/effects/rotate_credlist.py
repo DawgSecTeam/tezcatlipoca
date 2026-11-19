@@ -134,9 +134,17 @@ class RotateCredlist(Effect):
         if user is None:
             return Result(False, why)
 
-        exists, why = self._exists(ctx, ip, fh, user, windows)
-        if not exists:
-            return Result(False, f"{user} does not exist on {ip} ({why})")
+        requested = (params.get("user") or "").strip()
+        names = [user] if requested else [u for u in [user] + eligible_users(ctx, ip, fh) if u]
+        user, why = self._first_existing(ctx, ip, fh, names)
+        if user is None:
+            # The issued credlist is a Debian account list; a Windows box has none of
+            # them. Picking one anyway spent 33-35 cycles per event (live, twice) — the
+            # box says "never" once, and the candidate stops being offered.
+            if not requested:
+                ctx.world.mark_effect_unavailable(
+                    ip, self.id, "no credlist account exists on the box")
+            return Result(False, f"no credlist account exists on {ip} ({why})")
 
         users = eligible_users(ctx, ip, fh)
         old = ground_truth(ctx, [user]).get(user)
@@ -216,6 +224,17 @@ class RotateCredlist(Effect):
                     "rotate_credlist", "sabotage"):
                 return cred.get("password") or None
         return None
+
+    @classmethod
+    def _first_existing(cls, ctx, ip, fh, users):
+        """(user, "") for the first name the box actually has, else (None, last reason)."""
+        windows = bool(fh.get("windows"))
+        why = "no eligible account"
+        for user in dict.fromkeys(u for u in users if u):
+            exists, why = cls._exists(ctx, ip, fh, user, windows)
+            if exists:
+                return user, ""
+        return None, why
 
     @staticmethod
     def _exists(ctx, ip, fh, user, windows):
