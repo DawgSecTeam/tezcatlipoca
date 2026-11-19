@@ -642,3 +642,21 @@ def test_timestomp_chunks_a_full_plant_under_the_command_line_cap(tmp_path,
     assert len(mine) == 1
     assert set(mine[0]["paths"]) == set(paths) | {SCRIPT}
     assert_checkable(mine[0])
+
+
+def test_timestomp_ignores_non_file_artifact_locations(tmp_path, pinned_names):
+    """The artifact path list also names registry:/service:/task:/wmi: locations. Stamping
+    them is meaningless, and a chunk of pure pseudo-paths stamped nothing and failed the
+    family (live: run-466d351c's seed, after the chunking fix)."""
+    real = "C:\\ProgramData\\pkg\\Run.cmd"
+    ssh = scripted(FakeSSH(), out=f"TS|{real}|{TICKS}|{TICKS}|{TICKS}\n")
+    ctx = win_ctx(tmp_path, ssh, seeded=True)
+    for i, pseudo in enumerate(["registry:HKLM\\Software\\Run\\X", "service:Y",
+                                "task:Z", "wmi:W"]):
+        ctx.world.add_artifact(WIN_IP, "persist-seed", f"helper id=pseudo{i}",
+                               check_cmd="if ($?) { exit 0 } else { exit 1 }",
+                               paths=[pseudo])
+    result = execute("persist", {"ip": WIN_IP, "family": "timestomp"}, ctx)
+    assert result.ok, result.detail
+    sent = [decode(c["cmd"]) for c in ssh.calls]
+    assert sent and all("registry:" not in s and "service:" not in s for s in sent)

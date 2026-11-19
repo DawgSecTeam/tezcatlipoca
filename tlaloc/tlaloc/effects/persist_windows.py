@@ -91,7 +91,12 @@ def _planted_paths(ctx, ip):
     for artifact in ctx.world.artifacts(ip):
         paths.update(artifact.get("paths") or [])
         paths.update(_WIN_PATH_RE.findall(artifact.get("detail") or ""))
-    return sorted(paths)
+    # The artifact path list also names non-file locations (registry:<key>, service:<name>,
+    # task:<name>, wmi:<consumer>). timestomp and hide stamp bytes on disk, and a chunk of
+    # pure pseudo-paths found nothing (live: run-466d351c's seed).
+    return sorted(p for p in paths
+                  if (len(p) > 2 and p[1] == ":" and p[2] == "\\")
+                  or p.startswith("\\\\"))
 
 
 def _array(paths):
@@ -331,6 +336,7 @@ def timestomp(ctx, ip, fh, names):
     if not paths:
         return Result(False, f"timestomp on {ip}: nothing planted to stamp")
     stamped = []
+    failure = None
     # A full plant is 40+ paths, and one script carrying all of them crossed Windows'
     # 8191-char command line (live twice: "The command line is too long"). Chunk it.
     for start in range(0, len(paths), TIMESTOMP_CHUNK):
@@ -347,10 +353,13 @@ def timestomp(ctx, ip, fh, names):
         got = [line.split("|")[1:] for line in (out or "").splitlines()
                if line.startswith("TS|") and len(line.split("|")) == 5]
         if rc != 0 and not got:
-            return Result(False, f"timestomp on {ip}: {_why(rc, out, err)}")
+            # Blue deleting a planted file is not a broken family: only a run that
+            # stamped nothing at all is a failure.
+            failure = failure or f"timestomp on {ip}: {_why(rc, out, err)}"
+            continue
         stamped.extend(got)
     if not stamped:
-        return Result(False, f"timestomp on {ip}: nothing stamped")
+        return Result(False, failure or f"timestomp on {ip}: nothing stamped")
     recipe = []
     for path, created, written, accessed in stamped:
         recipe.append(f"(Get-Item '{path}').CreationTime = [datetime]::new({created})")
