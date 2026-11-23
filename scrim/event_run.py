@@ -14,6 +14,23 @@ from scrim import teardown_stage
 from scrim.core import CYCLE_TIMEOUT, log
 
 
+def _endpoint_gates(args, teams=None):
+    """One gate per (base_url, model), sized by --blue-concurrency.
+
+    A llama.cpp slot serialises, so one lock per endpoint was right there; a vLLM backend
+    serving N sessions concurrently does not, and serialising its teams throws that away.
+    Default 1 keeps the old single-lock behaviour.
+    """
+    teams = args.teams if teams is None else teams
+    capacity = max(1, int(getattr(args, "blue_concurrency", 1) or 1))
+    gates, shared = {}, {}
+    for n in range(1, teams + 1):
+        key = endpoints.blue_ep(args, n)
+        gates.setdefault(key, threading.Semaphore(capacity))
+        shared[key] = shared.get(key, 0) + 1
+    return gates, shared
+
+
 def stage_run(args, creds, t0):
     stop = threading.Event()
     # One lock per distinct LLM endpoint MODEL — teams sharing an endpoint+model share its
@@ -22,18 +39,15 @@ def stage_run(args, creds, t0):
     # two models of one gateway contend with each other's upstreams, not a llama.cpp slot
     # (run-84c0e45d serialised both blues on one gateway lock, then both starved on one
     # model's stream drops).
-    endpoint_locks = {}
-    shared = {}
-    for n in range(1, args.teams + 1):
-        key = endpoints.blue_ep(args, n)
-        endpoint_locks.setdefault(key, threading.Lock())
-        shared[key] = shared.get(key, 0) + 1
+    endpoint_locks, shared = _endpoint_gates(args)
+    capacity = max(1, int(getattr(args, "blue_concurrency", 1) or 1))
     for (url, model), count in shared.items():
-        if count > 1:
-            log(f"blue: {count} teams share {model} @ {url} — one LLM lock serialises them; "
-                f"TEZ_CYCLE_TIMEOUT={CYCLE_TIMEOUT}s over {args.duration_min} min gives "
-                f"each ~{args.duration_min // count} min. Give a team its own model "
-                f"or a longer window for a full rehearsal.")
+        if count > capacity:
+            log(f"blue: {count} teams share {model} @ {url} with {capacity} concurrent "
+                f"session(s) — TEZ_CYCLE_TIMEOUT={CYCLE_TIMEOUT}s over "
+                f"{args.duration_min} min gives each ~{args.duration_min // count} min. "
+                f"Give a team its own model, a larger --blue-concurrency, or a longer "
+                f"window for a full rehearsal.")
     threads = []
     for n in range(1, args.teams + 1):
         threads.append(threading.Thread(target=blue_agent.blue_feed_loop, name=f"blue-feed-{n}",

@@ -64,6 +64,10 @@ def main():
     p.add_argument("--duration-min", type=int, default=90)
     # A real incident cycle costs 20-30 min on the club's endpoint (docs/rehearsal-gates.md), so
     # the 600 s knob cuts every cycle before it can log, restore or submit. Per-run override.
+    p.add_argument("--blue-concurrency", dest="blue_concurrency", type=int, default=1,
+                   help="how many blue cycles may run at once against one endpoint+model "
+                        "(a backend serving N sessions concurrently wants N; default 1 "
+                        "serialises them, which is what a llama.cpp slot needs)")
     p.add_argument("--cycle-timeout", dest="cycle_timeout", type=int, default=None,
                    help="seconds per blue cycle (default: knobs.cycle_timeout, 600)")
     p.add_argument("--blue-model", default="k2", help="gateway model for blue agents")

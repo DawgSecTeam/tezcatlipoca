@@ -44,6 +44,22 @@ class LocksAreKeyedByModel(unittest.TestCase):
         seen = _locks_for([("https://gw/v1", "k2"), ("https://gw/v1", "k2")])
         self.assertIs(seen[1], seen[2])
 
+    def test_a_session_capable_backend_lets_both_teams_in(self):
+        """A vLLM backend serving N sessions must not be serialised by the harness: the
+        gate admits N cycles, and N is the backend's cap, not the team count."""
+        args = SimpleNamespace(teams=2, blue_concurrency=2, duration_min=30,
+                               blue_base_url="https://gw/v1",
+                               blue_model="qwen3.8-flash-next")
+        gates, shared = event_run._endpoint_gates(args)
+        key = ("https://gw/v1", "qwen3.8-flash-next")
+        self.assertEqual(shared, {key: 2})
+        gate = gates[key]
+        self.assertTrue(gate.acquire(blocking=False))
+        self.assertTrue(gate.acquire(blocking=False))
+        self.assertFalse(gate.acquire(blocking=False))
+        gate.release()
+        gate.release()
+
     def test_a_local_endpoint_is_one_lane_whatever_the_model_name(self):
         # llama.cpp serves one model per URL; teams pointed at it serialise as before.
         seen = _locks_for([("http://10.0.0.212:4000/v1", "k2"),
