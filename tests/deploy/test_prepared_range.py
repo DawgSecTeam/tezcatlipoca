@@ -247,3 +247,28 @@ class RestorePointIsFingerprinted(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EngineRulesSettle(unittest.TestCase):
+    """The reset's claim is the whole rule set; the engine's filter chains return before nat."""
+
+    REF = {"engine": {"rules": [
+        "-A FORWARD -j RANGE-RED-FWD",
+        "-A RANGE-RED-DNAT -d 192.168.152.1/32 -p tcp -m tcp --dport 8888 "
+        "-j DNAT --to-destination 10.200.0.10:8888"]}}
+
+    def test_it_waits_for_the_reference_set_not_just_a_non_empty_one(self):
+        from prepared import fingerprint
+        partial = {"rules": ["-A FORWARD -j RANGE-RED-FWD"]}      # Docker has wiped nat
+        with mock.patch.object(fingerprint, "_engine",
+                               side_effect=[partial, self.REF["engine"]]), \
+                mock.patch.object(fingerprint.time, "sleep"):
+            got = fingerprint._settle({"any": "spec"}, self.REF)
+        self.assertEqual(got["rules"], self.REF["engine"]["rules"])
+
+    def test_it_gives_up_and_lets_the_comparison_report_the_delta(self):
+        from prepared import fingerprint
+        with mock.patch.object(fingerprint, "_engine", return_value={"rules": []}), \
+                mock.patch.object(fingerprint.time, "sleep"):
+            got = fingerprint._settle({"any": "spec"}, self.REF, timeout=0.05)
+        self.assertEqual(got["rules"], [])
