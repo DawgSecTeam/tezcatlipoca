@@ -127,15 +127,24 @@ def check(comp_dir):
 
 def _settle(s, ref, timeout=180):
     """The engine's chains are kernel state: the on-disk timer re-asserts them 35 s after boot,
-    so reading them any earlier would refuse a reset that is in fact restoring the range."""
-    if not (ref.get("engine") or {}).get("rules"):
+    so reading them any earlier would refuse a reset that is in fact restoring the range.
+
+    "Some rules exist" is not settled. Docker on the engine wipes the nat table when its
+    containers restart, and the filter chains (FORWARD/RANGE-RED-FWD) come back first — so a
+    read that stops at the first non-empty set compares the reference's DNAT/SNAT rules
+    against an empty nat table and refuses a range that was restored (live: scrim-one-light,
+    2026-11-23). The reference's own set is the bar."""
+    wanted = (ref.get("engine") or {}).get("rules")
+    if not wanted:
         return
     deadline = time.time() + timeout
+    now = None
     while time.time() < deadline:
         now = _engine(s)
-        if now.get("rules"):
+        if now.get("rules") == wanted:
             return now
         time.sleep(10)
+    return now
 
 
 def _write(comp_dir, fp):
