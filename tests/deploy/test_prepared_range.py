@@ -198,12 +198,15 @@ class Phase8PreparedPoint(unittest.TestCase):
                 dpatch("run_concurrent", side_effect=note("snap_boxes")), \
                 dpatch("list_snapshots", return_value=set()), \
                 dpatch("record_fingerprint", side_effect=note("fingerprint")), \
-                dpatch("deploy_portal"), \
+                dpatch("deploy_portal", side_effect=note("portal")), \
                 mock.patch("red.tlaloc_ops.deploy_implants",
                            side_effect=note("arm", {"red_ip": "10.0.0.242"})), \
                 mock.patch("red.tlaloc_ops.start_director", side_effect=note("loop")):
             dl_seed.phase8_seed(Ctx())
 
+        # The portal must already exist when the points are taken: a reset restores what
+        # the deploy left, and a portal deployed after the snapshot is absent after a reset.
+        self.assertLess(order.index("portal"), order.index("snap_engine"))
         # One prepared moment for every VM class, then arming, then red attacks.
         self.assertLess(order.index("snap_boxes"), order.index("arm"))
         self.assertLess(order.index("snap_red"), order.index("arm"))
