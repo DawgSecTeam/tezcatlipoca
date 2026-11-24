@@ -122,7 +122,20 @@ def check(comp_dir):
         _write(comp_dir, now)
         return [f"note: the engine-rules probe grew (probe {ref.get('probe') or 'none'} → "
                 f"{PROBE}) — that class is re-recorded, the rest compared"] + diffs
-    return compare(ref, now)
+    diffs = compare(ref, now)
+    unseen = _unmeasured(diffs)
+    if unseen:
+        # Not a delta: the probe never got an answer. Refuse (a range that cannot be measured
+        # must not be handed back as restored) but name the real cause.
+        diffs.append("note: could not be measured (guest agent did not answer after retries): "
+                     + ", ".join(unseen) + " — this refusal is a probe failure, retry the reset")
+    return diffs
+
+
+def _unmeasured(diffs):
+    """Fields whose reading is a probe failure rather than a value ('unreachable:<Exc>')."""
+    return [d.split(":")[0].strip() for d in diffs
+            if "'unreachable:" in d or '"unreachable:' in d]
 
 
 def _settle(s, ref, timeout=180):
@@ -187,16 +200,26 @@ def _vms(s):
     return out
 
 
-def _agent_exec(node, vmid, script, windows=False):
+def _agent_exec(node, vmid, script, windows=False, attempts=5, delay=8):
     """The guest agent is the one channel that needs no credentials on a just-rolled-back VM,
     and a machine that cannot answer it is a finding to report, not a reason to crash the reset.
+
+    A Windows agent needs a while after the reboot the rollback causes, so a single read reports
+    "unreachable:HTTPError" for a box that is coming up fine — and a comparison of that against
+    the reference refuses a range that was restored (live: cde-2026 ftp01, run-11fe6541). Retry
+    a bounded window before calling it unmeasureable.
     """
     run = guest_agent_exec_windows if windows else guest_agent_exec_root
-    try:
-        _rc, raw, err = run(node, int(vmid), script)
-    except Exception as exc:                                    # noqa: BLE001 - reported below
-        return "unreachable:" + type(exc).__name__
-    return (raw or "") + (err or "")
+    last = "unreachable:Timeout"
+    for attempt in range(max(1, attempts)):
+        try:
+            _rc, raw, err = run(node, int(vmid), script)
+            return (raw or "") + (err or "")
+        except Exception as exc:                                # noqa: BLE001 - reported below
+            last = "unreachable:" + type(exc).__name__
+            if attempt + 1 < attempts:
+                time.sleep(delay)
+    return last
 
 
 def _boxes(s):
