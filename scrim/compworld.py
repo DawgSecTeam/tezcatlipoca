@@ -104,6 +104,11 @@ def comp_arg(comp):
 
 
 def verify_cmd(comp, creds, *extra):
+    # The password is generated from an URL-safe alphabet, so it can legally start with "-";
+    # as a separate argv element argparse reads that as an option and the gate dies with
+    # "argument --admin-password: expected one argument" (live: cde-2026, run-7e7b7d81).
+    # The --opt=value form is unambiguous whatever the value starts with.
     return [core.local_python(), "verify-competition.py", comp_arg(comp),
-            "--engine-ip", creds["ENGINE_IP"], "--admin-password", creds["ADMIN_PW"],
+            "--engine-ip", creds["ENGINE_IP"],
+            f"--admin-password={creds['ADMIN_PW']}",
             *extra, *_verify_flags(comp)]
