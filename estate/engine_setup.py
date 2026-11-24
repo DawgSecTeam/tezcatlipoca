@@ -7,11 +7,17 @@ from infra.client import proxmox_api, wait_for_proxmox_task
 
 
 def engine_ctx(comp_dir):
+    from common.utils import load_users_config
     from estate import config, state
     flat = state.load_flat(comp_dir)
+    box_username, _credlist = load_users_config(comp_dir)
     return {"scoring_engine_ip": flat.get("engine_mgmt_ip") or "",
             "ssh_key_path": str(config.ssh_key_path()),
-            "vm_username": config.active().engine.username}
+            "vm_username": config.active().engine.username,
+            # Box probes and gateway calls log in as this account. Without it they fall back to
+            # "ubuntu", which a Fedora or Windows-derived box does not have — the box then reads
+            # "unreachable" while it is up and fine (live: cde-2026 web01, run-9bff5c99).
+            "box_username": box_username}
 
 # Hard-stop settle between stop and start: long enough for the VM to be fully down.
 COLD_BOOT_SETTLE_S = 15
