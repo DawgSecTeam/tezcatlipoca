@@ -109,3 +109,25 @@ class Readiness(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EngineCtx(unittest.TestCase):
+    """The context every redeploy path builds must name the box account.
+
+    Without it the box probes fall back to "ubuntu", which a Fedora box does not have — the
+    box reads unreachable while it is up and the restore records a degradation (live:
+    cde-2026 web01, run-9bff5c99).
+    """
+
+    def test_it_carries_the_comp_box_username(self):
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            comp = Path(tmp) / "comp"
+            comp.mkdir()
+            (comp / "users.json").write_text(json.dumps({"box_username": "blueteam",
+                                                         "credlist_usernames": ["blueteam"]}))
+            with mock.patch("estate.state.load_flat", return_value={"engine_mgmt_ip": "10.0.0.253"}), \
+                    mock.patch("estate.config.ssh_key_path", return_value="/k"):
+                ctx = engine_setup.engine_ctx(comp)
+        self.assertEqual(ctx["box_username"], "blueteam")
+        self.assertEqual(ctx["scoring_engine_ip"], "10.0.0.253")
