@@ -59,6 +59,16 @@ def phase8_seed(ctx):
     else:
         print("  Teams already seeded (resume) — skipping.")
 
+    # The portal is part of what the range is left with, and the prepared point below is
+    # exactly what a restore brings back — so it is deployed BEFORE the snapshot. After it
+    # (the earlier order) a reset rolled the engine back to a disk whose portal stack did not
+    # exist yet: the portal answered on a fresh range and refused after a reset (live:
+    # tiny-linux, 2026-11-24). Its compose carries `restart: unless-stopped`, so once the
+    # stack is on the restored disk the engine's reboot brings it back by itself.
+    # It needs Quotient's final event.conf (team logins) and the final box set, both present
+    # by here. Opt-in via Compfile `portal 1`, and it never fails the deploy (portal_ops).
+    deploy_portal(ctx)
+
     # One prepared point for the WHOLE range, after every box-touching prep step: a round
     # resets all three VM classes here, so it cannot pair a pre-seed red01 with armed boxes
     # or an engine expecting work the boxes no longer hold. Skipped once the range is armed.
@@ -110,6 +120,3 @@ def phase8_seed(ctx):
     from deploy_lib.phases.final import begin_red_after_delivery
     begin_red_after_delivery(ctx, ctx.state.get("red"))
 
-    # The portal needs Quotient's final event.conf (team logins) and the final box set.
-    # Opt-in via Compfile `portal 1`, and it never fails the deploy (portal_ops).
-    deploy_portal(ctx)
