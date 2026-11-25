@@ -195,6 +195,14 @@ def wait_for_boxes_ssh(ctx, targets, timeout=300):
 
     def _probe(t):
         ip = t["ip"]
+        # An unmanaged box (the in-path firewall) has no box account: the deploy configures it
+        # over the firewall's own channel, and a probe as the box user can only burn the whole
+        # deadline and then report a healthy firewall unreachable (live: scrim-one prepared
+        # reset, run-de63a452 — 15 min of every reset on a firewall comp).
+        if (t.get("box") or {}).get("unmanaged"):
+            with PRINT_LOCK:
+                print(f"    {ip} unmanaged (in-path firewall) — no box account to probe")
+            return True
         # The guest agent is the channel a Windows box's readiness can be probed on: its
         # sshd does not accept the deploy key, so an SSH probe records a degradation for a
         # box that is up and plantable (live 2026-11-12, sliver-practice-4box: both Windows
