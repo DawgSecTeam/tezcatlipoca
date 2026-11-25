@@ -6,10 +6,38 @@ import time
 from pathlib import Path
 
 from ..errors import C2Error
-from .sliver_proto.commonpb import common_pb2
-from .sliver_proto.clientpb import client_pb2 as clientpb
-from .sliver_proto.sliverpb import sliver_pb2 as sliverpb
-from .sliver_proto.rpcpb import services_pb2  # noqa: F401 - registers the service descriptors
+
+
+class _LazyProto:
+    """A generated protobuf module, imported on first use.
+
+    The Sliver stubs need google.protobuf's upb extension, which does not import on every
+    interpreter this package runs under ("Metaclasses with custom tp_new are not supported" on
+    Python 3.14). A Mythic range freezes its payload matrix on the operator's LOCAL interpreter
+    and never reaches this client, so importing the stubs at module load turned a working
+    Mythic deploy into an import crash before any C2 work started (live: scrim-one,
+    run-49ff5a54). Every attribute use below still resolves to the real module.
+    """
+
+    def __init__(self, module, name):
+        self._module_name, self._attr = module, name
+        self._real = None
+
+    def _load(self):
+        if self._real is None:
+            import importlib
+            module = importlib.import_module(self._module_name, __package__)
+            self._real = getattr(module, self._attr)
+        return self._real
+
+    def __getattr__(self, attr):
+        return getattr(self._load(), attr)
+
+
+common_pb2 = _LazyProto(".sliver_proto.commonpb", "common_pb2")
+clientpb = _LazyProto(".sliver_proto.clientpb", "client_pb2")
+sliverpb = _LazyProto(".sliver_proto.sliverpb", "sliver_pb2")
+services_pb2 = _LazyProto(".sliver_proto.rpcpb", "services_pb2")  # noqa: F401
 
 # Every C2 transport v1.7.8 can generate. named-pipe is Windows-only; named-pipe
 # and tcp-pivot are pivot transports and need a parent implant to dial through.
