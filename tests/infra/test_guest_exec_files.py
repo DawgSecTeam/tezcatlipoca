@@ -146,3 +146,27 @@ class ReadFromGuest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExecStatusTransientTimeout(unittest.TestCase):
+    """PVE's own QGA request can time out on a loaded guest; that must not fail the exec."""
+
+    def test_a_pve_side_timeout_is_not_a_command_outcome(self):
+        from infra import guest_exec
+
+        calls = {"status": 0}
+
+        def fake_api(method, path, **kw):
+            if path.endswith("/agent/exec") and method == "POST":
+                return {"data": {"pid": 7}}
+            calls["status"] += 1
+            if calls["status"] == 1:
+                # what PVE answers when its QGA request times out
+                raise RuntimeError('500 Server Error: VM 1660 qga command '
+                                   "'guest-exec-status' failed - got timeout for url: ...")
+            return {"data": {"exited": True, "exitcode": 0, "out-data": "ok\n"}}
+
+        with patch.object(guest_exec, "proxmox_api", side_effect=fake_api), \
+                patch.object(guest_exec.time, "sleep"):
+            rc, out, _err = guest_exec.guest_agent_exec_root("node", 1660, "true", timeout=10)
+        self.assertEqual((rc, out), (0, "ok\n"))

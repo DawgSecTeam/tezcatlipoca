@@ -50,10 +50,17 @@ def _exec_status(node, vmid, pid):
         return proxmox_api("GET", f"/nodes/{node}/qemu/{vmid}/agent/exec-status",
                            params={"pid": pid})["data"]
     except Exception as e:
-        if "does not exist" in str(e) or "guest agent is not running" in str(e):
+        text = str(e)
+        if "does not exist" in text or "guest agent is not running" in text:
             raise RuntimeError(
                 f"guest agent on vmid {vmid} lost exec pid {pid} (the agent restarted "
                 f"mid-command) — the command's outcome is unknown") from e
+        if "got timeout" in text:
+            # PVE's own QGA request timed out (a busy or loaded guest) — that says nothing
+            # about the command's outcome, and the generic retry only covers "can't lock
+            # file". Report "not exited yet" and let the caller's deadline bound the wait: one
+            # hiccup here failed a whole phase (live: scrim-one phase 7, run-fdbfef6c).
+            return {}
         raise
 
 
