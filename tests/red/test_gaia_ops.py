@@ -28,10 +28,12 @@ def comp_dir(tmp, extra=""):
 
 class Runner:
     def __init__(self, gaia, fail_on=None, creds="mythic_admin:s3cret-pw\n",
-                 box_password=None, reject_passwords=()):
+                 box_password=None, reject_passwords=(), connect_failures=0):
         self.gaia, self.fail_on, self.creds = Path(gaia), fail_on, creds
         self.box_password = box_password
         self.reject_passwords = set(reject_passwords)
+        self.connect_failures = connect_failures
+        self._auths = 0
         self.calls = []
 
     def __call__(self, argv, **kwargs):
@@ -50,6 +52,11 @@ class Runner:
         if sub == "user":
             return Completed(0, "tlaloc:a-gent-pw\n")
         if sub == "auth":
+            self._auths += 1
+            if self._auths <= self.connect_failures:
+                # what aiohttp says when Mythic's nginx is not serving :7443 yet
+                return Completed(1, "", "Cannot connect to host 10.0.0.198:7443 "
+                                        "ssl:False [Connect call failed]")
             if (kwargs.get("input") or "").strip() in self.reject_passwords:
                 return Completed(1, "", "403 Authentication Failed")
             (self.gaia / ".env").write_text(
@@ -380,3 +387,34 @@ class LockedPrepareTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MythicNotServingYet(unittest.TestCase):
+    """The installer returns before Mythic's nginx serves :7443.
+
+    Auth straight after install died on "Cannot connect to host <ip>:7443" and every auth
+    attempt was spent inside that window (live: scrim-one, run-4b8903eb). A connection failure
+    means "the stack is coming up", so it must not spend the retry budget — while a rejected
+    password still must.
+    """
+
+    def test_a_connection_failure_does_not_spend_the_auth_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("time.sleep"):
+                result, runner = PrepareTest()._prepared(tmp, connect_failures=2)
+            auths = [c for c in runner.calls
+                     if len(c["argv"]) > 2 and str(c["argv"][1]).endswith("gaia.py")
+                     and c["argv"][2] == "auth"]
+            assert len(auths) == 2 + 1, len(auths)
+            assert result["ok"] is True
+
+    def test_it_still_gives_up_when_the_api_never_serves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("time.sleep"), \
+                    mock.patch.object(g, "MYTHIC_CONNECT_GRACE", 0.0):
+                result, runner = PrepareTest()._prepared(tmp, connect_failures=99)
+            auths = [c for c in runner.calls
+                     if len(c["argv"]) > 2 and str(c["argv"][1]).endswith("gaia.py")
+                     and c["argv"][2] == "auth"]
+            assert len(auths) == g.AUTH_ATTEMPTS, len(auths)
+            assert result["ok"] is False
