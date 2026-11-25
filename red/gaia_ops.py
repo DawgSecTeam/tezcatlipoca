@@ -29,6 +29,12 @@ SHORT_TIMEOUT = 300
 # non-JSON reply is not a broken C2, so retry before calling it one
 AUTH_ATTEMPTS = 4
 AUTH_RETRY_SECONDS = 30
+# The installer returns when it has started the stack, not when the API serves: Mythic's nginx
+# comes up last and restarts at least once while its upstreams settle. An auth issued straight
+# after install therefore dies on "Cannot connect to host <ip>:7443" — a *connection* failure,
+# not a rejected password, so it must not spend the auth budget (live: scrim-one, run-4b8903eb).
+MYTHIC_CONNECT_GRACE = 900
+MYTHIC_CONNECT_RETRY_SECONDS = 10
 
 
 def gaia_path():
@@ -322,6 +328,14 @@ def mythic_lock(box_ip):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def _not_serving_yet(proc):
+    """True when auth failed because the C2 API was not listening yet, not because the password
+    was rejected: the stack is coming up, so the retry budget does not apply."""
+    text = (getattr(proc, "stderr", "") or "") + (getattr(proc, "stdout", "") or "")
+    return ("Cannot connect" in text or "ClientConnectorError" in text
+            or "Connection refused" in text)
+
+
 def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
                    gaia=None, comp_id=None, operation=None, callback_host=None,
                    callback_port=None, agent_user=AGENT_USER, log=print):
@@ -389,13 +403,21 @@ def prepare_mythic(comp_dir, *, box_ip, ssh_user, ssh_key, runner=None,
         # .env; run either earlier and Gaia prints its auth usage and exits non-zero.
         authed_with = None
         for source, candidate in candidates:
-            for attempt in range(AUTH_ATTEMPTS):
+            attempt = 0
+            grace_until = time.time() + MYTHIC_CONNECT_GRACE
+            while attempt < AUTH_ATTEMPTS:
                 proc = runner(auth_argv(path, box_ip), cwd=cwd, timeout=SHORT_TIMEOUT,
                               input=f"{candidate}\n")
                 if getattr(proc, "returncode", 1) == 0:
                     authed_with = (source, candidate)
                     break
-                if attempt + 1 < AUTH_ATTEMPTS:
+                if _not_serving_yet(proc) and time.time() < grace_until:
+                    # The install returned before :7443 served; wait the stack out rather than
+                    # reading a starting nginx as four rejected passwords.
+                    time.sleep(MYTHIC_CONNECT_RETRY_SECONDS)
+                    continue
+                attempt += 1
+                if attempt < AUTH_ATTEMPTS:
                     time.sleep(AUTH_RETRY_SECONDS)
             if authed_with:
                 break
