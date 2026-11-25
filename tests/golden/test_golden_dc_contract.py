@@ -84,8 +84,11 @@ class BuildGoldenSetTests(unittest.TestCase):
                     vmid = int(path.split("/")[-2])
                     where = {t["vmid"]: t for t in golden_ops.golden_targets(
                         1000, TEAMS, boxes)}[vmid]
-                    cfg = {"description": "tezcatlipoca-clone comp-%s"
-                                          % golden_ops.competition_name(comp_dir)}
+                    # The canonical writer, not a copy of its format: the marker is
+                    # "tezcatlipoca-clone " + comp_tag(name), and comp_tag slugs the name
+                    # (a directory with "_" would not match a hardcoded "comp-%s").
+                    cfg = {"description": golden_ops.clone_marker(
+                        golden_ops.competition_name(comp_dir))}
                     if not placed:
                         # an interrupted clone: base image's NIC, our marker, no placement PUT
                         return {"data": {**cfg, "net0": "e1000=AA:BB,bridge=vmbr0"}}
